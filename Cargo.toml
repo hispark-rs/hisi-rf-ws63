@@ -1,0 +1,101 @@
+[package]
+name = "hisi-rf-ws63"
+version = "0.1.0-alpha.1"
+edition = "2024"
+description = "WS63 radio backend and composition root for hisi-rf"
+license = "MIT"
+repository = "https://github.com/hispark-rs/hisi-rf-ws63"
+keywords = ["embedded", "no-std", "wifi", "radio", "ws63"]
+categories = ["embedded", "no-std", "network-programming"]
+
+[dependencies]
+hisi-alloc = "0.1.0-alpha.1"
+hisi-storage = "0.1.0-alpha.1"
+hisi-nvs = "0.1.0-alpha.1"
+hisi-rf-core = "0.1.0-alpha.1"
+hisi-rf-rtos-driver = "0.1.0-alpha.14"
+hisi-crypto = { version = "0.1.0-alpha.4", optional = true }
+hisi-crypto-ws63 = { version = "=0.1.0-alpha.3", optional = true, default-features = false }
+ws63-radio-sys = { version = "=0.1.0-alpha.5", default-features = false }
+hisi-hal = { version = "0.7.0-alpha.3", features = ["chip-ws63", "unstable"] }
+critical-section = "1"
+portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
+static_cell = "2"
+zeroize = { version = "1", default-features = false }
+# The netif->smoltcp bridge (feature `net`): a no_std/no-alloc TCP/IP stack to
+# replace the C SDK's lwip behind the netif seam. Optional so the bare porting
+# layer (which links the vendor blobs) stays lean.
+smoltcp = { version = "0.13", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-raw",
+    "socket-dhcpv4",
+], optional = true }
+
+[features]
+default = []
+wifi = ["ws63-radio-sys/wifi"]
+smoltcp = ["net"]
+wpa2-personal = ["wifi", "upstream-supplicant-port"]
+wpa3-personal = ["wifi", "upstream-supplicant-wpa3"]
+net = ["dep:smoltcp", "hisi-rf-core/smoltcp"]
+# Common vendor-oracle station control surface. Concrete WPA profiles select
+# exactly one crypto implementation on top of it.
+wifi-personal = []
+# Link and expose the WPA2-Personal/CCMP supplicant runtime.
+wifi-wpa2-personal = [
+    "wifi-personal",
+    "dep:hisi-crypto",
+    "dep:hisi-crypto-ws63",
+    "hisi-crypto-ws63/cipher",
+    "hisi-crypto-ws63/hash",
+    "hisi-crypto-ws63/pbkdf2",
+    "hisi-crypto-ws63/hal-trng",
+]
+# Explicit migration-oracle path for vendor WPA3-Personal/SAE. Normal upstream
+# profiles do not select this feature or its vendor supplicant archives.
+wifi-wpa3-personal = ["wifi-personal"]
+# Build the pinned upstream hostap native OS/eloop/driver/L2 path. It remains an
+# explicit profile so the old vendor oracle can be built independently.
+upstream-supplicant-port = [
+    "ws63-radio-sys/upstream-supplicant-port",
+    "dep:hisi-crypto",
+    "dep:hisi-crypto-ws63",
+    "hisi-crypto-ws63/cipher",
+    "hisi-crypto-ws63/hash",
+    "hisi-crypto-ws63/pbkdf2",
+    "hisi-crypto-ws63/hal-trng",
+]
+# Add the pinned hostap SAE/PMF source closure without selecting the legacy
+# vendor WPA3 supplicant archives.
+upstream-supplicant-wpa3 = [
+    "upstream-supplicant-port",
+    "ws63-radio-sys/upstream-supplicant-wpa3",
+    "hisi-crypto-ws63/p256",
+]
+# Portable provider and host oracle. WS63 firmware defaults to unified-cipher.
+wifi-security-rustcrypto = ["wifi-wpa2-personal"]
+# Compatibility alias for the pre-profile bring-up feature.
+wpa = ["wifi-wpa2-personal"]
+# Internal on-silicon bring-up instrumentation for the guarded full-init image.
+# Not a public radio API and not enabled by normal consumers.
+rf-init-diag = []
+# Low-disturbance in-memory WPA event-loop counters. Unlike `rf-init-diag`,
+# this does not emit synchronous UART traces from hot paths.
+rf-eloop-diag = ["hisi-crypto-ws63?/diagnostics"]
+# Spawn two native RTOS tasks that contend for the one CryptoService mutex.
+# Diagnostic-only: normal radio images do not deliberately yield while holding
+# crypto and do not reserve the two temporary task stacks/semaphores.
+rf-crypto-contention-diag = []
+# Diagnostic-only differential: use the vendor scan RX filter while waiting
+# for Authentication seq2. This intentionally changes receive policy.
+rf-auth-scan-filter = ["rf-eloop-diag"]
+# Bring-up-only guard for the mask-ROM FRW queue. It observes the ROM-owned
+# list around IRQ dispatch without replacing or mutating that implementation.
+rf-queue-guard = []
+# For the internal firmware examples only (runtime entry + linker scripts).
+# Keep this off host unit-test builds: riscv-rt's startup assembly is not valid
+# for the macOS/Linux host assembler.
+[target.'cfg(target_arch = "riscv32")'.dev-dependencies]
+hisi-riscv-rt = { version = "0.5.5", features = ["chip-ws63"] }
+hisi-rtos = "0.1.0-alpha.8"
