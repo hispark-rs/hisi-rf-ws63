@@ -34,5 +34,7 @@ pub fn init<const EVENTS: usize>(
     resources: Resources,
     state: &'static RadioState<EVENTS>,
 ) -> Result<RadioController<EVENTS>, Error> {
+    #[cfg(target_arch = "riscv32")]
+    crate::link_contract::ensure();
     hisi_rf_core::init(config, resources.inner, state)
 }

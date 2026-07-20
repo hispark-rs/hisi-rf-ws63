@@ -99,6 +99,25 @@ mod host_test_support {
 use core::cell::Cell;
 use critical_section::Mutex;
 
+#[cfg(target_arch = "riscv32")]
+mod link_contract {
+    core::arch::global_asm!(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/ws63-radio-link-contract.S"
+    )));
+
+    unsafe extern "C" {
+        static __hisi_ws63_rf_link_roots: u8;
+    }
+
+    #[inline(never)]
+    pub fn ensure() {
+        // Keep the root-reference section in the final firmware so rust-lld
+        // extracts the complete profile-selected native closure.
+        unsafe { core::ptr::read_volatile(&raw const __hisi_ws63_rf_link_roots) };
+    }
+}
+
 pub mod alloc;
 mod compiler_rt;
 #[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]

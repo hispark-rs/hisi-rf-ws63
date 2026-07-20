@@ -46,3 +46,21 @@ jobs:
           components: rust-src
       - name: Check the feature-minimal WS63 target graph
         run: cargo check -Zbuild-std=core,alloc --locked --target riscv32imfc-unknown-none-elf --lib
+
+  final-link:
+    name: Final RF link (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_RISCV32IMFC_UNKNOWN_NONE_ELF_RUSTFLAGS: -C link-arg=-Thisi-riscv-link.x -C link-arg=--no-relax
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-09
+          components: rust-src
+      - name: Link a complete upstream-WPA2 firmware with stock rust-lld
+        run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example plain_firmware --features wpa2-personal,smoltcp

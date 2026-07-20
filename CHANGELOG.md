@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-07-20
+
+### Added
+
+- Moved the complete WS63 native radio link contract into the chip backend:
+  normalized Wi-Fi and upstream-hostap archives, ROM/NVS fallbacks, runtime
+  compatibility roots, and the relocatable 37-entry ROM patch table now reach
+  the final firmware transitively through `hisi-rf-ws63`.
+- Added a deterministic pure-Rust archive composition step so downstream
+  firmware can use stock `rust-lld` without a consumer `build.rs`, shell,
+  Python, vendor SDK, or external RISC-V binutils.
+- Added a complete minimal firmware link fixture on Linux, macOS, and Windows;
+  CI now exercises the transitive archive and ROM-patch contract at final-link
+  time rather than stopping at a library-only `cargo check`.
+
+### Changed
+
+- Updated `ws63-radio-sys` to `0.1.0-alpha.6`, which exports the versioned
+  runtime-compatibility and native-supplicant root-symbol manifests consumed by
+  the chip composition root.
+
 ## [0.1.0-alpha.2] - 2026-07-20
 
 ### Fixed
@@ -32,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.1
