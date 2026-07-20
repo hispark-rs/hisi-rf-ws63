@@ -99,7 +99,11 @@ mod host_test_support {
 use core::cell::Cell;
 use critical_section::Mutex;
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
 mod link_contract {
     core::arch::global_asm!(include_str!(concat!(
         env!("OUT_DIR"),
