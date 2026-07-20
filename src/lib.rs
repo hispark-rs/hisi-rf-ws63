@@ -251,7 +251,12 @@ pub fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
 pub fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
     crypto::hardware_crypto_contention_diagnostic_snapshot()
 }
-#[cfg(any(test, feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    test,
+    target_arch = "riscv32",
+    feature = "wifi-personal",
+    feature = "upstream-supplicant-port"
+))]
 mod wal;
 pub mod wifi;
 #[cfg(feature = "wifi-personal")]

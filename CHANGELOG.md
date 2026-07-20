@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-07-20
+
+### Fixed
+
+- Included the target-side WAL adapter in the feature-minimal RV32 build so a
+  facade selecting only `chip-ws63` compiles without enabling a security
+  profile.
+
+### CI
+
+- Added a feature-minimal `riscv32imfc-unknown-none-elf` build gate.
+
 ## [0.1.0-alpha.1] - 2026-07-20
 
 ### Added
@@ -20,5 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.1

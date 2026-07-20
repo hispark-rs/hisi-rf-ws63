@@ -35,3 +35,14 @@ jobs:
           toolchain: nightly-2026-07-09
       - run: cargo generate-lockfile --locked
       - run: cargo package --locked
+
+  minimal-target:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-09
+          components: rust-src
+      - name: Check the feature-minimal WS63 target graph
+        run: cargo check -Zbuild-std=core,alloc --locked --target riscv32imfc-unknown-none-elf --lib
