@@ -17,10 +17,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: stable
+      RUSTUP_TOOLCHAIN: nightly-2026-07-09
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-09
       - name: Lockfile preflight
         run: |
           set -euo pipefail
