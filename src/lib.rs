@@ -92,16 +92,6 @@ mod host_test_support {
 
     use ws63_radio_sys::supplicant::{DriverHooks, OsHooks};
 
-    struct HostCriticalSection;
-
-    critical_section::set_impl!(HostCriticalSection);
-
-    unsafe impl critical_section::Impl for HostCriticalSection {
-        unsafe fn acquire() -> critical_section::RawRestoreState {}
-
-        unsafe fn release(_: critical_section::RawRestoreState) {}
-    }
-
     #[unsafe(no_mangle)]
     extern "C" fn hisi_wpa_os_install(_: *const OsHooks) -> i32 {
         0
@@ -304,6 +294,20 @@ pub fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
 ))]
 mod wal;
 pub mod wifi;
+
+/// Allocation-free snapshot of the linker-owned WS63 RF heap.
+///
+/// This heap is shared by the native supplicant, vendor queues, and OSAL
+/// objects. The values are runtime observations for diagnostics and HIL
+/// calibration; `free_bytes` is not a contiguous-allocation guarantee and the
+/// snapshot does not replace profile admission.
+pub use hisi_alloc::HeapMetrics as RfHeapMetrics;
+
+/// Observe current and peak WS63 RF heap use without allocating.
+pub fn rf_heap_metrics() -> RfHeapMetrics {
+    alloc::heap_metrics()
+}
+
 /// Dynamic worker count required by the public composition root: one bounded
 /// radio runner plus five workers observed for the pinned WS63 Wi-Fi payload.
 #[cfg(any(

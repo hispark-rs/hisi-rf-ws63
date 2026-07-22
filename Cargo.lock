@@ -379,9 +379,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-alloc"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d87908d7e79f4a0f5ca7f774651de6285aa5a6dc03444761002beb8d1e506695"
+checksum = "faba70f76aab1e33186ee4a42c234e31f3fc618740d7faf9ddaa61da2f64fddc"
 dependencies = [
  "critical-section",
  "linked_list_allocator",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.13"
+version = "0.1.0-alpha.14"
 dependencies = [
  "ar_archive_writer",
  "critical-section",

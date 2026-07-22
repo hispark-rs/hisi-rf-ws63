@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.13"
+version = "0.1.0-alpha.14"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -9,7 +9,7 @@ keywords = ["embedded", "no-std", "wifi", "radio", "ws63"]
 categories = ["embedded", "no-std", "network-programming"]
 
 [dependencies]
-hisi-alloc = "0.1.0-alpha.1"
+hisi-alloc = "0.1.0-alpha.2"
 hisi-storage = "0.1.0-alpha.1"
 hisi-nvs = "0.1.0-alpha.1"
 hisi-rf-core = "0.1.0-alpha.5"
@@ -109,3 +109,6 @@ hisi-riscv-rt = { version = "0.5.5", default-features = false, features = [
     "ws63-bgle-32k",
 ] }
 hisi-rtos = "0.1.0-alpha.10"
+
+[target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
+critical-section = { version = "1", features = ["std"] }

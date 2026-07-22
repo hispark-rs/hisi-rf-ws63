@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-use hisi_alloc::{CHeap, FreeError};
+use hisi_alloc::{CHeap, FreeError, HeapMetrics};
 use portable_atomic::{AtomicU32, AtomicUsize, Ordering};
 
 const DEFAULT_ALIGNMENT: usize = 16;
@@ -182,6 +182,10 @@ fn ensure_heap() -> bool {
     // SAFETY: each selected region is static, exclusively owned by this heap,
     // and remains valid for the entire firmware or host-test process.
     unsafe { HEAP.init(start, len).is_ok() }
+}
+
+pub(crate) fn heap_metrics() -> HeapMetrics {
+    HEAP.metrics()
 }
 
 /// Allocate `size` zero-initialized bytes. Returns null on failure or zero size.

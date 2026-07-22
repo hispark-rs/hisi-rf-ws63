@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.14] - 2026-07-23
+
+### Added
+
+- Added allocation-free WS63 RF heap metrics for current/peak usage, live
+  allocations, and rejected allocation/deallocation diagnostics.
+- Documented that the linker-owned RF heap is shared by the native supplicant,
+  vendor queues, and OSAL objects, so observations do not constitute static
+  profile admission or a supplicant-only arena size.
+
+### Fixed
+
+- Use `critical-section`'s reentrant `std` implementation for host tests instead
+  of an empty test implementation that allowed parallel tests to mutate shared
+  RF state concurrently.
+
 ## [0.1.0-alpha.13] - 2026-07-23
 
 ### Fixed
