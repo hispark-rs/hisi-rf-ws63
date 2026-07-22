@@ -297,22 +297,13 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                         crate::upstream_supplicant::association_attempt_diagnostics(&mut attempts);
                     let latest_attempt = attempt_count.checked_sub(1).map(|index| attempts[index]);
                     let _ = supplicant.disconnect();
-                    let mut error = staged_error(
-                        BackendErrorClass::Timeout,
-                        0x8000_0000
-                            | ((last_event_kind as u32 & 0x7) << 28)
-                            | ((context_diagnostic & 0x0fff) << 16)
-                            | port_diagnostic,
-                        classify_connect_timeout_stage(latest_attempt, eapol[2]),
-                    )
-                    .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
-                    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic);
-                    if let Some(attempt) = latest_attempt {
-                        error = error
-                            .with_trace(DiagnosticTraceKind::VendorStatus, attempt.raw_status)
-                            .with_trace(DiagnosticTraceKind::IeeeStatus, attempt.status);
-                    }
-                    return Err(error);
+                    return Err(connect_timeout_error(
+                        last_event_kind,
+                        context_diagnostic,
+                        port_diagnostic,
+                        latest_attempt,
+                        eapol[2],
+                    ));
                 }
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
                     |error| {
@@ -447,11 +438,23 @@ fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> BackendEr
     // The UART sink is best-effort while the radio runner and vendor workers
     // are active. Preserve the raw status and the same bounded snapshots in
     // the public error so machine diagnostics never depend on that log.
-    let stage = terminal_connect_stage(status);
-    staged_error(BackendErrorClass::Connect, status as u32, stage)
-        .with_trace(DiagnosticTraceKind::IeeeStatus, status as u32)
-        .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
-        .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic)
+    backend_failure_error(status, context_diagnostic, port_diagnostic)
+}
+
+#[cfg(feature = "upstream-supplicant-port")]
+fn backend_failure_error(
+    status: i32,
+    context_diagnostic: u32,
+    port_diagnostic: u32,
+) -> BackendError {
+    staged_error(
+        BackendErrorClass::Connect,
+        status as u32,
+        terminal_connect_stage(status),
+    )
+    .with_trace(DiagnosticTraceKind::IeeeStatus, status as u32)
+    .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
+    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic)
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
@@ -475,6 +478,32 @@ fn classify_connect_timeout_stage(
         Some(attempt) if attempt.status == 30 => DiagnosticStage::Pmf,
         _ => DiagnosticStage::Connect,
     }
+}
+
+#[cfg(feature = "upstream-supplicant-port")]
+fn connect_timeout_error(
+    last_event_kind: u8,
+    context_diagnostic: u32,
+    port_diagnostic: u32,
+    latest_attempt: Option<crate::upstream_supplicant::AssociationAttemptDiagnostic>,
+    eapol_received: u32,
+) -> BackendError {
+    let mut error = staged_error(
+        BackendErrorClass::Timeout,
+        0x8000_0000
+            | ((last_event_kind as u32 & 0x7) << 28)
+            | ((context_diagnostic & 0x0fff) << 16)
+            | port_diagnostic,
+        classify_connect_timeout_stage(latest_attempt, eapol_received),
+    )
+    .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
+    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic);
+    if let Some(attempt) = latest_attempt {
+        error = error
+            .with_trace(DiagnosticTraceKind::VendorStatus, attempt.raw_status)
+            .with_trace(DiagnosticTraceKind::IeeeStatus, attempt.status);
+    }
+    error
 }
 
 /// Build the WS63 resources consumed by `hisi_rf_core::init`.
@@ -822,12 +851,13 @@ fn scan_status_code(status: crate::wifi::ScanStatus) -> u32 {
 mod tests {
     use super::{
         NATIVE_EVENT_AUTHORIZED, NATIVE_EVENT_DISCONNECTED, NATIVE_EVENT_FAILED,
-        NativeConnectEvent, classify_connect_timeout_stage, classify_native_connect_event,
-        map_error, map_native_error, task_admission_code, terminal_connect_stage,
+        NativeConnectEvent, backend_failure_error, classify_connect_timeout_stage,
+        classify_native_connect_event, connect_timeout_error, map_error, map_native_error,
+        task_admission_code, terminal_connect_stage,
     };
     use crate::upstream_supplicant::NativeSupplicantError;
     use crate::wifi::{Error as Ws63Error, ScanStatus};
-    use hisi_rf_core::{DiagnosticCode, DiagnosticStage, DiagnosticTraceKind};
+    use hisi_rf_core::{DiagnosticCode, DiagnosticStage, DiagnosticTraceKind, RecoveryAction};
 
     #[test]
     fn disconnected_is_recoverable_until_the_overall_connect_deadline() {
@@ -944,5 +974,50 @@ mod tests {
         assert_eq!(terminal_connect_stage(30), DiagnosticStage::Pmf);
         assert_eq!(terminal_connect_stage(0), DiagnosticStage::Associate);
         assert_eq!(terminal_connect_stage(17), DiagnosticStage::Associate);
+    }
+
+    #[test]
+    fn production_connect_errors_preserve_association_and_first_eapol_evidence() {
+        let rejected = backend_failure_error(30, 0x445, 0x123).diagnostic();
+        assert_eq!(rejected.code(), DiagnosticCode::ConnectionFailed);
+        assert_eq!(rejected.stage(), DiagnosticStage::Pmf);
+        assert_eq!(rejected.action(), RecoveryAction::InspectNetworkAndRetry);
+        assert_eq!(rejected.backend_code(), Some(30));
+        assert_eq!(
+            rejected.trace().get(0).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::IeeeStatus)
+        );
+        assert_eq!(rejected.trace().get(0).map(|entry| entry.value()), Some(30));
+
+        let associated = crate::upstream_supplicant::AssociationAttemptDiagnostic {
+            raw_status: 0,
+            status: 0,
+            ..Default::default()
+        };
+        let eapol_stall = connect_timeout_error(3, 0x423, 0x55, Some(associated), 0).diagnostic();
+        assert_eq!(eapol_stall.code(), DiagnosticCode::BackendTimeout);
+        assert_eq!(eapol_stall.stage(), DiagnosticStage::Eapol);
+        assert_eq!(eapol_stall.action(), RecoveryAction::RetryOperation);
+        assert_eq!(
+            eapol_stall.profile_revision(),
+            Some(crate::profile::PROFILE_REVISION)
+        );
+        assert_eq!(eapol_stall.trace().len(), 4);
+        assert_eq!(
+            eapol_stall.trace().get(0).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::SupplicantContext)
+        );
+        assert_eq!(
+            eapol_stall.trace().get(1).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::DriverContext)
+        );
+        assert_eq!(
+            eapol_stall.trace().get(2).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::VendorStatus)
+        );
+        assert_eq!(
+            eapol_stall.trace().get(3).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::IeeeStatus)
+        );
     }
 }
