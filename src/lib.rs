@@ -305,6 +305,13 @@ pub fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
 mod wal;
 pub mod wifi;
 /// Dynamic worker count observed for the pinned WS63 Wi-Fi payload.
+#[cfg(any(
+    target_arch = "riscv32",
+    all(
+        feature = "net",
+        any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    )
+))]
 pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize = 5;
 #[cfg(feature = "wifi-personal")]
 mod wpa_compat;

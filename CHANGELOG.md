@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-07-22
+
+### Fixed
+
+- Limited the shared Wi-Fi dynamic-task requirement constant to target and
+  complete-profile graphs, keeping the feature-minimal host composition free
+  of dead-code warnings under `clippy -D warnings`.
+
+### Changed
+
+- Updated `hisi-rf-core` to `0.1.0-alpha.2`.
+
+## [0.1.0-alpha.5] - 2026-07-22
+
+### Added
+
+- Added the `hisi-rf-rtos-driver/v1.2` advisory dynamic-task capacity preflight
+  before caller storage is claimed or radio hardware is touched.
+- Added typed task-admission errors that preserve required and available slot
+  counts through the WS63 backend boundary.
+
 ## [0.1.0-alpha.4] - 2026-07-20
 
 ### Added
@@ -67,7 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
+[0.1.0-alpha.5]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
+[0.1.0-alpha.4]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.1
