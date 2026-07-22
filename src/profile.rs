@@ -7,7 +7,7 @@ use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v1";
-const PROFILE_REVISION: &str = "ws63-wifi-2026-07-20";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-20";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 
 mod sealed {

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-07-22
+
+### Added
+
+- WS63 errors now report explicit scan/authenticate/associate/SAE/EAPOL/PMF/
+  disconnect/runtime stages and the selected profile revision.
+- Terminal connection failures retain raw IEEE/backend status plus bounded
+  supplicant and driver snapshots instead of depending on best-effort UART.
+- Differential tests cover IEEE status 30 PMF classification and lossless
+  negative hostap status preservation.
+
+### Changed
+
+- Updated `hisi-rf-core` to `0.1.0-alpha.3` and its versioned v2 diagnostic
+  schema.
+
 ## [0.1.0-alpha.6] - 2026-07-22
 
 ### Fixed
@@ -88,7 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.6...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.7...HEAD
+[0.1.0-alpha.7]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.3...v0.1.0-alpha.4

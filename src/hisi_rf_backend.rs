@@ -3,9 +3,17 @@
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
-    BackendError, BackendErrorClass, ConnectionInfo, ScanConfig, ScanOutcome, ScanResult, Security,
-    Ssid, StationConfig, WifiBackend,
+    BackendError, BackendErrorClass, ConnectionInfo, DiagnosticStage, DiagnosticTraceKind,
+    ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig, WifiBackend,
 };
+
+fn backend_error(class: BackendErrorClass, code: u32) -> BackendError {
+    BackendError::new(class, code).with_profile_revision(crate::profile::PROFILE_REVISION)
+}
+
+fn staged_error(class: BackendErrorClass, code: u32, stage: DiagnosticStage) -> BackendError {
+    backend_error(class, code).with_stage(stage)
+}
 
 #[cfg(feature = "upstream-supplicant-port")]
 const NATIVE_EVENT_AUTHORIZED: u8 = 3;
@@ -94,66 +102,50 @@ impl WifiBackend for Ws63WifiBackend<'static> {
         if self.wifi.is_some() {
             return Ok(());
         }
-        let efuse = self.efuse.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0001,
-        })?;
-        let trng = self.trng.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0004,
-        })?;
-        let km = self.km.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0005,
-        })?;
-        let spacc = self.spacc.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0006,
-        })?;
-        let pke = self.pke.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0007,
-        })?;
-        let crypto_storage = self.crypto_storage.take().ok_or(BackendError {
-            class: BackendErrorClass::Initialize,
-            code: 0x1000_0008,
-        })?;
-        crate::crypto::install_hardware_crypto(km, spacc, pke, trng, crypto_storage).map_err(
-            |error| BackendError {
-                class: BackendErrorClass::Initialize,
-                code: error.code(),
-            },
-        )?;
+        let efuse = self
+            .efuse
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0001))?;
+        let trng = self
+            .trng
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0004))?;
+        let km = self
+            .km
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0005))?;
+        let spacc = self
+            .spacc
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0006))?;
+        let pke = self
+            .pke
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0007))?;
+        let crypto_storage = self
+            .crypto_storage
+            .take()
+            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0008))?;
+        crate::crypto::install_hardware_crypto(km, spacc, pke, trng, crypto_storage)
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(target_arch = "riscv32")]
-        crate::crypto::ws63_pbkdf2_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_pbkdf2_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(target_arch = "riscv32")]
-        crate::crypto::ws63_hash_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_hash_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
-        crate::crypto::ws63_p256_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_p256_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(all(target_arch = "riscv32", feature = "rf-eloop-diag"))]
-        crate::crypto::ws63_hash_fault_recovery_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_hash_fault_recovery_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(all(target_arch = "riscv32", feature = "rf-eloop-diag"))]
-        crate::crypto::ws63_cipher_fault_recovery_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_cipher_fault_recovery_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         #[cfg(all(target_arch = "riscv32", feature = "rf-crypto-contention-diag"))]
-        crate::crypto::ws63_crypto_contention_self_test().map_err(|error| BackendError {
-            class: BackendErrorClass::Initialize,
-            code: error.code(),
-        })?;
+        crate::crypto::ws63_crypto_contention_self_test()
+            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
         let wifi = ActiveWifi::initialize(efuse).map_err(map_error)?;
         #[cfg(feature = "upstream-supplicant-port")]
         {
@@ -284,11 +276,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                             }
                         }
                         NativeConnectEvent::Failed => {
-                            let code = emit_backend_failure(supplicant, event.status);
-                            return Err(BackendError {
-                                class: BackendErrorClass::Connect,
-                                code,
-                            });
+                            return Err(emit_backend_failure(supplicant, event.status));
                         }
                     }
                 }
@@ -296,28 +284,33 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                     >= config.timeout_ms() as u64
                 {
                     if let Some(status) = last_disconnect_status {
-                        let code = emit_backend_failure(supplicant, status);
+                        let error = emit_backend_failure(supplicant, status);
                         let _ = supplicant.disconnect();
-                        return Err(BackendError {
-                            class: BackendErrorClass::Connect,
-                            code,
-                        });
+                        return Err(error);
                     }
                     let context_diagnostic = supplicant.context_diagnostic_word();
                     let port_diagnostic = crate::upstream_supplicant::diagnostic_word();
                     let _ = supplicant.disconnect();
-                    return Err(BackendError {
-                        class: BackendErrorClass::Timeout,
-                        code: 0x8000_0000
+                    return Err(staged_error(
+                        BackendErrorClass::Timeout,
+                        0x8000_0000
                             | ((last_event_kind as u32 & 0x7) << 28)
                             | ((context_diagnostic & 0x0fff) << 16)
                             | port_diagnostic,
-                    });
+                        DiagnosticStage::Connect,
+                    )
+                    .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
+                    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic));
                 }
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
-                    |error| BackendError {
-                        class: BackendErrorClass::Other,
-                        code: 0x5732_e000 | runtime_code(error),
+                    |error| {
+                        let code = runtime_code(error);
+                        staged_error(
+                            BackendErrorClass::Other,
+                            0x5732_e000 | code,
+                            DiagnosticStage::Runtime,
+                        )
+                        .with_trace(DiagnosticTraceKind::RuntimeCode, code)
                     },
                 )?;
             }
@@ -332,9 +325,12 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                         && scan.bssid == config.bssid
                         && scan.channel() == config.channel
                 })
-                .ok_or(BackendError {
-                    class: BackendErrorClass::Connect,
-                    code: 0x1000_0002,
+                .ok_or_else(|| {
+                    staged_error(
+                        BackendErrorClass::Connect,
+                        0x1000_0002,
+                        DiagnosticStage::Associate,
+                    )
                 })?;
             let network = PersonalNetwork::from_scan_with_security(
                 scan,
@@ -362,10 +358,15 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                     match event.kind {
                         NATIVE_EVENT_DISCONNECTED => return Ok(()),
                         NATIVE_EVENT_FAILED => {
-                            return Err(BackendError {
-                                class: BackendErrorClass::Connect,
-                                code: event.status as u32,
-                            });
+                            return Err(staged_error(
+                                BackendErrorClass::Connect,
+                                event.status as u32,
+                                DiagnosticStage::Disconnect,
+                            )
+                            .with_trace(
+                                DiagnosticTraceKind::DisconnectReason,
+                                event.status as u32,
+                            ));
                         }
                         _ => {}
                     }
@@ -373,15 +374,21 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                 if crate::uapi::monotonic_ms().wrapping_sub(started_at)
                     >= config.disconnect_timeout_ms as u64
                 {
-                    return Err(BackendError {
-                        class: BackendErrorClass::Timeout,
-                        code: 2,
-                    });
+                    return Err(staged_error(
+                        BackendErrorClass::Timeout,
+                        2,
+                        DiagnosticStage::Disconnect,
+                    ));
                 }
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
-                    |error| BackendError {
-                        class: BackendErrorClass::Other,
-                        code: 0x5732_e000 | runtime_code(error),
+                    |error| {
+                        let code = runtime_code(error);
+                        staged_error(
+                            BackendErrorClass::Other,
+                            0x5732_e000 | code,
+                            DiagnosticStage::Runtime,
+                        )
+                        .with_trace(DiagnosticTraceKind::RuntimeCode, code)
                     },
                 )?;
             }
@@ -415,7 +422,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
-fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> u32 {
+fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> BackendError {
     let context_diagnostic = supplicant.context_diagnostic_word();
     let port_diagnostic = crate::upstream_supplicant::diagnostic_word();
     crate::log_emit(b"RFDBG_WPA_BACKEND_ERR status=");
@@ -426,10 +433,24 @@ fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> u32 {
     crate::upstream_supplicant::emit_diagnostic_hex(port_diagnostic);
     crate::log_emit(b"\r\n");
     // The UART sink is best-effort while the radio runner and vendor workers
-    // are active. Preserve the same snapshot in the public error code so one
-    // terminal marker is sufficient to diagnose an early hostap rejection.
-    // The raw terminal status remains available in the log above.
-    0xd000_0000 | ((context_diagnostic & 0x0fff) << 16) | (port_diagnostic & 0xffff)
+    // are active. Preserve the raw status and the same bounded snapshots in
+    // the public error so machine diagnostics never depend on that log.
+    let stage = terminal_connect_stage(status);
+    staged_error(BackendErrorClass::Connect, status as u32, stage)
+        .with_trace(DiagnosticTraceKind::IeeeStatus, status as u32)
+        .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
+        .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic)
+}
+
+#[cfg(feature = "upstream-supplicant-port")]
+const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
+    if status == 30 {
+        // IEEE 802.11 status 30 is a temporary association rejection. On the
+        // required-PMF path hostap handles it through SA Query/comeback logic.
+        DiagnosticStage::Pmf
+    } else {
+        DiagnosticStage::Associate
+    }
 }
 
 /// Build the WS63 resources consumed by `hisi_rf_core::init`.
@@ -457,108 +478,229 @@ fn to_connection_info(info: Ws63ConnectionInfo) -> ConnectionInfo {
 }
 
 fn not_initialized() -> BackendError {
-    BackendError {
-        class: BackendErrorClass::Initialize,
-        code: 0x1000_0003,
-    }
+    backend_error(BackendErrorClass::Initialize, 0x1000_0003)
 }
 
 fn map_error(error: Ws63Error) -> BackendError {
-    let (class, code) = match error {
-        Ws63Error::Initialize(code) => (BackendErrorClass::Initialize, code),
-        Ws63Error::Busy => (BackendErrorClass::Busy, 1),
-        Ws63Error::Timeout => (BackendErrorClass::Timeout, 1),
-        Ws63Error::UnsupportedSecurity(mode) => {
-            (BackendErrorClass::UnsupportedSecurity, mode as u32)
-        }
-        Ws63Error::ConnectFailed(status) => (BackendErrorClass::Connect, status as u32),
-        Ws63Error::Disconnected(reason) => (BackendErrorClass::Connect, reason as u32),
-        Ws63Error::ConfigureSecurity(code)
-        | Ws63Error::StartConnect(code)
-        | Ws63Error::StartDisconnect(code) => (BackendErrorClass::Connect, code as u32),
-        Ws63Error::Runtime(code) => (BackendErrorClass::Other, 0x2000_0000 | runtime_code(code)),
+    let (class, code, stage) = match error {
+        Ws63Error::Initialize(code) => (
+            BackendErrorClass::Initialize,
+            code,
+            DiagnosticStage::Initialize,
+        ),
+        Ws63Error::Busy => (BackendErrorClass::Busy, 1, DiagnosticStage::Operation),
+        Ws63Error::Timeout => (BackendErrorClass::Timeout, 1, DiagnosticStage::Operation),
+        Ws63Error::UnsupportedSecurity(mode) => (
+            BackendErrorClass::UnsupportedSecurity,
+            mode as u32,
+            DiagnosticStage::Connect,
+        ),
+        Ws63Error::ConnectFailed(status) => (
+            BackendErrorClass::Connect,
+            status as u32,
+            DiagnosticStage::Associate,
+        ),
+        Ws63Error::Disconnected(reason) => (
+            BackendErrorClass::Connect,
+            reason as u32,
+            DiagnosticStage::Disconnect,
+        ),
+        Ws63Error::ConfigureSecurity(code) | Ws63Error::StartConnect(code) => (
+            BackendErrorClass::Connect,
+            code as u32,
+            DiagnosticStage::Connect,
+        ),
+        Ws63Error::StartDisconnect(code) => (
+            BackendErrorClass::Connect,
+            code as u32,
+            DiagnosticStage::Disconnect,
+        ),
+        Ws63Error::Runtime(code) => (
+            BackendErrorClass::Other,
+            0x2000_0000 | runtime_code(code),
+            DiagnosticStage::Runtime,
+        ),
         Ws63Error::TaskAdmission(error) => (
             BackendErrorClass::Initialize,
             0x2100_0000 | task_admission_code(error),
+            DiagnosticStage::Runtime,
         ),
-        Ws63Error::AlreadyInitialized => (BackendErrorClass::Initialize, 2),
+        Ws63Error::AlreadyInitialized => (
+            BackendErrorClass::Initialize,
+            2,
+            DiagnosticStage::Initialize,
+        ),
         #[cfg(feature = "upstream-supplicant-port")]
-        Ws63Error::SupplicantPort(_) => (BackendErrorClass::Initialize, 3),
+        Ws63Error::SupplicantPort(_) => (
+            BackendErrorClass::Initialize,
+            3,
+            DiagnosticStage::Initialize,
+        ),
         Ws63Error::CreateStation(code)
         | Ws63Error::RegisterEvents(code)
-        | Ws63Error::OpenStation(code)
-        | Ws63Error::StartScan(code) => (BackendErrorClass::Other, code as u32),
-        Ws63Error::CryptoInitialize(code) => (BackendErrorClass::Initialize, code as u32),
-        Ws63Error::Timebase(code) | Ws63Error::Crypto(code) => (BackendErrorClass::Other, code),
-        Ws63Error::ScanFailed(status) => (BackendErrorClass::Other, scan_status_code(status)),
-        Ws63Error::InvalidSsid => (BackendErrorClass::Other, 0x100),
-        Ws63Error::ProtectedNetwork | Ws63Error::OpenNetwork | Ws63Error::InvalidPassphrase => {
-            (BackendErrorClass::UnsupportedSecurity, 0x101)
+        | Ws63Error::OpenStation(code) => (
+            BackendErrorClass::Other,
+            code as u32,
+            DiagnosticStage::Initialize,
+        ),
+        Ws63Error::StartScan(code) => {
+            (BackendErrorClass::Other, code as u32, DiagnosticStage::Scan)
         }
-        Ws63Error::UnsupportedTarget => (BackendErrorClass::Other, u32::MAX),
+        Ws63Error::CryptoInitialize(code) => (
+            BackendErrorClass::Initialize,
+            code as u32,
+            DiagnosticStage::Initialize,
+        ),
+        Ws63Error::Timebase(code) => (BackendErrorClass::Other, code, DiagnosticStage::Runtime),
+        Ws63Error::Crypto(code) => (BackendErrorClass::Other, code, DiagnosticStage::Connect),
+        Ws63Error::ScanFailed(status) => (
+            BackendErrorClass::Other,
+            scan_status_code(status),
+            DiagnosticStage::Scan,
+        ),
+        Ws63Error::InvalidSsid => (BackendErrorClass::Other, 0x100, DiagnosticStage::Scan),
+        Ws63Error::ProtectedNetwork | Ws63Error::OpenNetwork | Ws63Error::InvalidPassphrase => (
+            BackendErrorClass::UnsupportedSecurity,
+            0x101,
+            DiagnosticStage::Connect,
+        ),
+        Ws63Error::UnsupportedTarget => (
+            BackendErrorClass::Other,
+            u32::MAX,
+            DiagnosticStage::Initialize,
+        ),
     };
-    BackendError { class, code }
+    staged_error(class, code, stage)
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
 fn map_native_error(error: NativeSupplicantError) -> BackendError {
-    let (class, code) = match error {
-        NativeSupplicantError::Port(_) => (BackendErrorClass::Initialize, 1),
-        NativeSupplicantError::InvalidContextLayout => (BackendErrorClass::Initialize, 2),
-        NativeSupplicantError::AllocationFailed => (BackendErrorClass::Initialize, 3),
-        NativeSupplicantError::CreateFailed => (BackendErrorClass::Initialize, 4),
+    let raw_status = match error {
+        NativeSupplicantError::InitializeFailed(status)
+        | NativeSupplicantError::EnableEapolFailed(status)
+        | NativeSupplicantError::FeedMgmtFailed(status)
+        | NativeSupplicantError::FeedScanFailed(status)
+        | NativeSupplicantError::FeedLinkFailed(status)
+        | NativeSupplicantError::FeedExternalAuthFailed(status)
+        | NativeSupplicantError::FeedEapolFailed(status)
+        | NativeSupplicantError::ConfigureFailed(status)
+        | NativeSupplicantError::ConnectFailed(status)
+        | NativeSupplicantError::DisconnectFailed(status)
+        | NativeSupplicantError::PollFailed(status) => Some(status as u32),
+        NativeSupplicantError::MgmtQueueOverflow(count)
+        | NativeSupplicantError::ScanQueueOverflow(count)
+        | NativeSupplicantError::LinkQueueOverflow(count)
+        | NativeSupplicantError::ExternalAuthQueueOverflow(count) => Some(count),
+        NativeSupplicantError::Port(_)
+        | NativeSupplicantError::InvalidContextLayout
+        | NativeSupplicantError::AllocationFailed
+        | NativeSupplicantError::CreateFailed
+        | NativeSupplicantError::InvalidResult => None,
+    };
+    let (class, code, stage) = match error {
+        NativeSupplicantError::Port(_) => (
+            BackendErrorClass::Initialize,
+            1,
+            DiagnosticStage::Initialize,
+        ),
+        NativeSupplicantError::InvalidContextLayout => (
+            BackendErrorClass::Initialize,
+            2,
+            DiagnosticStage::Initialize,
+        ),
+        NativeSupplicantError::AllocationFailed => (
+            BackendErrorClass::Initialize,
+            3,
+            DiagnosticStage::Initialize,
+        ),
+        NativeSupplicantError::CreateFailed => (
+            BackendErrorClass::Initialize,
+            4,
+            DiagnosticStage::Initialize,
+        ),
         NativeSupplicantError::InitializeFailed(status) => (
             BackendErrorClass::Initialize,
             0x1000 | status as u32 & 0xfff,
+            DiagnosticStage::Initialize,
         ),
         NativeSupplicantError::EnableEapolFailed(status) => (
             BackendErrorClass::Initialize,
             0x2000 | status as u32 & 0xfff,
+            DiagnosticStage::Eapol,
         ),
-        NativeSupplicantError::FeedMgmtFailed(status) => {
-            (BackendErrorClass::Other, 0x3000 | status as u32 & 0xfff)
+        NativeSupplicantError::FeedMgmtFailed(status) => (
+            BackendErrorClass::Other,
+            0x3000 | status as u32 & 0xfff,
+            DiagnosticStage::Authenticate,
+        ),
+        NativeSupplicantError::FeedEapolFailed(status) => (
+            BackendErrorClass::Other,
+            0x4000 | status as u32 & 0xfff,
+            DiagnosticStage::Eapol,
+        ),
+        NativeSupplicantError::MgmtQueueOverflow(count) => (
+            BackendErrorClass::Other,
+            0x6000 | count.min(0xfff),
+            DiagnosticStage::Authenticate,
+        ),
+        NativeSupplicantError::FeedScanFailed(status) => (
+            BackendErrorClass::Other,
+            0x7000 | status as u32 & 0xfff,
+            DiagnosticStage::Scan,
+        ),
+        NativeSupplicantError::ScanQueueOverflow(count) => (
+            BackendErrorClass::Other,
+            0x8000 | count.min(0xfff),
+            DiagnosticStage::Scan,
+        ),
+        NativeSupplicantError::FeedLinkFailed(status) => (
+            BackendErrorClass::Connect,
+            0x9000 | status as u32 & 0xfff,
+            DiagnosticStage::Associate,
+        ),
+        NativeSupplicantError::LinkQueueOverflow(count) => (
+            BackendErrorClass::Connect,
+            0xa000 | count.min(0xfff),
+            DiagnosticStage::Associate,
+        ),
+        NativeSupplicantError::FeedExternalAuthFailed(status) => (
+            BackendErrorClass::Connect,
+            0xe000 | status as u32 & 0xfff,
+            DiagnosticStage::Sae,
+        ),
+        NativeSupplicantError::ExternalAuthQueueOverflow(count) => (
+            BackendErrorClass::Connect,
+            0xf000 | count.min(0xfff),
+            DiagnosticStage::Sae,
+        ),
+        NativeSupplicantError::ConfigureFailed(status) => (
+            BackendErrorClass::Connect,
+            0xb000 | status as u32 & 0xfff,
+            DiagnosticStage::Connect,
+        ),
+        NativeSupplicantError::ConnectFailed(status) => (
+            BackendErrorClass::Connect,
+            0xc000 | status as u32 & 0xfff,
+            DiagnosticStage::Associate,
+        ),
+        NativeSupplicantError::DisconnectFailed(status) => (
+            BackendErrorClass::Connect,
+            0xd000 | status as u32 & 0xfff,
+            DiagnosticStage::Disconnect,
+        ),
+        NativeSupplicantError::InvalidResult => {
+            (BackendErrorClass::Other, 5, DiagnosticStage::Backend)
         }
-        NativeSupplicantError::FeedEapolFailed(status) => {
-            (BackendErrorClass::Other, 0x4000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::MgmtQueueOverflow(count) => {
-            (BackendErrorClass::Other, 0x6000 | count.min(0xfff))
-        }
-        NativeSupplicantError::FeedScanFailed(status) => {
-            (BackendErrorClass::Other, 0x7000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::ScanQueueOverflow(count) => {
-            (BackendErrorClass::Other, 0x8000 | count.min(0xfff))
-        }
-        NativeSupplicantError::FeedLinkFailed(status) => {
-            (BackendErrorClass::Connect, 0x9000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::LinkQueueOverflow(count) => {
-            (BackendErrorClass::Connect, 0xa000 | count.min(0xfff))
-        }
-        NativeSupplicantError::FeedExternalAuthFailed(status) => {
-            (BackendErrorClass::Connect, 0xe000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::ExternalAuthQueueOverflow(count) => {
-            (BackendErrorClass::Connect, 0xf000 | count.min(0xfff))
-        }
-        NativeSupplicantError::ConfigureFailed(status) => {
-            (BackendErrorClass::Connect, 0xb000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::ConnectFailed(status) => {
-            (BackendErrorClass::Connect, 0xc000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::DisconnectFailed(status) => {
-            (BackendErrorClass::Connect, 0xd000 | status as u32 & 0xfff)
-        }
-        NativeSupplicantError::InvalidResult => (BackendErrorClass::Other, 5),
-        NativeSupplicantError::PollFailed(status) => {
-            (BackendErrorClass::Other, 0x5000 | status as u32 & 0xfff)
-        }
+        NativeSupplicantError::PollFailed(status) => (
+            BackendErrorClass::Other,
+            0x5000 | status as u32 & 0xfff,
+            DiagnosticStage::Runtime,
+        ),
     };
-    BackendError {
-        class,
-        code: 0x5732_0000 | code,
+    let mapped = staged_error(class, 0x5732_0000 | code, stage);
+    match raw_status {
+        Some(status) => mapped.with_trace(DiagnosticTraceKind::BackendStatus, status),
+        None => mapped,
     }
 }
 
@@ -618,8 +760,11 @@ fn scan_status_code(status: crate::wifi::ScanStatus) -> u32 {
 mod tests {
     use super::{
         NATIVE_EVENT_AUTHORIZED, NATIVE_EVENT_DISCONNECTED, NATIVE_EVENT_FAILED,
-        NativeConnectEvent, classify_native_connect_event, task_admission_code,
+        NativeConnectEvent, classify_native_connect_event, map_native_error, task_admission_code,
+        terminal_connect_stage,
     };
+    use crate::upstream_supplicant::NativeSupplicantError;
+    use hisi_rf_core::{DiagnosticStage, DiagnosticTraceKind};
 
     #[test]
     fn disconnected_is_recoverable_until_the_overall_connect_deadline() {
@@ -656,5 +801,29 @@ mod tests {
             ),
             0x0503
         );
+    }
+
+    #[test]
+    fn native_error_mapping_preserves_stage_profile_and_raw_status() {
+        let error = map_native_error(NativeSupplicantError::FeedExternalAuthFailed(-17));
+        let diagnostic = error.diagnostic();
+
+        assert_eq!(diagnostic.stage(), DiagnosticStage::Sae);
+        assert_eq!(
+            diagnostic.profile_revision(),
+            Some(crate::profile::PROFILE_REVISION)
+        );
+        assert_eq!(diagnostic.backend_code(), Some(0x5732_efef));
+        assert_eq!(diagnostic.trace().len(), 1);
+        let trace = diagnostic.trace().get(0).unwrap();
+        assert_eq!(trace.kind(), DiagnosticTraceKind::BackendStatus);
+        assert_eq!(trace.value(), (-17_i32) as u32);
+    }
+
+    #[test]
+    fn ieee_temporary_rejection_is_classified_as_pmf() {
+        assert_eq!(terminal_connect_stage(30), DiagnosticStage::Pmf);
+        assert_eq!(terminal_connect_stage(0), DiagnosticStage::Associate);
+        assert_eq!(terminal_connect_stage(17), DiagnosticStage::Associate);
     }
 }

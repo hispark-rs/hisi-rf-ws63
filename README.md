@@ -50,6 +50,11 @@ caller-owned crypto DMA scratch, and the 48 KiB linker-owned packet RAM. Task
 stacks and the supplicant arena remain explicitly uncalibrated until their
 runtime ownership and HIL admission contracts are complete.
 
+Backend failures use the chip-neutral `hisi-rf-error/v2` schema. The WS63
+adapter supplies the selected profile revision, protocol stage, raw IEEE or
+hostap status, and at most four numeric context snapshots; it never inserts
+SSID, passphrase, key material, or arbitrary log text into the public error.
+
 ## Validation
 
 ```console
