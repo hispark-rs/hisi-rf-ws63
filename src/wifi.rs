@@ -428,10 +428,8 @@ fn require_radio_runtime() -> Result<(), Error> {
         hisi_rf_rtos_driver::RuntimeRequirements::V1_PORTED_COOPERATIVE,
     )
     .map_err(Error::Runtime)?;
-    hisi_rf_rtos_driver::require_task_capacity(
-        <crate::profile::SelectedProfile as crate::profile::Profile>::DYNAMIC_TASKS_REQUIRED,
-    )
-    .map_err(Error::TaskAdmission)?;
+    hisi_rf_rtos_driver::require_task_capacity(crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED)
+        .map_err(Error::TaskAdmission)?;
     hisi_rf_rtos_driver::current_task().map_err(Error::Runtime)?;
     Ok(())
 }

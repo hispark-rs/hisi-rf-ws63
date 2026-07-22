@@ -9,7 +9,6 @@ use static_cell::StaticCell;
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v1";
 const PROFILE_REVISION: &str = "ws63-wifi-2026-07-20";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
-const OBSERVED_DYNAMIC_TASKS: usize = 5;
 
 mod sealed {
     pub trait Sealed {}
@@ -32,7 +31,7 @@ impl sealed::Sealed for WifiWpa2Smoltcp {}
 impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
-    const DYNAMIC_TASKS_REQUIRED: usize = OBSERVED_DYNAMIC_TASKS;
+    const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -42,7 +41,7 @@ impl sealed::Sealed for WifiWpa3Smoltcp {}
 impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
-    const DYNAMIC_TASKS_REQUIRED: usize = OBSERVED_DYNAMIC_TASKS;
+    const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
