@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.10] - 2026-07-23
+
+### Added
+
+- Added `RadioController::start_runner`, which stores the mandatory bounded-work
+  runner in caller-owned profile storage and starts it without exposing
+  `hisi-rf-rtos-driver` to applications.
+
+### Changed
+
+- Bound each initialized controller to the `Storage` instance that owns its
+  runner, preventing the public happy path from pairing a runner with unrelated
+  storage.
+- The profile task reservation now covers one public radio runner plus the five
+  workers observed in the pinned WS63 payload.
+
 ## [0.1.0-alpha.9] - 2026-07-23
 
 ### Added
@@ -128,7 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.9...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.10...HEAD
+[0.1.0-alpha.10]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.10
 [0.1.0-alpha.9]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/hispark-rs/hisi-rf-ws63/releases/tag/v0.1.0-alpha.7

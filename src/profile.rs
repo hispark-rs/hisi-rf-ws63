@@ -2,10 +2,12 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
-use hisi_rf_core::RadioState;
+use hisi_rf_core::{RadioRunner, RadioState};
 use hisi_rf_rtos_driver::TaskReservation;
 use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
+
+use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v2";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-22";
@@ -65,13 +67,14 @@ pub type SelectedProfile = WifiWpa3Smoltcp;
 
 /// Caller-owned static storage for one WS63 radio instance.
 ///
-/// This currently owns the bounded control/event state and SPACC DMA scratch.
-/// Packet RAM remains linker-owned, while task stacks and the supplicant arena
-/// remain runtime-owned and are reported as uncalibrated rather than hidden in
-/// this type. Those resources move here only after their ownership contracts
-/// can be enforced before initialization.
+/// This currently owns the bounded control/event state, mandatory radio runner,
+/// and SPACC DMA scratch. Packet RAM remains linker-owned, while task stacks and
+/// the supplicant arena remain runtime-owned and are reported as uncalibrated
+/// rather than hidden in this type. Those resources move here only after their
+/// ownership contracts can be enforced before initialization.
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
+    runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
     crypto: StaticCell<Ws63CryptoStorage>,
     task_reservation: StaticCell<TaskReservation>,
     claimed: AtomicBool,
@@ -84,6 +87,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         assert!(EVENTS > 0, "radio event queue must not be empty");
         Self {
             state: RadioState::new(),
+            runner: StaticCell::new(),
             crypto: StaticCell::new(),
             task_reservation: StaticCell::new(),
             claimed: AtomicBool::new(false),
@@ -117,6 +121,16 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         let crypto = self.crypto.init(Ws63CryptoStorage::new());
         let reservation = self.task_reservation.init(reservation);
         Ok((&self.state, crypto, reservation))
+    }
+
+    pub(crate) fn store_runner(
+        &'static self,
+        runner: RadioRunner<Ws63WifiBackend<'static>, EVENTS>,
+    ) -> &'static mut RadioRunner<Ws63WifiBackend<'static>, EVENTS> {
+        // `init` claims this storage exactly once and returns one non-cloneable
+        // controller bound to it. Consuming that controller to start the runner
+        // therefore initializes this cell at most once.
+        self.runner.init(runner)
     }
 }
 
@@ -287,7 +301,7 @@ mod tests {
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
-        assert_eq!(report.dynamic_tasks_required, 5);
+        assert_eq!(report.dynamic_tasks_required, 6);
         assert_eq!(report.task_admission, "owner-bound-reservation");
         assert_eq!(report.runtime_internal_tasks, None);
         assert_eq!(report.task_stack_bytes, None);

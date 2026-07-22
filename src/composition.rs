@@ -1,9 +1,10 @@
+use core::ffi::c_void;
 use core::fmt;
 use core::num::NonZeroUsize;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioConfig,
+    RadioConfig, WifiParts,
 };
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
@@ -69,16 +70,48 @@ impl fmt::Display for InitError {
     }
 }
 
-/// Concrete WS63 controller before it is split into Wi-Fi and runner handles.
-pub type RadioController<const EVENTS: usize> =
+const RADIO_RUNNER_STACK_BYTES: usize = 8 * 1024;
+const RADIO_RUNNER_PRIORITY: u8 = 10;
+
+type CoreRadioController<const EVENTS: usize> =
     hisi_rf_core::RadioController<Ws63WifiBackend<'static>, Ws63Device, EVENTS>;
 
+/// WS63 controller bound to the caller-owned storage that will hold its runner.
+pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
+    inner: CoreRadioController<EVENTS>,
+    storage: &'static Storage<P, EVENTS>,
+}
+
+impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
+    /// Split the radio without starting its runner.
+    ///
+    /// Prefer [`Self::start_runner`] in applications. This escape hatch exists
+    /// for runtimes that provide their own task/executor integration.
+    pub fn split(self) -> hisi_rf_core::RadioParts<Ws63WifiBackend<'static>, Ws63Device, EVENTS> {
+        self.inner.split()
+    }
+
+    /// Start the mandatory bounded-work runner and return Wi-Fi control/L2 handles.
+    pub fn start_runner(self) -> Result<WifiParts<Ws63Device, EVENTS>, InitError> {
+        let hisi_rf_core::RadioParts { wifi, runner } = self.inner.split();
+        let runner = self.storage.store_runner(runner);
+        crate::runtime::spawn_vendor_task(
+            radio_runner_task::<EVENTS>,
+            (runner as *mut hisi_rf_core::RadioRunner<Ws63WifiBackend<'static>, EVENTS>).cast(),
+            RADIO_RUNNER_STACK_BYTES,
+            RADIO_RUNNER_PRIORITY,
+        )
+        .map_err(InitError::Runtime)?;
+        Ok(wifi)
+    }
+}
+
 /// Claim one WS63 radio instance using caller-owned state and resources.
-pub fn init<P: Profile + ActiveProfile, const EVENTS: usize>(
+pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
     resources: Resources,
     storage: &'static Storage<P, EVENTS>,
-) -> Result<RadioController<EVENTS>, InitError> {
+) -> Result<RadioController<P, EVENTS>, InitError> {
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
     hisi_rf_rtos_driver::require_runtime(
@@ -112,12 +145,27 @@ pub fn init<P: Profile + ActiveProfile, const EVENTS: usize>(
         crypto_storage,
     );
     match hisi_rf_core::init(config, inner, state) {
-        Ok(controller) => Ok(controller),
+        Ok(controller) => Ok(RadioController {
+            inner: controller,
+            storage,
+        }),
         Err(error) => {
             hisi_rf_rtos_driver::release_task_reservation(reservation)
                 .map_err(InitError::Runtime)?;
             Err(InitError::Core(error))
         }
+    }
+}
+
+extern "C" fn radio_runner_task<const EVENTS: usize>(argument: *mut c_void) -> *mut c_void {
+    // SAFETY: `start_runner` passes the unique runner stored for the entire
+    // firmware lifetime. The task is the only code that mutates it.
+    let runner = unsafe {
+        &mut *argument.cast::<hisi_rf_core::RadioRunner<Ws63WifiBackend<'static>, EVENTS>>()
+    };
+    loop {
+        let _ = runner.run_once();
+        crate::runtime::yield_now();
     }
 }
 

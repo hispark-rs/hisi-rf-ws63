@@ -48,6 +48,10 @@ The selected profile atomically reserves its dynamic RTOS task slots before
 claiming storage or touching radio hardware. The opaque generation-bearing
 reservation remains inside `Storage`; vendor worker creation consumes those
 slots through contract v1.3, while unrelated task creation cannot steal them.
+The reservation covers the one public `RadioRunner` task plus the five workers
+observed in the pinned payload. Applications consume the controller with
+`start_runner()` and receive only the Wi-Fi control/L2 handles; they do not call
+the runtime-driver spawn API themselves.
 
 `Storage::report()` exposes deterministic `hisi-rf-resource-report/v2`
 metadata. The current report accounts for bounded radio state, the 4,384-byte
