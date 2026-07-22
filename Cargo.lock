@@ -464,16 +464,16 @@ checksum = "a018fff88f3a4b74a87dd2c6106933905da76b022a8f993ee4473c58e74bbe48"
 
 [[package]]
 name = "hisi-rf-rtos-driver"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da9034728f6abd4fb50b0535ae46a6487afc74734c0a1e40ed79d1d25f57f8e2"
+checksum = "730df8ff1f491ebb4f22c0064e913e12b6f9f486ba09bbbb6455ca787fde5f9c"
 dependencies = [
  "critical-section",
 ]
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
@@ -524,9 +524,9 @@ checksum = "5fc2f9dded6797c89610a734aab74bdb96c9a44399fc38e40bb61ee337a8559d"
 
 [[package]]
 name = "hisi-rtos"
-version = "0.1.0-alpha.9"
+version = "0.1.0-alpha.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9371b23eb03fe469027eddd17e2cb3c895dd09ebbce3eb64c88be04858695d4"
+checksum = "a25dd9ee5e400741b79ad598f1e1a924c4e6788bf33626fe3fc5ccf02202dde2"
 dependencies = [
  "critical-section",
  "hisi-rf-rtos-driver",

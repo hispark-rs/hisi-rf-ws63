@@ -1,10 +1,50 @@
 //! Thin calls into the runtime selected by the application.
 
+use core::cell::Cell;
 use core::ffi::c_void;
 #[cfg(target_arch = "riscv32")]
 use core::num::NonZeroU32;
 use core::num::NonZeroUsize;
-use hisi_rf_rtos_driver::{TaskConfig, TaskEntry, TaskPriority};
+use critical_section::Mutex;
+use hisi_rf_rtos_driver::{Error, TaskConfig, TaskEntry, TaskId, TaskPriority, TaskReservation};
+
+static TASK_RESERVATION: Mutex<Cell<Option<&'static TaskReservation>>> =
+    Mutex::new(Cell::new(None));
+
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub(crate) fn install_task_reservation(reservation: &'static TaskReservation) -> Result<(), Error> {
+    critical_section::with(|cs| {
+        let installed = TASK_RESERVATION.borrow(cs);
+        if installed.get().is_some() {
+            Err(Error::AlreadyInstalled)
+        } else {
+            installed.set(Some(reservation));
+            Ok(())
+        }
+    })
+}
+
+fn try_spawn_with_priority(
+    entry: TaskEntry,
+    arg: *mut c_void,
+    stack_size: usize,
+    priority: u8,
+) -> Result<TaskId, Error> {
+    let stack_size = NonZeroUsize::new(stack_size.max(1)).unwrap();
+    let priority = TaskPriority::new(priority).ok_or(Error::Runtime)?;
+    let config = TaskConfig {
+        stack_size,
+        priority,
+    };
+    let reservation = critical_section::with(|cs| TASK_RESERVATION.borrow(cs).get());
+    match reservation {
+        Some(reservation) => hisi_rf_rtos_driver::spawn_reserved(reservation, entry, arg, config),
+        None => hisi_rf_rtos_driver::spawn(entry, arg, config),
+    }
+}
 
 pub fn spawn(entry: TaskEntry, arg: *mut c_void, stack_size: usize) -> Option<usize> {
     spawn_with_priority(entry, arg, stack_size, 31)
@@ -16,18 +56,18 @@ pub fn spawn_with_priority(
     stack_size: usize,
     priority: u8,
 ) -> Option<usize> {
-    let stack_size = NonZeroUsize::new(stack_size.max(1)).unwrap();
-    let priority = TaskPriority::new(priority)?;
-    hisi_rf_rtos_driver::spawn(
-        entry,
-        arg,
-        TaskConfig {
-            stack_size,
-            priority,
-        },
-    )
-    .ok()
-    .map(|task| task.into_raw() as usize)
+    try_spawn_with_priority(entry, arg, stack_size, priority)
+        .ok()
+        .map(|task| task.into_raw() as usize)
+}
+
+pub(crate) fn spawn_vendor_task(
+    entry: TaskEntry,
+    arg: *mut c_void,
+    stack_size: usize,
+    priority: u8,
+) -> Result<TaskId, Error> {
+    try_spawn_with_priority(entry, arg, stack_size, priority)
 }
 
 pub fn yield_now() {

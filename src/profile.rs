@@ -3,11 +3,12 @@ use core::marker::PhantomData;
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_rf_core::RadioState;
+use hisi_rf_rtos_driver::TaskReservation;
 use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v1";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-20";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v2";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-22";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 
 mod sealed {
@@ -72,6 +73,7 @@ pub type SelectedProfile = WifiWpa3Smoltcp;
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
     crypto: StaticCell<Ws63CryptoStorage>,
+    task_reservation: StaticCell<TaskReservation>,
     claimed: AtomicBool,
     _profile: PhantomData<P>,
 }
@@ -83,6 +85,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         Self {
             state: RadioState::new(),
             crypto: StaticCell::new(),
+            task_reservation: StaticCell::new(),
             claimed: AtomicBool::new(false),
             _profile: PhantomData,
         }
@@ -95,16 +98,25 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
 
     pub(crate) fn claim(
         &'static self,
-    ) -> Option<(&'static RadioState<EVENTS>, &'static mut Ws63CryptoStorage)> {
+        reservation: TaskReservation,
+    ) -> Result<
+        (
+            &'static RadioState<EVENTS>,
+            &'static mut Ws63CryptoStorage,
+            &'static TaskReservation,
+        ),
+        TaskReservation,
+    > {
         if self
             .claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return None;
+            return Err(reservation);
         }
-        let crypto = self.crypto.try_init(Ws63CryptoStorage::new())?;
-        Some((&self.state, crypto))
+        let crypto = self.crypto.init(Ws63CryptoStorage::new());
+        let reservation = self.task_reservation.init(reservation);
+        Ok((&self.state, crypto, reservation))
     }
 }
 
@@ -137,6 +149,8 @@ pub struct ResourceReport {
     pub crypto_backend: &'static str,
     /// Minimum runtime contract required before radio startup.
     pub runtime_contract: &'static str,
+    /// Admission mechanism protecting the profile's dynamic task slots.
+    pub task_admission: &'static str,
     /// Number of bounded public radio events.
     pub event_capacity: usize,
     /// Bytes held directly in [`Storage`].
@@ -173,7 +187,8 @@ impl ResourceReport {
             radio_backend: "hisi-rf-ws63",
             supplicant_backend: "hostap-2.11-native",
             crypto_backend: "hisi-crypto-ws63-mixed",
-            runtime_contract: "hisi-rf-rtos-driver/v1.2-ported-cooperative",
+            runtime_contract: "hisi-rf-rtos-driver/v1.3-ported-cooperative",
+            task_admission: "owner-bound-reservation",
             event_capacity: EVENTS,
             caller_owned_bytes: core::mem::size_of::<Storage<P, EVENTS>>(),
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
@@ -197,7 +212,8 @@ impl ResourceReport {
                 "\"profile_revision\":\"{}\",\"security\":\"{}\",",
                 "\"network\":\"{}\",\"radio_backend\":\"{}\",",
                 "\"supplicant_backend\":\"{}\",\"crypto_backend\":\"{}\",",
-                "\"runtime_contract\":\"{}\",\"event_capacity\":{},",
+                "\"runtime_contract\":\"{}\",\"task_admission\":\"{}\",",
+                "\"event_capacity\":{},",
                 "\"caller_owned_bytes\":{},\"radio_state_bytes\":{},",
                 "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
                 "\"dynamic_tasks_required\":{},",
@@ -215,6 +231,7 @@ impl ResourceReport {
             self.supplicant_backend,
             self.crypto_backend,
             self.runtime_contract,
+            self.task_admission,
             self.event_capacity,
             self.caller_owned_bytes,
             self.radio_state_bytes,
@@ -264,13 +281,14 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v1");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v2");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.dynamic_tasks_required, 5);
+        assert_eq!(report.task_admission, "owner-bound-reservation");
         assert_eq!(report.runtime_internal_tasks, None);
         assert_eq!(report.task_stack_bytes, None);
         assert_eq!(report.supplicant_arena_bytes, None);
@@ -287,12 +305,12 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v1\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v2\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
                 .as_str()
-                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.2-ported-cooperative\"")
+                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.3-ported-cooperative\"")
         );
         assert!(
             output
@@ -304,7 +322,14 @@ mod tests {
     #[test]
     fn storage_claim_is_one_shot() {
         static STORAGE: Storage<WifiWpa2Smoltcp, 2> = Storage::new();
-        assert!(STORAGE.claim().is_some());
-        assert!(STORAGE.claim().is_none());
+        let first =
+            unsafe { TaskReservation::from_raw(core::num::NonZeroU32::new(0x101).unwrap()) };
+        let second =
+            unsafe { TaskReservation::from_raw(core::num::NonZeroU32::new(0x102).unwrap()) };
+        assert!(STORAGE.claim(first).is_ok());
+        match STORAGE.claim(second) {
+            Ok(_) => panic!("claimed storage accepted a second reservation"),
+            Err(reservation) => assert_eq!(reservation.into_raw().get(), 0x102),
+        }
     }
 }

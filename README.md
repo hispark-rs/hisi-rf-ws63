@@ -44,7 +44,12 @@ static RADIO_STORAGE: hisi_rf_ws63::Storage<hisi_rf_ws63::SelectedProfile, 4> =
     hisi_rf_ws63::Storage::new();
 ```
 
-`Storage::report()` exposes deterministic `hisi-rf-resource-report/v1`
+The selected profile atomically reserves its dynamic RTOS task slots before
+claiming storage or touching radio hardware. The opaque generation-bearing
+reservation remains inside `Storage`; vendor worker creation consumes those
+slots through contract v1.3, while unrelated task creation cannot steal them.
+
+`Storage::report()` exposes deterministic `hisi-rf-resource-report/v2`
 metadata. The current report accounts for bounded radio state, the 4,384-byte
 caller-owned crypto DMA scratch, and the 48 KiB linker-owned packet RAM. Task
 stacks and the supplicant arena remain explicitly uncalibrated until their

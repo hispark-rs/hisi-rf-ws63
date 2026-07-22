@@ -455,16 +455,13 @@ pub extern "C" fn osal_kthread_create(
     if handle.is_null() {
         return core::ptr::null_mut();
     }
-    let stack_size = core::num::NonZeroUsize::new(stack_size.max(1)).unwrap();
-    match hisi_rf_rtos_driver::spawn(
+    match crate::runtime::spawn_vendor_task(
         f,
         arg,
-        hisi_rf_rtos_driver::TaskConfig {
-            stack_size,
-            // LiteOS callers set the requested priority immediately after
-            // creation. Keep a not-yet-configured task at the lowest level.
-            priority: hisi_rf_rtos_driver::TaskPriority::LOWEST,
-        },
+        stack_size,
+        // LiteOS callers set the requested priority immediately after
+        // creation. Keep a not-yet-configured task at the lowest level.
+        hisi_rf_rtos_driver::TaskPriority::LOWEST.into_raw(),
     ) {
         Ok(task) => {
             // SAFETY: `handle` owns an allocation large and aligned enough for

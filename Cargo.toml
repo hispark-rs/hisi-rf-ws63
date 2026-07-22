@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -13,7 +13,7 @@ hisi-alloc = "0.1.0-alpha.1"
 hisi-storage = "0.1.0-alpha.1"
 hisi-nvs = "0.1.0-alpha.1"
 hisi-rf-core = "0.1.0-alpha.3"
-hisi-rf-rtos-driver = "0.1.0-alpha.15"
+hisi-rf-rtos-driver = "0.1.0-alpha.16"
 hisi-crypto = { version = "0.1.0-alpha.4", optional = true }
 hisi-crypto-ws63 = { version = "=0.1.0-alpha.3", optional = true, default-features = false }
 ws63-radio-sys = { version = "=0.1.0-alpha.6", default-features = false }
@@ -108,4 +108,4 @@ hisi-riscv-rt = { version = "0.5.5", default-features = false, features = [
     "boot-header",
     "ws63-bgle-32k",
 ] }
-hisi-rtos = "0.1.0-alpha.9"
+hisi-rtos = "0.1.0-alpha.10"
