@@ -290,17 +290,29 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                     }
                     let context_diagnostic = supplicant.context_diagnostic_word();
                     let port_diagnostic = crate::upstream_supplicant::diagnostic_word();
+                    let eapol = crate::upstream_supplicant::eapol_diagnostic_snapshot();
+                    let mut attempts =
+                        [crate::upstream_supplicant::AssociationAttemptDiagnostic::default(); 8];
+                    let attempt_count =
+                        crate::upstream_supplicant::association_attempt_diagnostics(&mut attempts);
+                    let latest_attempt = attempt_count.checked_sub(1).map(|index| attempts[index]);
                     let _ = supplicant.disconnect();
-                    return Err(staged_error(
+                    let mut error = staged_error(
                         BackendErrorClass::Timeout,
                         0x8000_0000
                             | ((last_event_kind as u32 & 0x7) << 28)
                             | ((context_diagnostic & 0x0fff) << 16)
                             | port_diagnostic,
-                        DiagnosticStage::Connect,
+                        classify_connect_timeout_stage(latest_attempt, eapol[2]),
                     )
                     .with_trace(DiagnosticTraceKind::SupplicantContext, context_diagnostic)
-                    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic));
+                    .with_trace(DiagnosticTraceKind::DriverContext, port_diagnostic);
+                    if let Some(attempt) = latest_attempt {
+                        error = error
+                            .with_trace(DiagnosticTraceKind::VendorStatus, attempt.raw_status)
+                            .with_trace(DiagnosticTraceKind::IeeeStatus, attempt.status);
+                    }
+                    return Err(error);
                 }
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
                     |error| {
@@ -453,6 +465,18 @@ const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
     }
 }
 
+#[cfg(feature = "upstream-supplicant-port")]
+fn classify_connect_timeout_stage(
+    latest: Option<crate::upstream_supplicant::AssociationAttemptDiagnostic>,
+    eapol_received: u32,
+) -> DiagnosticStage {
+    match latest {
+        Some(attempt) if attempt.status == 0 && eapol_received == 0 => DiagnosticStage::Eapol,
+        Some(attempt) if attempt.status == 30 => DiagnosticStage::Pmf,
+        _ => DiagnosticStage::Connect,
+    }
+}
+
 /// Build the WS63 resources consumed by `hisi_rf_core::init`.
 #[cfg(feature = "net")]
 pub fn resources(
@@ -482,6 +506,7 @@ fn not_initialized() -> BackendError {
 }
 
 fn map_error(error: Ws63Error) -> BackendError {
+    let raw = ws63_error_trace(error);
     let (class, code, stage) = match error {
         Ws63Error::Initialize(code) => (
             BackendErrorClass::Initialize,
@@ -570,7 +595,37 @@ fn map_error(error: Ws63Error) -> BackendError {
             DiagnosticStage::Initialize,
         ),
     };
-    staged_error(class, code, stage)
+    let mapped = staged_error(class, code, stage);
+    match raw {
+        Some((kind, value)) => mapped.with_trace(kind, value),
+        None => mapped,
+    }
+}
+
+fn ws63_error_trace(error: Ws63Error) -> Option<(DiagnosticTraceKind, u32)> {
+    let vendor = |value| Some((DiagnosticTraceKind::VendorStatus, value));
+    match error {
+        Ws63Error::Initialize(code) | Ws63Error::Timebase(code) | Ws63Error::Crypto(code) => {
+            vendor(code)
+        }
+        Ws63Error::CreateStation(code)
+        | Ws63Error::RegisterEvents(code)
+        | Ws63Error::OpenStation(code)
+        | Ws63Error::UnsupportedSecurity(code)
+        | Ws63Error::CryptoInitialize(code)
+        | Ws63Error::StartScan(code)
+        | Ws63Error::ConfigureSecurity(code)
+        | Ws63Error::StartConnect(code)
+        | Ws63Error::StartDisconnect(code) => vendor(code as u32),
+        Ws63Error::ScanFailed(status) => vendor(scan_status_code(status)),
+        Ws63Error::ConnectFailed(status) => {
+            Some((DiagnosticTraceKind::IeeeStatus, u32::from(status)))
+        }
+        Ws63Error::Disconnected(reason) => {
+            Some((DiagnosticTraceKind::DisconnectReason, u32::from(reason)))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
@@ -698,8 +753,15 @@ fn map_native_error(error: NativeSupplicantError) -> BackendError {
         ),
     };
     let mapped = staged_error(class, 0x5732_0000 | code, stage);
+    let status_kind = match error {
+        NativeSupplicantError::MgmtQueueOverflow(_)
+        | NativeSupplicantError::ScanQueueOverflow(_)
+        | NativeSupplicantError::LinkQueueOverflow(_)
+        | NativeSupplicantError::ExternalAuthQueueOverflow(_) => DiagnosticTraceKind::BackendStatus,
+        _ => DiagnosticTraceKind::HostapStatus,
+    };
     match raw_status {
-        Some(status) => mapped.with_trace(DiagnosticTraceKind::BackendStatus, status),
+        Some(status) => mapped.with_trace(status_kind, status),
         None => mapped,
     }
 }
@@ -760,11 +822,12 @@ fn scan_status_code(status: crate::wifi::ScanStatus) -> u32 {
 mod tests {
     use super::{
         NATIVE_EVENT_AUTHORIZED, NATIVE_EVENT_DISCONNECTED, NATIVE_EVENT_FAILED,
-        NativeConnectEvent, classify_native_connect_event, map_native_error, task_admission_code,
-        terminal_connect_stage,
+        NativeConnectEvent, classify_connect_timeout_stage, classify_native_connect_event,
+        map_error, map_native_error, task_admission_code, terminal_connect_stage,
     };
     use crate::upstream_supplicant::NativeSupplicantError;
-    use hisi_rf_core::{DiagnosticStage, DiagnosticTraceKind};
+    use crate::wifi::{Error as Ws63Error, ScanStatus};
+    use hisi_rf_core::{DiagnosticCode, DiagnosticStage, DiagnosticTraceKind};
 
     #[test]
     fn disconnected_is_recoverable_until_the_overall_connect_deadline() {
@@ -816,8 +879,64 @@ mod tests {
         assert_eq!(diagnostic.backend_code(), Some(0x5732_efef));
         assert_eq!(diagnostic.trace().len(), 1);
         let trace = diagnostic.trace().get(0).unwrap();
-        assert_eq!(trace.kind(), DiagnosticTraceKind::BackendStatus);
+        assert_eq!(trace.kind(), DiagnosticTraceKind::HostapStatus);
         assert_eq!(trace.value(), (-17_i32) as u32);
+    }
+
+    #[test]
+    fn diagnostic_source_matrix_preserves_unknown_numeric_statuses() {
+        let vendor =
+            map_error(Ws63Error::ScanFailed(ScanStatus::Unknown(0xdead_beef))).diagnostic();
+        let ieee = map_error(Ws63Error::ConnectFailed(221)).diagnostic();
+        let hostap = map_native_error(NativeSupplicantError::PollFailed(-117)).diagnostic();
+
+        assert_eq!(vendor.code(), DiagnosticCode::BackendOther);
+        assert_eq!(
+            vendor.trace().get(0).unwrap().kind(),
+            DiagnosticTraceKind::VendorStatus
+        );
+        assert_eq!(vendor.trace().get(0).unwrap().value(), 0xdead_beef);
+        assert_eq!(ieee.code(), DiagnosticCode::ConnectionFailed);
+        assert_eq!(
+            ieee.trace().get(0).unwrap().kind(),
+            DiagnosticTraceKind::IeeeStatus
+        );
+        assert_eq!(ieee.trace().get(0).unwrap().value(), 221);
+        assert_eq!(hostap.code(), DiagnosticCode::BackendOther);
+        assert_eq!(
+            hostap.trace().get(0).unwrap().kind(),
+            DiagnosticTraceKind::HostapStatus
+        );
+        assert_eq!(hostap.trace().get(0).unwrap().value(), (-117_i32) as u32);
+    }
+
+    #[test]
+    fn connection_timeout_stage_uses_association_and_eapol_evidence() {
+        let attempt = |status| crate::upstream_supplicant::AssociationAttemptDiagnostic {
+            status,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            classify_connect_timeout_stage(Some(attempt(0)), 0),
+            DiagnosticStage::Eapol
+        );
+        assert_eq!(
+            classify_connect_timeout_stage(Some(attempt(0)), 1),
+            DiagnosticStage::Connect
+        );
+        assert_eq!(
+            classify_connect_timeout_stage(Some(attempt(30)), 0),
+            DiagnosticStage::Pmf
+        );
+        assert_eq!(
+            classify_connect_timeout_stage(Some(attempt(221)), 0),
+            DiagnosticStage::Connect
+        );
+        assert_eq!(
+            classify_connect_timeout_stage(None, 0),
+            DiagnosticStage::Connect
+        );
     }
 
     #[test]
