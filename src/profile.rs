@@ -21,6 +21,8 @@ pub trait Profile: sealed::Sealed {
     const ID: &'static str;
     /// Security implementation selected by this profile.
     const SECURITY: &'static str;
+    /// Dynamic task slots observed for this profile's pinned payload.
+    const DYNAMIC_TASKS_REQUIRED: usize;
 }
 
 /// Upstream-hostap WPA2-Personal with the smoltcp L2 adapter.
@@ -30,6 +32,7 @@ impl sealed::Sealed for WifiWpa2Smoltcp {}
 impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
+    const DYNAMIC_TASKS_REQUIRED: usize = OBSERVED_DYNAMIC_TASKS;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -39,6 +42,7 @@ impl sealed::Sealed for WifiWpa3Smoltcp {}
 impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
+    const DYNAMIC_TASKS_REQUIRED: usize = OBSERVED_DYNAMIC_TASKS;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
@@ -170,13 +174,13 @@ impl ResourceReport {
             radio_backend: "hisi-rf-ws63",
             supplicant_backend: "hostap-2.11-native",
             crypto_backend: "hisi-crypto-ws63-mixed",
-            runtime_contract: "hisi-rf-rtos-driver/v1.1-ported-cooperative",
+            runtime_contract: "hisi-rf-rtos-driver/v1.2-ported-cooperative",
             event_capacity: EVENTS,
             caller_owned_bytes: core::mem::size_of::<Storage<P, EVENTS>>(),
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
             crypto_dma_bytes: Ws63CryptoStorage::size_bytes(),
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
-            dynamic_tasks_required: OBSERVED_DYNAMIC_TASKS,
+            dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
             runtime_internal_tasks: None,
             task_stack_bytes: None,
             supplicant_arena_bytes: None,
@@ -289,7 +293,7 @@ mod tests {
         assert!(
             output
                 .as_str()
-                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.1-ported-cooperative\"")
+                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.2-ported-cooperative\"")
         );
         assert!(
             output

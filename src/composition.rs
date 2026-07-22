@@ -36,6 +36,10 @@ impl Resources {
 /// Failure before the WS63 radio backend starts executing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitError {
+    /// The installed runtime cannot satisfy the profile contract.
+    Runtime(hisi_rf_rtos_driver::Error),
+    /// The runtime's advisory snapshot has too few free dynamic task slots.
+    TaskAdmission(hisi_rf_rtos_driver::TaskAdmissionError),
     /// The caller-owned storage was already consumed by an earlier init.
     StorageAlreadyClaimed,
     /// The chip-neutral controller rejected initialization.
@@ -54,6 +58,13 @@ pub fn init<P: Profile + ActiveProfile, const EVENTS: usize>(
 ) -> Result<RadioController<EVENTS>, InitError> {
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
+    hisi_rf_rtos_driver::require_runtime(
+        hisi_rf_rtos_driver::RuntimeRequirements::V1_PORTED_COOPERATIVE,
+    )
+    .map_err(InitError::Runtime)?;
+    hisi_rf_rtos_driver::require_task_capacity(P::DYNAMIC_TASKS_REQUIRED)
+        .map_err(InitError::TaskAdmission)?;
+    hisi_rf_rtos_driver::current_task().map_err(InitError::Runtime)?;
     let (state, crypto_storage) = storage.claim().ok_or(InitError::StorageAlreadyClaimed)?;
     let inner = crate::hisi_rf_backend::resources(
         resources.efuse,

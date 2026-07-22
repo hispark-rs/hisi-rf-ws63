@@ -477,6 +477,10 @@ fn map_error(error: Ws63Error) -> BackendError {
         | Ws63Error::StartConnect(code)
         | Ws63Error::StartDisconnect(code) => (BackendErrorClass::Connect, code as u32),
         Ws63Error::Runtime(code) => (BackendErrorClass::Other, 0x2000_0000 | runtime_code(code)),
+        Ws63Error::TaskAdmission(error) => (
+            BackendErrorClass::Initialize,
+            0x2100_0000 | task_admission_code(error),
+        ),
         Ws63Error::AlreadyInitialized => (BackendErrorClass::Initialize, 2),
         #[cfg(feature = "upstream-supplicant-port")]
         Ws63Error::SupplicantPort(_) => (BackendErrorClass::Initialize, 3),
@@ -585,6 +589,20 @@ fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
     }
 }
 
+fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError) -> u32 {
+    match error {
+        hisi_rf_rtos_driver::TaskAdmissionError::Runtime(error) => 0x1_0000 | runtime_code(error),
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
+            required,
+            available,
+        } => {
+            let required = required.min(u8::MAX as usize) as u32;
+            let available = available.min(u8::MAX as usize) as u32;
+            (required << 8) | available
+        }
+    }
+}
+
 fn scan_status_code(status: crate::wifi::ScanStatus) -> u32 {
     use crate::wifi::ScanStatus;
     match status {
@@ -600,7 +618,7 @@ fn scan_status_code(status: crate::wifi::ScanStatus) -> u32 {
 mod tests {
     use super::{
         NATIVE_EVENT_AUTHORIZED, NATIVE_EVENT_DISCONNECTED, NATIVE_EVENT_FAILED,
-        NativeConnectEvent, classify_native_connect_event,
+        NativeConnectEvent, classify_native_connect_event, task_admission_code,
     };
 
     #[test]
@@ -624,6 +642,19 @@ mod tests {
         assert_eq!(
             classify_native_connect_event(2),
             NativeConnectEvent::Progress
+        );
+    }
+
+    #[test]
+    fn admission_error_code_retains_required_and_available_slots() {
+        assert_eq!(
+            task_admission_code(
+                hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
+                    required: 5,
+                    available: 3,
+                }
+            ),
+            0x0503
         );
     }
 }

@@ -356,6 +356,8 @@ impl ScanResult {
 pub enum Error {
     /// The selected radio runtime could not be installed or dispatched.
     Runtime(hisi_rf_rtos_driver::Error),
+    /// The runtime snapshot cannot fit the profile's observed worker count.
+    TaskAdmission(hisi_rf_rtos_driver::TaskAdmissionError),
     /// The single vendor Wi-Fi runtime was already claimed.
     AlreadyInitialized,
     /// `uapi_wifi_init` failed with the enclosed vendor error code.
@@ -426,6 +428,10 @@ fn require_radio_runtime() -> Result<(), Error> {
         hisi_rf_rtos_driver::RuntimeRequirements::V1_PORTED_COOPERATIVE,
     )
     .map_err(Error::Runtime)?;
+    hisi_rf_rtos_driver::require_task_capacity(
+        <crate::profile::SelectedProfile as crate::profile::Profile>::DYNAMIC_TASKS_REQUIRED,
+    )
+    .map_err(Error::TaskAdmission)?;
     hisi_rf_rtos_driver::current_task().map_err(Error::Runtime)?;
     Ok(())
 }
