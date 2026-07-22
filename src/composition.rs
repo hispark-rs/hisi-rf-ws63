@@ -1,6 +1,10 @@
+use core::fmt;
 use core::num::NonZeroUsize;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
-use hisi_rf_core::{Error, RadioConfig};
+use hisi_rf_core::{
+    BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
+    RadioConfig,
+};
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
 use crate::netif_smoltcp::Ws63Device;
@@ -45,6 +49,24 @@ pub enum InitError {
     StorageAlreadyClaimed,
     /// The chip-neutral controller rejected initialization.
     Core(Error),
+}
+
+impl InitError {
+    /// Convert an initialization failure into the shared, secret-free schema.
+    pub fn diagnostic(self) -> Diagnostic {
+        match self {
+            Self::Runtime(error) => runtime_diagnostic(error),
+            Self::TaskAdmission(error) => task_admission_diagnostic(error),
+            Self::StorageAlreadyClaimed => Error::AlreadyInitialized.diagnostic(),
+            Self::Core(error) => error.diagnostic(),
+        }
+    }
+}
+
+impl fmt::Display for InitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.diagnostic().fmt(formatter)
+    }
 }
 
 /// Concrete WS63 controller before it is split into Wi-Fi and runner handles.
@@ -96,5 +118,121 @@ pub fn init<P: Profile + ActiveProfile, const EVENTS: usize>(
                 .map_err(InitError::Runtime)?;
             Err(InitError::Core(error))
         }
+    }
+}
+
+fn runtime_diagnostic(error: hisi_rf_rtos_driver::Error) -> Diagnostic {
+    let class = match error {
+        hisi_rf_rtos_driver::Error::ResourceExhausted | hisi_rf_rtos_driver::Error::NoTaskSlots => {
+            BackendErrorClass::ResourceUnavailable
+        }
+        hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::Timeout,
+        _ => BackendErrorClass::Other,
+    };
+    let code = crate::hisi_rf_backend::runtime_code(error);
+    Error::Backend(
+        BackendError::new(class, 0x5732_e000 | code)
+            .with_stage(DiagnosticStage::Runtime)
+            .with_profile_revision(crate::profile::PROFILE_REVISION)
+            .with_trace(DiagnosticTraceKind::RuntimeCode, code),
+    )
+    .diagnostic()
+}
+
+fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> Diagnostic {
+    let code = crate::hisi_rf_backend::task_admission_code(error);
+    let mut backend = match error {
+        hisi_rf_rtos_driver::TaskAdmissionError::Runtime(runtime) => {
+            let class = match runtime {
+                hisi_rf_rtos_driver::Error::ResourceExhausted
+                | hisi_rf_rtos_driver::Error::NoTaskSlots => BackendErrorClass::ResourceUnavailable,
+                hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::Timeout,
+                _ => BackendErrorClass::Other,
+            };
+            BackendError::new(class, 0x5732_a000 | code).with_trace(
+                DiagnosticTraceKind::RuntimeCode,
+                crate::hisi_rf_backend::runtime_code(runtime),
+            )
+        }
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
+            required,
+            available,
+        } => BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_a000 | code)
+            .with_trace(
+                DiagnosticTraceKind::ResourceRequired,
+                required.min(u32::MAX as usize) as u32,
+            )
+            .with_trace(
+                DiagnosticTraceKind::ResourceAvailable,
+                available.min(u32::MAX as usize) as u32,
+            ),
+    };
+    backend = backend
+        .with_stage(DiagnosticStage::Runtime)
+        .with_profile_revision(crate::profile::PROFILE_REVISION);
+    Error::Backend(backend).diagnostic()
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use std::string::String;
+
+    use hisi_rf_core::{DiagnosticCode, RecoveryAction};
+
+    use super::*;
+
+    #[test]
+    fn task_admission_error_is_actionable_and_lossless() {
+        let diagnostic = InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
+                required: 7,
+                available: 3,
+            },
+        )
+        .diagnostic();
+
+        assert_eq!(diagnostic.code(), DiagnosticCode::ResourceUnavailable);
+        assert_eq!(diagnostic.stage(), DiagnosticStage::Runtime);
+        assert_eq!(diagnostic.action(), RecoveryAction::ProvideResources);
+        assert_eq!(diagnostic.profile_revision(), Some("ws63-wifi-2026-07-22"));
+        assert_eq!(
+            diagnostic.trace().get(0).map(|entry| entry.value()),
+            Some(7)
+        );
+        assert_eq!(
+            diagnostic.trace().get(1).map(|entry| entry.value()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn runtime_and_storage_failures_share_the_public_schema() {
+        let timeout = InitError::Runtime(hisi_rf_rtos_driver::Error::TimedOut).diagnostic();
+        assert_eq!(timeout.code(), DiagnosticCode::BackendTimeout);
+        assert_eq!(timeout.stage(), DiagnosticStage::Runtime);
+
+        let claimed = InitError::StorageAlreadyClaimed.diagnostic();
+        assert_eq!(claimed.code(), DiagnosticCode::AlreadyInitialized);
+    }
+
+    #[test]
+    fn initialization_json_never_contains_configuration_secrets() {
+        let mut json = String::new();
+        InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
+                required: 7,
+                available: 3,
+            },
+        )
+        .diagnostic()
+        .write_json(&mut json)
+        .unwrap();
+
+        assert!(json.contains("resource.unavailable"));
+        assert!(!json.contains("ssid"));
+        assert!(!json.contains("passphrase"));
+        assert!(!json.contains("secret"));
     }
 }

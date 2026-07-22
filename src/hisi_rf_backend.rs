@@ -715,7 +715,7 @@ const fn channel_to_frequency(channel: u8) -> u16 {
     }
 }
 
-fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
+pub(crate) fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
     use hisi_rf_rtos_driver::Error;
     match error {
         Error::NotInstalled => 1,
@@ -731,7 +731,7 @@ fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
     }
 }
 
-fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError) -> u32 {
+pub(crate) fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError) -> u32 {
     match error {
         hisi_rf_rtos_driver::TaskAdmissionError::Runtime(error) => 0x1_0000 | runtime_code(error),
         hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
