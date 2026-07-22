@@ -129,12 +129,14 @@ pub extern "C" fn realloc(ptr: *mut c_void, size: c_ulong) -> *mut c_void {
     crate::alloc::realloc_owned(ptr, size as usize)
 }
 
-/// `memalign`. NOTE: the backing heap returns 8-byte-aligned blocks; stricter
-/// `alignment` (e.g. 64-byte DMA) is NOT yet honoured — a real aligned
-/// allocator is a TODO before any DMA buffer is sourced through here.
+/// `memalign` backed by the RF heap's checked aligned-allocation path.
+///
+/// Invalid alignments (not a power of two or smaller than a pointer) and
+/// allocation failures return null, matching the failure convention expected
+/// by the C callers. The returned block can be released with [`free`].
 #[cfg_attr(target_arch = "riscv32", unsafe(no_mangle))]
-pub extern "C" fn memalign(_alignment: c_ulong, size: c_ulong) -> *mut c_void {
-    crate::alloc::osal_kmalloc(size as usize)
+pub extern "C" fn memalign(alignment: c_ulong, size: c_ulong) -> *mut c_void {
+    crate::alloc::allocate_zeroed(size as usize, alignment as usize)
 }
 
 // ── Strings ──────────────────────────────────────────────────────────────────

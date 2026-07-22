@@ -311,4 +311,23 @@ mod tests {
         assert!(bytes[32..].iter().all(|byte| *byte == 0));
         osal_kfree(grown.cast());
     }
+
+    #[test]
+    fn libc_memalign_honors_and_validates_alignment() {
+        for alignment in [8usize, 16, 64, 256] {
+            let ptr = crate::libc::memalign(alignment as _, 73).cast::<u8>();
+            assert!(!ptr.is_null());
+            assert_eq!((ptr as usize) % alignment, 0);
+            // SAFETY: memalign returned a live 73-byte allocation.
+            assert!(
+                unsafe { core::slice::from_raw_parts(ptr, 73) }
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            osal_kfree(ptr.cast());
+        }
+
+        assert!(crate::libc::memalign(3, 32).is_null());
+        assert!(crate::libc::memalign(4, 32).is_null());
+    }
 }

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.13] - 2026-07-23
+
+### Fixed
+
+- Route the C `memalign` ABI through the checked RF heap aligned-allocation
+  path, preserving requested power-of-two alignment and rejecting invalid
+  alignment instead of silently returning a default-aligned block.
+
 ## [0.1.0-alpha.12] - 2026-07-23
 
 ### Added
