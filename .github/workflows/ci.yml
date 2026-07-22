@@ -33,7 +33,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-09
-      - run: cargo generate-lockfile --locked
+      - name: Verify the committed standalone lockfile
+        run: |
+          git ls-files --error-unmatch Cargo.lock
+          cargo metadata --locked --format-version 1 --no-deps > /dev/null
       - run: cargo package --locked
 
   minimal-target:

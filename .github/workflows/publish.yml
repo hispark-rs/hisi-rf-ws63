@@ -26,8 +26,8 @@ jobs:
       - name: Lockfile preflight
         run: |
           set -euo pipefail
-          cargo generate-lockfile --locked
           git ls-files --error-unmatch Cargo.lock >/dev/null
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
           git diff --exit-code -- Cargo.lock
       - name: Publish crate
         env:
