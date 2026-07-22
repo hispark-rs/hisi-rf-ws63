@@ -1,5 +1,6 @@
 //! WS63 implementation of the chip-neutral `hisi-rf` control contract.
 
+use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, ConnectionInfo, ScanConfig, ScanOutcome, ScanResult, Security,
@@ -54,6 +55,7 @@ pub struct Ws63WifiBackend<'d> {
     spacc: Option<Spacc<'d>>,
     pke: Option<Pke<'d>>,
     trng: Option<Trng<'d>>,
+    crypto_storage: Option<&'static mut Ws63CryptoStorage>,
     wifi: Option<ActiveWifi<'d>>,
     #[cfg(feature = "upstream-supplicant-port")]
     supplicant: Option<NativeSupplicant>,
@@ -69,6 +71,7 @@ impl<'d> Ws63WifiBackend<'d> {
         spacc: Spacc<'d>,
         pke: Pke<'d>,
         trng: Trng<'d>,
+        crypto_storage: &'static mut Ws63CryptoStorage,
     ) -> Self {
         Self {
             efuse: Some(efuse),
@@ -76,6 +79,7 @@ impl<'d> Ws63WifiBackend<'d> {
             spacc: Some(spacc),
             pke: Some(pke),
             trng: Some(trng),
+            crypto_storage: Some(crypto_storage),
             wifi: None,
             #[cfg(feature = "upstream-supplicant-port")]
             supplicant: None,
@@ -110,12 +114,16 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             class: BackendErrorClass::Initialize,
             code: 0x1000_0007,
         })?;
-        crate::crypto::install_hardware_crypto(km, spacc, pke, trng).map_err(|error| {
-            BackendError {
+        let crypto_storage = self.crypto_storage.take().ok_or(BackendError {
+            class: BackendErrorClass::Initialize,
+            code: 0x1000_0008,
+        })?;
+        crate::crypto::install_hardware_crypto(km, spacc, pke, trng, crypto_storage).map_err(
+            |error| BackendError {
                 class: BackendErrorClass::Initialize,
                 code: error.code(),
-            }
-        })?;
+            },
+        )?;
         #[cfg(target_arch = "riscv32")]
         crate::crypto::ws63_pbkdf2_self_test().map_err(|error| BackendError {
             class: BackendErrorClass::Initialize,
@@ -432,9 +440,10 @@ pub fn resources(
     spacc: Spacc<'static>,
     pke: Pke<'static>,
     trng: Trng<'static>,
+    crypto_storage: &'static mut Ws63CryptoStorage,
 ) -> RadioResources<Ws63WifiBackend<'static>, Ws63Device> {
     RadioResources {
-        backend: Ws63WifiBackend::new(efuse, km, spacc, pke, trng),
+        backend: Ws63WifiBackend::new(efuse, km, spacc, pke, trng, crypto_storage),
         device: Ws63Device,
     }
 }

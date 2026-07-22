@@ -35,6 +35,21 @@ or post-link relocation scripts.
 The old vendor-supplicant path remains a migration oracle and is not selected
 by either public Personal profile.
 
+Each profile also has a type-level marker and caller-owned storage. The selected
+Cargo feature exposes `SelectedProfile`, so firmware can make the RAM cost and
+one-time ownership explicit without repeating the security mode in source:
+
+```rust,ignore
+static RADIO_STORAGE: hisi_rf_ws63::Storage<hisi_rf_ws63::SelectedProfile, 4> =
+    hisi_rf_ws63::Storage::new();
+```
+
+`Storage::report()` exposes deterministic `hisi-rf-resource-report/v1`
+metadata. The current report accounts for bounded radio state, the 4,384-byte
+caller-owned crypto DMA scratch, and the 48 KiB linker-owned packet RAM. Task
+stacks and the supplicant arena remain explicitly uncalibrated until their
+runtime ownership and HIL admission contracts are complete.
+
 ## Validation
 
 ```console

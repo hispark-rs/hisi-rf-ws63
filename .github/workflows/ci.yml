@@ -21,7 +21,7 @@ jobs:
           toolchain: nightly-2026-07-09
           components: clippy,rust-src,rustfmt
       - run: cargo fmt --all -- --check
-      - run: cargo test --locked --lib
+      - run: cargo test --locked --lib --features ${{ matrix.features }}
       - run: cargo check --locked --lib --features ${{ matrix.features }}
       - run: cargo clippy --locked --lib --features ${{ matrix.features }} -- -D warnings
       - run: cargo check -Zbuild-std=core,alloc --locked --target riscv32imfc-unknown-none-elf --lib --features ${{ matrix.features }}

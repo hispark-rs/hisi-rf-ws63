@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-07-20
+
+### Added
+
+- Added typed WPA2/WPA3 smoltcp profiles, caller-owned `Storage<Profile, EVENTS>`,
+  and a deterministic no-allocation resource report.
+
+### Changed
+
+- Moved the 4,384-byte WS63 crypto DMA scratch out of an internal static into
+  application-owned profile storage.
+- Made radio initialization reject reused storage before the backend or blob
+  starts executing.
+
 ## [0.1.0-alpha.3] - 2026-07-20
 
 ### Added

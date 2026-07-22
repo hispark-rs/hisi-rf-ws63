@@ -3,7 +3,8 @@
 
 use hisi_riscv_rt::entry;
 
-static RADIO_STATE: hisi_rf_core::RadioState<4> = hisi_rf_core::RadioState::new();
+static RADIO_STORAGE: hisi_rf_ws63::Storage<hisi_rf_ws63::SelectedProfile, 4> =
+    hisi_rf_ws63::Storage::new();
 
 #[entry]
 fn main() -> ! {
@@ -18,7 +19,7 @@ fn main() -> ! {
     let _radio = hisi_rf_ws63::init(
         hisi_rf_core::RadioConfig::default(),
         resources,
-        &RADIO_STATE,
+        &RADIO_STORAGE,
     )
     .expect("fresh static radio state");
 

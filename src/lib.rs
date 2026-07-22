@@ -83,8 +83,15 @@
 #[cfg(all(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 compile_error!("select either a vendor supplicant profile or an upstream supplicant profile");
 
+#[cfg(all(feature = "wpa2-personal", feature = "wpa3-personal"))]
+compile_error!("select exactly one WS63 Personal profile");
+
 #[cfg(all(test, not(target_arch = "riscv32")))]
 mod host_test_support {
+    use core::ffi::c_void;
+
+    use ws63_radio_sys::supplicant::{DriverHooks, OsHooks};
+
     struct HostCriticalSection;
 
     critical_section::set_impl!(HostCriticalSection);
@@ -93,6 +100,21 @@ mod host_test_support {
         unsafe fn acquire() -> critical_section::RawRestoreState {}
 
         unsafe fn release(_: critical_section::RawRestoreState) {}
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn hisi_wpa_os_install(_: *const OsHooks) -> i32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn hisi_wpa_os_uninstall(_: *mut c_void) -> i32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn hisi_wpa_driver_install(_: *const DriverHooks) -> i32 {
+        0
     }
 }
 
@@ -300,7 +322,22 @@ mod composition;
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
-pub use composition::{RadioController, Resources, init};
+mod profile;
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub use composition::{InitError, RadioController, Resources, init};
+#[cfg(all(
+    feature = "net",
+    any(feature = "wpa2-personal", feature = "wpa3-personal")
+))]
+pub use profile::SelectedProfile;
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub use profile::{Profile, ResourceReport, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp};
 
 /// Terminal target for a mask-ROM callback not supplied by the current port.
 ///
