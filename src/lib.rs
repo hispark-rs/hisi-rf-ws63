@@ -337,7 +337,7 @@ mod profile;
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
-pub use composition::{InitError, RadioController, Resources, init};
+pub use composition::{InitError, RadioController, Resources, init, station_mac_address};
 #[cfg(all(
     feature = "net",
     any(feature = "wpa2-personal", feature = "wpa3-personal")

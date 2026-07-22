@@ -157,6 +157,15 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     }
 }
 
+/// Return the station MAC address installed by the initialized WS63 netif.
+///
+/// The address becomes available after [`hisi_rf_core::WifiController::initialize`]
+/// completes. Applications use it to configure a standard L2/IP stack without
+/// reaching into the vendor netif or chip backend internals.
+pub fn station_mac_address() -> Option<[u8; 6]> {
+    crate::netif::hardware_address()
+}
+
 extern "C" fn radio_runner_task<const EVENTS: usize>(argument: *mut c_void) -> *mut c_void {
     // SAFETY: `start_runner` passes the unique runner stored for the entire
     // firmware lifetime. The task is the only code that mutates it.
