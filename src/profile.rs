@@ -116,6 +116,8 @@ impl<P: Profile, const EVENTS: usize> Default for Storage<P, EVENTS> {
 pub struct ResourceReport {
     /// Report schema consumed by CI and future tooling.
     pub schema: &'static str,
+    /// Chip backend selected by this release unit.
+    pub chip: &'static str,
     /// Named composition profile.
     pub profile: &'static str,
     /// Profile metadata revision.
@@ -124,6 +126,14 @@ pub struct ResourceReport {
     pub security: &'static str,
     /// Network adapter selected by the profile.
     pub network: &'static str,
+    /// Radio integration backend selected by the profile.
+    pub radio_backend: &'static str,
+    /// Supplicant implementation selected by the profile.
+    pub supplicant_backend: &'static str,
+    /// Cryptographic backend selected by the profile.
+    pub crypto_backend: &'static str,
+    /// Minimum runtime contract required before radio startup.
+    pub runtime_contract: &'static str,
     /// Number of bounded public radio events.
     pub event_capacity: usize,
     /// Bytes held directly in [`Storage`].
@@ -152,10 +162,15 @@ impl ResourceReport {
     const fn for_profile<P: Profile, const EVENTS: usize>() -> Self {
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
+            chip: "ws63",
             profile: P::ID,
             profile_revision: PROFILE_REVISION,
             security: P::SECURITY,
             network: "smoltcp",
+            radio_backend: "hisi-rf-ws63",
+            supplicant_backend: "hostap-2.11-native",
+            crypto_backend: "hisi-crypto-ws63-mixed",
+            runtime_contract: "hisi-rf-rtos-driver/v1.1-ported-cooperative",
             event_capacity: EVENTS,
             caller_owned_bytes: core::mem::size_of::<Storage<P, EVENTS>>(),
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
@@ -175,9 +190,11 @@ impl ResourceReport {
         write!(
             output,
             concat!(
-                "{{\"schema\":\"{}\",\"profile\":\"{}\",",
+                "{{\"schema\":\"{}\",\"chip\":\"{}\",\"profile\":\"{}\",",
                 "\"profile_revision\":\"{}\",\"security\":\"{}\",",
-                "\"network\":\"{}\",\"event_capacity\":{},",
+                "\"network\":\"{}\",\"radio_backend\":\"{}\",",
+                "\"supplicant_backend\":\"{}\",\"crypto_backend\":\"{}\",",
+                "\"runtime_contract\":\"{}\",\"event_capacity\":{},",
                 "\"caller_owned_bytes\":{},\"radio_state_bytes\":{},",
                 "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
                 "\"dynamic_tasks_required\":{},",
@@ -186,10 +203,15 @@ impl ResourceReport {
                 "\"runtime_resources_calibrated\":{}}}"
             ),
             self.schema,
+            self.chip,
             self.profile,
             self.profile_revision,
             self.security,
             self.network,
+            self.radio_backend,
+            self.supplicant_backend,
+            self.crypto_backend,
+            self.runtime_contract,
             self.event_capacity,
             self.caller_owned_bytes,
             self.radio_state_bytes,
@@ -206,14 +228,14 @@ mod tests {
     use super::*;
 
     struct FixedBuffer {
-        bytes: [u8; 512],
+        bytes: [u8; 768],
         len: usize,
     }
 
     impl FixedBuffer {
         fn new() -> Self {
             Self {
-                bytes: [0; 512],
+                bytes: [0; 768],
                 len: 0,
             }
         }
@@ -240,6 +262,7 @@ mod tests {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
         assert_eq!(report.schema, "hisi-rf-resource-report/v1");
+        assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
@@ -261,8 +284,13 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v1\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v1\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
+        assert!(
+            output
+                .as_str()
+                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.1-ported-cooperative\"")
+        );
         assert!(
             output
                 .as_str()

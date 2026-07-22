@@ -11,9 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features:
-          - wpa2-personal,smoltcp
-          - wpa3-personal,smoltcp
+        include:
+          - profile: wpa2-smoltcp
+            features: wpa2-personal,smoltcp
+          - profile: wpa3-smoltcp
+            features: wpa3-personal,smoltcp
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -25,6 +27,15 @@ jobs:
       - run: cargo check --locked --lib --features ${{ matrix.features }}
       - run: cargo clippy --locked --lib --features ${{ matrix.features }} -- -D warnings
       - run: cargo check -Zbuild-std=core,alloc --locked --target riscv32imfc-unknown-none-elf --lib --features ${{ matrix.features }}
+      - name: Emit the versioned profile resource report
+        run: cargo run --locked --example resource_report --features ${{ matrix.features }} > resource-report.json
+      - name: Show the profile resource report
+        run: cat resource-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resource-report-${{ matrix.profile }}
+          path: resource-report.json
+          if-no-files-found: error
 
   package:
     runs-on: ubuntu-latest
