@@ -294,6 +294,8 @@ impl Drop for OperationTimer {
 
 /// Record one bootstrap stage until it succeeds or leaves scope.
 pub(crate) struct BootstrapStageTimer {
+    #[cfg(feature = "rf-init-diag")]
+    stage: BootstrapStage,
     metric: &'static BootstrapStageMetric,
     started_at_ms: Option<u64>,
     completed: bool,
@@ -303,7 +305,11 @@ impl BootstrapStageTimer {
     pub(crate) fn start(stage: BootstrapStage) -> Self {
         let metric = &BOOTSTRAP_STAGES[stage.index()];
         metric.begin();
+        #[cfg(feature = "rf-init-diag")]
+        crate::rf_init_diag::trace_bootstrap_stage(stage, b"begin", None);
         Self {
+            #[cfg(feature = "rf-init-diag")]
+            stage,
             metric,
             started_at_ms: crate::uapi::try_monotonic_ms(),
             completed: false,
@@ -323,6 +329,16 @@ impl Drop for BootstrapStageTimer {
             }
             _ => None,
         };
+        #[cfg(feature = "rf-init-diag")]
+        crate::rf_init_diag::trace_bootstrap_stage(
+            self.stage,
+            if self.completed {
+                b"completed"
+            } else {
+                b"failed"
+            },
+            elapsed_ms,
+        );
         self.metric.finish(self.completed, elapsed_ms);
     }
 }

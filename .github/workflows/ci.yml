@@ -83,4 +83,4 @@ jobs:
       - name: Link a complete upstream-WPA2 firmware with stock rust-lld
         run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example plain_firmware --features wpa2-personal,smoltcp
       - name: Link the no-AP bootstrap profiler with stock rust-lld
-        run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,incremental-backend-experiment
+        run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,incremental-backend-experiment,rf-init-diag

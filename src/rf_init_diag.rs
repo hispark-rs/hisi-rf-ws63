@@ -87,10 +87,10 @@ fn diag_emit(bytes: &[u8]) {
 
     #[cfg(target_arch = "riscv32")]
     {
-        const DATA: *mut u16 = 0x4401_0004 as *mut u16;
-        const ST: *const u16 = 0x4401_0044 as *const u16;
-        const TX_FULL: u16 = 1 << 0;
-        const TX_EMPTY: u16 = 1 << 1;
+        const DATA: *mut u32 = 0x4401_0004 as *mut u32;
+        const ST: *const u32 = 0x4401_0044 as *const u32;
+        const TX_FULL: u32 = 1 << 0;
+        const TX_EMPTY: u32 = 1 << 1;
 
         for &byte in bytes {
             // SAFETY: this bring-up diagnostic runs only on WS63 after flashboot
@@ -99,13 +99,29 @@ fn diag_emit(bytes: &[u8]) {
                 while core::ptr::read_volatile(ST) & TX_FULL != 0 {
                     core::hint::spin_loop();
                 }
-                core::ptr::write_volatile(DATA, byte as u16);
+                core::ptr::write_volatile(DATA, u32::from(byte));
                 while core::ptr::read_volatile(ST) & TX_EMPTY == 0 {
                     core::hint::spin_loop();
                 }
             }
         }
     }
+}
+
+pub(crate) fn trace_bootstrap_stage(
+    stage: crate::blocking_diagnostics::BootstrapStage,
+    event: &[u8],
+    elapsed_ms: Option<u64>,
+) {
+    diag_emit(b"RFDBG_BOOT_STAGE_LIVE name=");
+    diag_emit(stage.as_str().as_bytes());
+    diag_emit(b" event=");
+    diag_emit(event);
+    if let Some(elapsed_ms) = elapsed_ms {
+        diag_emit(b" elapsed_ms=0x");
+        diag_emit(&hex8(u32::try_from(elapsed_ms).unwrap_or(u32::MAX)));
+    }
+    diag_emit(b"\r\n");
 }
 
 pub(crate) fn trace_nv(key: u16, max_len: u16, actual_len: u16, result: u32) {
@@ -129,20 +145,6 @@ pub(crate) fn trace_bad_free(ptr: u32, total: u32, magic: u32, caller: u32) {
     diag_emit(&hex8(magic));
     diag_emit(b" ra=0x");
     diag_emit(&hex8(caller));
-    diag_emit(b"\r\n");
-}
-
-pub(crate) fn trace_task(event: &[u8], slot: usize, entry: usize, arg: usize, stack_size: usize) {
-    diag_emit(b"RFDBG_TASK ");
-    diag_emit(event);
-    diag_emit(b" slot=0x");
-    diag_emit(&hex8(slot as u32));
-    diag_emit(b" entry=0x");
-    diag_emit(&hex8(entry as u32));
-    diag_emit(b" arg=0x");
-    diag_emit(&hex8(arg as u32));
-    diag_emit(b" stack=0x");
-    diag_emit(&hex8(stack_size as u32));
     diag_emit(b"\r\n");
 }
 

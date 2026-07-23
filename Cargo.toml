@@ -11,7 +11,11 @@ categories = ["embedded", "no-std", "network-programming"]
 [[example]]
 name = "bootstrap_profile"
 path = "examples/bootstrap_profile.rs"
-required-features = ["wpa2-personal", "incremental-backend-experiment"]
+required-features = [
+    "wpa2-personal",
+    "incremental-backend-experiment",
+    "rf-init-diag",
+]
 
 [dependencies]
 hisi-alloc = "0.1.0-alpha.2"
