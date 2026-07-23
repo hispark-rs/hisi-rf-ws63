@@ -16,6 +16,8 @@ jobs:
             features: wpa2-personal,smoltcp
           - profile: wpa3-smoltcp
             features: wpa3-personal,smoltcp
+          - profile: wpa2-incremental
+            features: wpa2-personal,incremental-backend-experiment
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
