@@ -31,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slice over the pinned upstream supplicant. It enforces generation-tagged
   operation identity, exact event accounting, elapsed-time budgets, bounded
   event draining, explicit cancellation, and deterministic host tests.
-- Initialization and scan deliberately fail closed in the experimental adapter
-  until their vendor calls are split into genuinely bounded steps; the current
-  validated blocking backend remains the default.
+- Initialization deliberately remains fail closed in the experimental adapter
+  because its vendor ABI is not cancellable or pollable; the current validated
+  blocking backend remains the default.
 
 ### Changed
 
