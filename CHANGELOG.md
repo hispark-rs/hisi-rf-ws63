@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.17] - 2026-07-23
+
 ### Added
 
 - Extended the non-default incremental backend with a genuine WS63 scan state
