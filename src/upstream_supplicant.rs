@@ -2819,13 +2819,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_registration_before_runtime_installation() {
-        assert_eq!(
-            prepare_upstream_supplicant_port(b"wlan0"),
+    fn rejects_registration_without_a_runtime_semaphore() {
+        let result = prepare_upstream_supplicant_port(b"wlan0");
+        assert!(matches!(
+            result,
             Err(UpstreamSupplicantPortError::Runtime(
                 hisi_rf_rtos_driver::Error::NotInstalled
+                    | hisi_rf_rtos_driver::Error::InvalidContext
             ))
-        );
+        ));
+        assert_eq!(PORT_STATE.load(Ordering::Acquire), PORT_FREE);
     }
 
     #[test]
