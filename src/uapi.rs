@@ -92,7 +92,11 @@ pub(crate) fn initialize_rom_timebases() -> u32 {
     }
 }
 
-#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    target_arch = "riscv32",
+    feature = "wifi-personal",
+    feature = "upstream-supplicant-port"
+))]
 pub(crate) fn try_monotonic_ms() -> Option<u64> {
     #[cfg(target_arch = "riscv32")]
     {

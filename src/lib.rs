@@ -141,7 +141,19 @@ mod link_contract {
 }
 
 pub mod alloc;
-#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    target_arch = "riscv32",
+    feature = "wifi-personal",
+    feature = "upstream-supplicant-port"
+))]
+#[cfg_attr(
+    all(
+        target_arch = "riscv32",
+        not(feature = "wifi-personal"),
+        not(feature = "upstream-supplicant-port")
+    ),
+    allow(dead_code)
+)]
 mod blocking_diagnostics;
 mod compiler_rt;
 #[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
