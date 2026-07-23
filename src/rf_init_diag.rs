@@ -108,22 +108,6 @@ fn diag_emit(bytes: &[u8]) {
     }
 }
 
-pub(crate) fn trace_bootstrap_stage(
-    stage: crate::blocking_diagnostics::BootstrapStage,
-    event: &[u8],
-    elapsed_ms: Option<u64>,
-) {
-    diag_emit(b"RFDBG_BOOT_STAGE_LIVE name=");
-    diag_emit(stage.as_str().as_bytes());
-    diag_emit(b" event=");
-    diag_emit(event);
-    if let Some(elapsed_ms) = elapsed_ms {
-        diag_emit(b" elapsed_ms=0x");
-        diag_emit(&hex8(u32::try_from(elapsed_ms).unwrap_or(u32::MAX)));
-    }
-    diag_emit(b"\r\n");
-}
-
 pub(crate) fn trace_nv(key: u16, max_len: u16, actual_len: u16, result: u32) {
     diag_emit(b"RFDBG_NV key=0x");
     diag_emit(&hex8(key as u32));

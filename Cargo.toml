@@ -14,7 +14,7 @@ path = "examples/bootstrap_profile.rs"
 required-features = [
     "wpa2-personal",
     "incremental-backend-experiment",
-    "rf-init-diag",
+    "bootstrap-stage-diag",
 ]
 
 [dependencies]
@@ -89,6 +89,9 @@ wpa = ["wifi-wpa2-personal"]
 # Internal on-silicon bring-up instrumentation for the guarded full-init image.
 # Not a public radio API and not enabled by normal consumers.
 rf-init-diag = []
+# Credential-free stage boundaries for the normalized bootstrap profiler.
+# Unlike `rf-init-diag`, this adds no vendor symbol wrappers.
+bootstrap-stage-diag = []
 # Low-disturbance in-memory WPA event-loop counters. Unlike `rf-init-diag`,
 # this does not emit synchronous UART traces from hot paths.
 rf-eloop-diag = ["hisi-crypto-ws63?/diagnostics"]

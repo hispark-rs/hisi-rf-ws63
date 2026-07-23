@@ -294,7 +294,7 @@ impl Drop for OperationTimer {
 
 /// Record one bootstrap stage until it succeeds or leaves scope.
 pub(crate) struct BootstrapStageTimer {
-    #[cfg(feature = "rf-init-diag")]
+    #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
     stage: BootstrapStage,
     metric: &'static BootstrapStageMetric,
     started_at_ms: Option<u64>,
@@ -305,10 +305,10 @@ impl BootstrapStageTimer {
     pub(crate) fn start(stage: BootstrapStage) -> Self {
         let metric = &BOOTSTRAP_STAGES[stage.index()];
         metric.begin();
-        #[cfg(feature = "rf-init-diag")]
-        crate::rf_init_diag::trace_bootstrap_stage(stage, b"begin", None);
+        #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+        trace_bootstrap_stage(stage, b"begin", None);
         Self {
-            #[cfg(feature = "rf-init-diag")]
+            #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
             stage,
             metric,
             started_at_ms: crate::uapi::try_monotonic_ms(),
@@ -329,8 +329,8 @@ impl Drop for BootstrapStageTimer {
             }
             _ => None,
         };
-        #[cfg(feature = "rf-init-diag")]
-        crate::rf_init_diag::trace_bootstrap_stage(
+        #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+        trace_bootstrap_stage(
             self.stage,
             if self.completed {
                 b"completed"
@@ -341,6 +341,51 @@ impl Drop for BootstrapStageTimer {
         );
         self.metric.finish(self.completed, elapsed_ms);
     }
+}
+
+#[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+fn trace_bootstrap_stage(stage: BootstrapStage, event: &[u8], elapsed_ms: Option<u64>) {
+    write_bootstrap_trace(b"RFDBG_BOOT_STAGE_LIVE name=");
+    write_bootstrap_trace(stage.as_str().as_bytes());
+    write_bootstrap_trace(b" event=");
+    write_bootstrap_trace(event);
+    if let Some(elapsed_ms) = elapsed_ms {
+        write_bootstrap_trace(b" elapsed_ms=0x");
+        write_bootstrap_trace(&hex8(u32::try_from(elapsed_ms).unwrap_or(u32::MAX)));
+    }
+    write_bootstrap_trace(b"\r\n");
+}
+
+#[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+fn write_bootstrap_trace(bytes: &[u8]) {
+    const DATA: *mut u32 = 0x4401_0004 as *mut u32;
+    const FIFO_STATUS: *const u32 = 0x4401_0044 as *const u32;
+    const TX_FULL: u32 = 1 << 0;
+
+    for &byte in bytes {
+        // SAFETY: the diagnostic fixture runs after flashboot configured UART0;
+        // this non-default feature is never part of the normal radio path.
+        unsafe {
+            while core::ptr::read_volatile(FIFO_STATUS) & TX_FULL != 0 {
+                core::hint::spin_loop();
+            }
+            core::ptr::write_volatile(DATA, u32::from(byte));
+        }
+    }
+}
+
+#[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+fn hex8(value: u32) -> [u8; 8] {
+    let mut output = [0_u8; 8];
+    for (index, byte) in output.iter_mut().enumerate() {
+        let nibble = ((value >> ((7 - index) * 4)) & 0xf) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        };
+    }
+    output
 }
 
 pub(crate) fn record_internal_sleep() {
