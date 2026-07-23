@@ -18,6 +18,8 @@ use hisi_storage::MemoryMappedStorage;
 use portable_atomic::{AtomicBool, Ordering};
 
 static EFUSE_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "riscv32")]
+static TIMEBASE_READY: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn enable_efuse_reads() {
@@ -83,7 +85,22 @@ pub(crate) fn initialize_rom_timebases() -> u32 {
         uapi_systick_init();
         let result = uapi_tcxo_init();
         calibrate_systick_clock();
+        if result == 0 {
+            TIMEBASE_READY.store(true, Ordering::Release);
+        }
         result
+    }
+}
+
+#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+pub(crate) fn try_monotonic_ms() -> Option<u64> {
+    #[cfg(target_arch = "riscv32")]
+    {
+        TIMEBASE_READY.load(Ordering::Acquire).then(monotonic_ms)
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        Some(monotonic_ms())
     }
 }
 

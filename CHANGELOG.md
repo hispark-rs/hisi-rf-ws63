@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added secret-free blocking backend metrics for per-operation call counts,
+  available monotonic timing, internal sleeps, and native supplicant polls.
+  Calls made before the ROM timebase is initialized remain explicitly untimed.
+
 ## [0.1.0-alpha.14] - 2026-07-23
 
 ### Added

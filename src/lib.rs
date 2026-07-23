@@ -135,6 +135,8 @@ mod link_contract {
 }
 
 pub mod alloc;
+#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+mod blocking_diagnostics;
 mod compiler_rt;
 #[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
 mod crypto;
@@ -168,6 +170,20 @@ pub mod timer;
 pub mod uapi;
 #[cfg(feature = "upstream-supplicant-port")]
 mod upstream_supplicant;
+
+#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+#[doc(hidden)]
+pub use blocking_diagnostics::{BlockingBackendMetrics, BlockingOperationMetrics};
+
+/// Return a secret-free snapshot of the current blocking backend workload.
+///
+/// This migration diagnostic remains available while the validated blocking
+/// backend is compared with the opt-in incremental implementation.
+#[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
+#[doc(hidden)]
+pub fn blocking_backend_metrics() -> BlockingBackendMetrics {
+    blocking_diagnostics::snapshot()
+}
 
 /// Return the bounded upstream-supplicant bring-up snapshot.
 ///

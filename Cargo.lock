@@ -447,9 +447,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-core"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c035652ad070a651347be0c055dd70df27b004177fcb43d27d1afe82c93b0293"
+checksum = "82ee35baca9f82d04f274cf3b03947dc40aa9f3baea45419526021124a1c8b2d"
 dependencies = [
  "embassy-sync",
  "portable-atomic",

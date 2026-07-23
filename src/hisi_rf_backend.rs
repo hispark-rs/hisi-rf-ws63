@@ -99,6 +99,9 @@ impl<'d> Ws63WifiBackend<'d> {
 
 impl WifiBackend for Ws63WifiBackend<'static> {
     fn initialize(&mut self, _: &hisi_rf_core::WifiConfig) -> Result<(), BackendError> {
+        let _operation = crate::blocking_diagnostics::OperationTimer::start(
+            crate::blocking_diagnostics::Operation::Initialize,
+        );
         if self.wifi.is_some() {
             return Ok(());
         }
@@ -161,6 +164,9 @@ impl WifiBackend for Ws63WifiBackend<'static> {
         config: ScanConfig,
         output: &mut [ScanResult],
     ) -> Result<ScanOutcome, BackendError> {
+        let _operation = crate::blocking_diagnostics::OperationTimer::start(
+            crate::blocking_diagnostics::Operation::Scan,
+        );
         #[cfg(feature = "upstream-supplicant-port")]
         self.supplicant
             .as_mut()
@@ -242,6 +248,9 @@ impl WifiBackend for Ws63WifiBackend<'static> {
     }
 
     fn connect(&mut self, config: &StationConfig) -> Result<ConnectionInfo, BackendError> {
+        let _operation = crate::blocking_diagnostics::OperationTimer::start(
+            crate::blocking_diagnostics::Operation::Connect,
+        );
         #[cfg(feature = "upstream-supplicant-port")]
         {
             let supplicant = self.supplicant.as_mut().ok_or(not_initialized())?;
@@ -251,6 +260,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             let mut last_event_kind = 0_u8;
             let mut last_disconnect_status = None;
             loop {
+                crate::blocking_diagnostics::record_supplicant_poll();
                 supplicant
                     .poll(core::num::NonZeroU32::new(32).unwrap())
                     .map_err(map_native_error)?;
@@ -305,6 +315,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                         eapol[2],
                     ));
                 }
+                crate::blocking_diagnostics::record_internal_sleep();
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
                     |error| {
                         let code = runtime_code(error);
@@ -348,12 +359,16 @@ impl WifiBackend for Ws63WifiBackend<'static> {
     }
 
     fn disconnect(&mut self, config: &hisi_rf_core::WifiConfig) -> Result<(), BackendError> {
+        let _operation = crate::blocking_diagnostics::OperationTimer::start(
+            crate::blocking_diagnostics::Operation::Disconnect,
+        );
         #[cfg(feature = "upstream-supplicant-port")]
         {
             let supplicant = self.supplicant.as_mut().ok_or(not_initialized())?;
             supplicant.disconnect().map_err(map_native_error)?;
             let started_at = crate::uapi::monotonic_ms();
             loop {
+                crate::blocking_diagnostics::record_supplicant_poll();
                 supplicant
                     .poll(core::num::NonZeroU32::new(32).unwrap())
                     .map_err(map_native_error)?;
@@ -383,6 +398,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                         DiagnosticStage::Disconnect,
                     ));
                 }
+                crate::blocking_diagnostics::record_internal_sleep();
                 hisi_rf_rtos_driver::sleep_ms(core::num::NonZeroU32::new(1).unwrap()).map_err(
                     |error| {
                         let code = runtime_code(error);
@@ -407,11 +423,15 @@ impl WifiBackend for Ws63WifiBackend<'static> {
     }
 
     fn poll(&mut self) -> Result<bool, BackendError> {
+        let _operation = crate::blocking_diagnostics::OperationTimer::start(
+            crate::blocking_diagnostics::Operation::Poll,
+        );
         #[cfg(feature = "upstream-supplicant-port")]
         {
             let Some(supplicant) = self.supplicant.as_mut() else {
                 return Ok(false);
             };
+            crate::blocking_diagnostics::record_supplicant_poll();
             let result = supplicant
                 .poll(core::num::NonZeroU32::new(32).unwrap())
                 .map_err(map_native_error)?;
