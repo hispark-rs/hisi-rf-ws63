@@ -899,6 +899,7 @@ impl<'d> Wifi<'d> {
     }
 
     /// Start a station scan without waiting for the scan-done callback.
+    #[cfg(any(target_arch = "riscv32", feature = "incremental-backend-experiment"))]
     pub(crate) fn begin_scan(&mut self) -> Result<(), Error> {
         #[cfg(not(target_arch = "riscv32"))]
         {
@@ -950,6 +951,7 @@ impl<'d> Wifi<'d> {
     }
 
     /// Observe scan completion without sleeping or copying the result set.
+    #[cfg(any(target_arch = "riscv32", feature = "incremental-backend-experiment"))]
     pub(crate) fn poll_scan(&mut self) -> Result<Option<usize>, Error> {
         #[cfg(not(target_arch = "riscv32"))]
         {
@@ -974,6 +976,7 @@ impl<'d> Wifi<'d> {
     }
 
     /// Copy one retained result after [`Self::poll_scan`] reports completion.
+    #[cfg(any(target_arch = "riscv32", feature = "incremental-backend-experiment"))]
     pub(crate) fn scan_result(&self, index: usize) -> Option<ScanResult> {
         #[cfg(not(target_arch = "riscv32"))]
         {
@@ -997,6 +1000,7 @@ impl<'d> Wifi<'d> {
     }
 
     /// Stop observing the current scan and reject any late result callbacks.
+    #[cfg(any(target_arch = "riscv32", feature = "incremental-backend-experiment"))]
     pub(crate) fn cancel_scan(&mut self) {
         #[cfg(target_arch = "riscv32")]
         finish_scan();
