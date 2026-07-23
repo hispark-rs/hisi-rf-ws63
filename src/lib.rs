@@ -179,7 +179,10 @@ mod upstream_supplicant;
 
 #[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 #[doc(hidden)]
-pub use blocking_diagnostics::{BlockingBackendMetrics, BlockingOperationMetrics};
+pub use blocking_diagnostics::{
+    BlockingBackendMetrics, BlockingBootstrapMetrics, BlockingOperationMetrics, BootstrapStage,
+    BootstrapStageMetrics,
+};
 
 /// Return a secret-free snapshot of the current blocking backend workload.
 ///

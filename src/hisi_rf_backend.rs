@@ -118,6 +118,9 @@ impl WifiBackend for Ws63WifiBackend<'static> {
         if self.wifi.is_some() {
             return Ok(());
         }
+        let resources_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+            crate::blocking_diagnostics::BootstrapStage::ResourceClaim,
+        );
         let efuse = self
             .efuse
             .take()
@@ -142,8 +145,18 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             .crypto_storage
             .take()
             .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0008))?;
+        resources_stage.complete();
+
+        let crypto_install_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+            crate::blocking_diagnostics::BootstrapStage::CryptoInstall,
+        );
         crate::crypto::install_hardware_crypto(km, spacc, pke, trng, crypto_storage)
             .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+        crypto_install_stage.complete();
+
+        let crypto_self_test_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+            crate::blocking_diagnostics::BootstrapStage::CryptoSelfTest,
+        );
         #[cfg(target_arch = "riscv32")]
         crate::crypto::ws63_pbkdf2_self_test()
             .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
@@ -162,11 +175,17 @@ impl WifiBackend for Ws63WifiBackend<'static> {
         #[cfg(all(target_arch = "riscv32", feature = "rf-crypto-contention-diag"))]
         crate::crypto::ws63_crypto_contention_self_test()
             .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+        crypto_self_test_stage.complete();
+
         let wifi = ActiveWifi::initialize(efuse).map_err(map_error)?;
         #[cfg(feature = "upstream-supplicant-port")]
         {
+            let native_supplicant_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::NativeSupplicantCreate,
+            );
             self.supplicant =
                 Some(NativeSupplicant::create(wifi.interface_name()).map_err(map_native_error)?);
+            native_supplicant_stage.complete();
         }
         self.wifi = Some(wifi);
         Ok(())

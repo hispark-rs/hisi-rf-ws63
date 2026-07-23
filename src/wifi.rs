@@ -452,13 +452,26 @@ impl<'d> WpaWifi<'d> {
             {
                 return Err(Error::AlreadyInitialized);
             }
+            let memory_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::VendorMemoryPrepare,
+            );
             crate::force_link_contract();
             unsafe { crate::prepare_vendor_memory() };
+            memory_stage.complete();
+
+            let timebase_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::RomTimebaseInitialize,
+            );
             let timebase = crate::uapi::initialize_rom_timebases();
             if timebase != 0 {
                 return Err(Error::Timebase(timebase));
             }
             crate::uapi::enable_efuse_reads();
+            timebase_stage.complete();
+
+            let vendor_wifi_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::VendorWifiInitialize,
+            );
             // The vendor-oracle WPA profiles initialize their shared cipher
             // environment before either WPA2-PSK or SAE starts.
             unsafe { uapi_drv_cipher_env_init() };
@@ -476,12 +489,22 @@ impl<'d> WpaWifi<'d> {
             if init != 0 {
                 return Err(Error::Initialize(init));
             }
+            vendor_wifi_stage.complete();
+
+            let station_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::StationDeviceCreate,
+            );
             let mut ifname = [0; IFNAME_CAPACITY];
             let mut length = IFNAME_CAPACITY as c_int;
             let start = unsafe { uapi_wifi_sta_start(ifname.as_mut_ptr().cast(), &mut length) };
             if start != 0 || length <= 0 || length as usize >= IFNAME_CAPACITY {
                 return Err(Error::CreateStation(start));
             }
+            station_stage.complete();
+
+            let event_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::EventRegistration,
+            );
             let callback_mode = unsafe { uapi_wifi_config_callback(1, 10, 2048) };
             if callback_mode != 0 {
                 return Err(Error::RegisterEvents(callback_mode));
@@ -490,6 +513,7 @@ impl<'d> WpaWifi<'d> {
             if register != 0 {
                 return Err(Error::RegisterEvents(register));
             }
+            event_stage.complete();
             #[cfg(feature = "net")]
             crate::netif_smoltcp::set_tx_sink(crate::netif::vendor_tx_sink);
             Ok(Self {
@@ -796,23 +820,39 @@ impl<'d> Wifi<'d> {
                 return Err(Error::AlreadyInitialized);
             }
 
+            let memory_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::VendorMemoryPrepare,
+            );
             crate::force_link_contract();
             // SAFETY: the one-shot claim above guarantees this runs once,
             // before the vendor stack can access its dedicated RAM windows.
             unsafe { crate::prepare_vendor_memory() };
+            memory_stage.complete();
+
+            let timebase_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::RomTimebaseInitialize,
+            );
             let timebase = crate::uapi::initialize_rom_timebases();
             if timebase != 0 {
                 return Err(Error::Timebase(timebase));
             }
             crate::uapi::enable_efuse_reads();
+            timebase_stage.complete();
 
             // SAFETY: the RF build links the matching WS63 vendor archives and
             // ROM symbol table; the Rust OSAL contract has been installed.
+            let vendor_wifi_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::VendorWifiInitialize,
+            );
             let init = unsafe { uapi_wifi_init(2, 7) };
             if init != 0 {
                 return Err(Error::Initialize(init));
             }
+            vendor_wifi_stage.complete();
 
+            let station_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::StationDeviceCreate,
+            );
             let mut ifname = [0_u8; IFNAME_CAPACITY];
             let mut length = (IFNAME_CAPACITY - 1) as u32;
             // SAFETY: `ifname` is writable for `length + 1` bytes and remains
@@ -831,27 +871,42 @@ impl<'d> Wifi<'d> {
             if length == 0 || length as usize >= IFNAME_CAPACITY || ifname[length as usize] != 0 {
                 return Err(Error::CreateStation(-1));
             }
+            station_stage.complete();
 
+            let event_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::EventRegistration,
+            );
             // SAFETY: the callback has the exact vendor C ABI and remains
             // installed for the process lifetime. It never calls user code.
             let register = unsafe { drv_soc_register_send_event_cb(Some(scan_event)) };
             if register != 0 {
                 return Err(Error::RegisterEvents(register));
             }
+            event_stage.complete();
 
             // This mirrors the only control-plane step from the vendor
             // `drv_soc_wpa_init` needed before scan. WPA/eloop/EAPOL stay out
             // of this scan-only adapter.
+            let station_open_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                crate::blocking_diagnostics::BootstrapStage::StationDeviceOpen,
+            );
             let mut enabled = 1_u8;
             let open =
                 crate::wal::ioctl(&ifname, IOCTL_SET_NETDEV, (&mut enabled as *mut u8).cast());
             if open != 0 {
                 return Err(Error::OpenStation(open));
             }
+            station_open_stage.complete();
 
             #[cfg(feature = "upstream-supplicant-port")]
-            crate::prepare_upstream_supplicant_port(&ifname[..length as usize])
-                .map_err(Error::SupplicantPort)?;
+            {
+                let supplicant_port_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
+                    crate::blocking_diagnostics::BootstrapStage::SupplicantPortPrepare,
+                );
+                crate::prepare_upstream_supplicant_port(&ifname[..length as usize])
+                    .map_err(Error::SupplicantPort)?;
+                supplicant_port_stage.complete();
+            }
 
             #[cfg(feature = "net")]
             crate::netif_smoltcp::set_tx_sink(crate::netif::vendor_tx_sink);

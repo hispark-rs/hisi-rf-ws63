@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added secret-free, stage-level bootstrap diagnostics for resource claim,
+  hardware crypto installation and self-tests, vendor memory/timebase/Wi-Fi
+  initialization, station/event setup, and native supplicant construction.
+  Each stable stage identifier records entered, completed, failed and timed
+  counters plus maximum duration, without claiming that the enclosed vendor
+  call is preemptible.
+
 ## [0.1.0-alpha.18] - 2026-07-23
 
 ### Added
