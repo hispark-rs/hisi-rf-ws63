@@ -5,13 +5,14 @@ use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioConfig, RadioResources, WifiBackend, WifiParts,
+    RadioConfig, WifiParts,
 };
 
 #[cfg(feature = "incremental-backend-experiment")]
 use hisi_rf_core::{
     IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalWaitError,
-    IncrementalWaitIntent, IncrementalWaitPlatform, WaitSet, WorkBudget,
+    IncrementalWaitIntent, IncrementalWaitPlatform, RadioResources, WaitSet, WifiBackend,
+    WorkBudget,
 };
 
 #[cfg(feature = "incremental-backend-experiment")]
