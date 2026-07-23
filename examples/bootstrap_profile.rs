@@ -14,6 +14,7 @@ use hisi_hal::delay::Delay;
 use hisi_hal::interrupt;
 use hisi_hal::rf_power::RfPower;
 use hisi_hal::software_interrupt::SoftwareInterrupt0;
+use hisi_hal::time::Instant;
 use hisi_hal::timer::TimerAlarm0;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
@@ -52,7 +53,7 @@ fn main() -> ! {
         hisi_rtos::Resources {
             allocate: rtos_allocate,
             deallocate: rtos_deallocate,
-            monotonic_ms: hisi_rf_ws63::uapi::monotonic_ms,
+            monotonic_ms,
         },
         hisi_rtos::SchedulerPort {
             max_timer_delay: NonZeroU32::new(TimerAlarm0::MAX_DELAY_MS)
@@ -136,6 +137,12 @@ unsafe fn rtos_allocate(size: usize) -> *mut u8 {
 
 unsafe fn rtos_deallocate(pointer: *mut u8) {
     hisi_rf_ws63::alloc::osal_kfree(pointer.cast());
+}
+
+fn monotonic_ms() -> u64 {
+    // The RF ROM timebase is initialized by a later measured bootstrap stage.
+    // TIMER0 needs a clock before that stage, so use the always-on 24 MHz TCXO.
+    Instant::now().raw() / 24_000
 }
 
 fn rtos_contract_violation(_violation: hisi_rtos::ContractViolation) -> ! {
