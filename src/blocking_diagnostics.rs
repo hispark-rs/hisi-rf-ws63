@@ -357,6 +357,15 @@ fn trace_bootstrap_stage(stage: BootstrapStage, event: &[u8], elapsed_ms: Option
 }
 
 #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+pub(crate) fn trace_bootstrap_detail(name: &[u8], event: &[u8]) {
+    write_bootstrap_trace(b"RFDBG_BOOT_DETAIL name=");
+    write_bootstrap_trace(name);
+    write_bootstrap_trace(b" event=");
+    write_bootstrap_trace(event);
+    write_bootstrap_trace(b"\r\n");
+}
+
+#[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
 fn write_bootstrap_trace(bytes: &[u8]) {
     const DATA: *mut u32 = 0x4401_0004 as *mut u32;
     const FIFO_STATUS: *const u32 = 0x4401_0044 as *const u32;

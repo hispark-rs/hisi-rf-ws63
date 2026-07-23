@@ -158,11 +158,23 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             crate::blocking_diagnostics::BootstrapStage::CryptoSelfTest,
         );
         #[cfg(target_arch = "riscv32")]
-        crate::crypto::ws63_pbkdf2_self_test()
-            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+        {
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"pbkdf2", b"begin");
+            crate::crypto::ws63_pbkdf2_self_test()
+                .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"pbkdf2", b"completed");
+        }
         #[cfg(target_arch = "riscv32")]
-        crate::crypto::ws63_hash_self_test()
-            .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+        {
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"sha_hmac", b"begin");
+            crate::crypto::ws63_hash_self_test()
+                .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"sha_hmac", b"completed");
+        }
         #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
         crate::crypto::ws63_p256_self_test()
             .map_err(|error| backend_error(BackendErrorClass::Initialize, error.code()))?;
