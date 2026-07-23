@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the non-default `incremental-backend-experiment` connect/disconnect
+  slice over the pinned upstream supplicant. It enforces generation-tagged
+  operation identity, exact event accounting, elapsed-time budgets, bounded
+  event draining, explicit cancellation, and deterministic host tests.
+- Initialization and scan deliberately fail closed in the experimental adapter
+  until their vendor calls are split into genuinely bounded steps; the current
+  validated blocking backend remains the default.
+
+### Changed
+
+- Updated to `ws63-radio-sys 0.1.0-alpha.7` and its v9 poll ABI, separating
+  completed work from output-event readiness.
+
 ## [0.1.0-alpha.15] - 2026-07-23
 
 ### Added

@@ -7,6 +7,13 @@ use hisi_rf_core::{
     ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig, WifiBackend,
 };
 
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port"
+))]
+#[allow(dead_code)]
+mod incremental;
+
 fn backend_error(class: BackendErrorClass, code: u32) -> BackendError {
     BackendError::new(class, code).with_profile_revision(crate::profile::PROFILE_REVISION)
 }
@@ -435,7 +442,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             let result = supplicant
                 .poll(core::num::NonZeroU32::new(32).unwrap())
                 .map_err(map_native_error)?;
-            Ok(result.work_pending != 0)
+            Ok(result.work_completed != 0 || result.output_pending != 0)
         }
         #[cfg(not(feature = "upstream-supplicant-port"))]
         {

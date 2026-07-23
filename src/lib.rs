@@ -80,6 +80,12 @@
 #![feature(c_variadic)]
 #![allow(non_upper_case_globals)] // contract symbols must match the C names exactly
 
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    not(feature = "upstream-supplicant-port")
+))]
+compile_error!("incremental-backend-experiment requires the upstream supplicant profile");
+
 #[cfg(all(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 compile_error!("select either a vendor supplicant profile or an upstream supplicant profile");
 
