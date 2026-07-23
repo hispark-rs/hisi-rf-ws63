@@ -238,6 +238,30 @@ fn with_hardware_crypto<T>(
     with_crypto_service(|service| operation(&service.backend))
 }
 
+#[cfg(any(target_arch = "riscv32", test))]
+fn elapsed_millis(started: Option<u64>, finished: Option<u64>) -> Option<u32> {
+    let elapsed = finished?.wrapping_sub(started?);
+    Some(u32::try_from(elapsed).unwrap_or(u32::MAX))
+}
+
+#[cfg(target_arch = "riscv32")]
+fn crypto_timing_start() -> Option<u64> {
+    crate::uapi::try_monotonic_ms()
+}
+
+#[cfg(target_arch = "riscv32")]
+fn crypto_timing_elapsed(started: Option<u64>) -> Option<u32> {
+    elapsed_millis(started, crate::uapi::try_monotonic_ms())
+}
+
+#[cfg(target_arch = "riscv32")]
+fn record_crypto_timing(started: Option<u64>, total: &AtomicU32, maximum: &AtomicU32) {
+    if let Some(elapsed) = crypto_timing_elapsed(started) {
+        total.fetch_add(elapsed, Ordering::Relaxed);
+        maximum.fetch_max(elapsed, Ordering::Relaxed);
+    }
+}
+
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
 pub(super) fn p256_point_mul_hardware(
     point: &P256AffinePoint,
@@ -245,17 +269,14 @@ pub(super) fn p256_point_mul_hardware(
     output: &mut P256AffinePoint,
 ) -> Result<(), CryptoError> {
     P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
             .session(&service.backend)
             .point_mul(point, scalar, output)
     });
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    P256_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    P256_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
     if result.is_err() {
         P256_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
@@ -270,19 +291,19 @@ pub(super) fn p256_point_add_hardware(
 ) -> Result<(), CryptoError> {
     P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_ADD_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
             .session(&service.backend)
             .point_add(a, b, output)
     });
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    P256_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    P256_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
-    P256_ADD_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    P256_ADD_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    if let Some(elapsed) = crypto_timing_elapsed(started) {
+        P256_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
+        P256_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+        P256_ADD_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
+        P256_ADD_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    }
     if result.is_err() {
         P256_FAILURES.fetch_add(1, Ordering::Relaxed);
         P256_ADD_FAILURES.fetch_add(1, Ordering::Relaxed);
@@ -299,14 +320,11 @@ enum P256FieldOperation {
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
 fn record_p256_field_result(
-    started: u64,
+    started: Option<u64>,
     operation: P256FieldOperation,
     result: &Result<(), CryptoError>,
 ) {
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    P256_FIELD_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    P256_FIELD_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &P256_FIELD_TOTAL_MS, &P256_FIELD_MAX_MS);
     if result.is_err() {
         P256_FIELD_FAILURES.fetch_add(1, Ordering::Relaxed);
         match operation {
@@ -331,7 +349,7 @@ pub(super) fn p256_field_mul_hardware(
 ) -> Result<(), CryptoError> {
     P256_FIELD_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_FIELD_MUL_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -349,7 +367,7 @@ pub(super) fn p256_field_square_hardware(
 ) -> Result<(), CryptoError> {
     P256_FIELD_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_FIELD_SQUARE_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -368,7 +386,7 @@ pub(super) fn p256_field_pow_hardware(
 ) -> Result<(), CryptoError> {
     P256_FIELD_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_FIELD_POW_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -387,11 +405,8 @@ enum P256CurveOperation {
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
-fn record_p256_curve_result(started: u64, operation: P256CurveOperation, failed: bool) {
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    P256_CURVE_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    P256_CURVE_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+fn record_p256_curve_result(started: Option<u64>, operation: P256CurveOperation, failed: bool) {
+    record_crypto_timing(started, &P256_CURVE_TOTAL_MS, &P256_CURVE_MAX_MS);
     if failed {
         P256_CURVE_FAILURES.fetch_add(1, Ordering::Relaxed);
         match operation {
@@ -415,7 +430,7 @@ pub(super) fn p256_compute_y_squared_hardware(
 ) -> Result<(), CryptoError> {
     P256_CURVE_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_CURVE_Y2_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -430,7 +445,7 @@ pub(super) fn p256_compute_y_squared_hardware(
 pub(super) fn p256_point_validate_hardware(point: &P256AffinePoint) -> Result<bool, CryptoError> {
     P256_CURVE_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_CURVE_VALIDATE_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -448,7 +463,7 @@ pub(super) fn p256_point_invert_hardware(
 ) -> Result<(), CryptoError> {
     P256_CURVE_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_CURVE_INVERT_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_crypto_service(|service| {
         service
             .p256
@@ -484,13 +499,10 @@ pub(crate) fn derive_hardware_pbkdf2(
     output: &mut [u8; 32],
 ) -> Result<(), CryptoError> {
     PBKDF2_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result =
         with_hardware_crypto(|backend| backend.derive_32(password, salt, iterations, output));
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    PBKDF2_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    PBKDF2_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &PBKDF2_TOTAL_MS, &PBKDF2_MAX_MS);
     if result.is_err() {
         PBKDF2_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
@@ -503,12 +515,9 @@ where
     Ws63Crypto<'static>: TryHash<N>,
 {
     HASH_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_hardware_crypto(|backend| TryHash::<N>::hash(backend, parts, output));
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    HASH_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    HASH_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &HASH_TOTAL_MS, &HASH_MAX_MS);
     if result.is_err() {
         HASH_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
@@ -525,12 +534,9 @@ where
     Ws63Crypto<'static>: TryMac<N>,
 {
     MAC_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_hardware_crypto(|backend| TryMac::<N>::mac(backend, key, parts, output));
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    MAC_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    MAC_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &MAC_TOTAL_MS, &MAC_MAX_MS);
     if result.is_err() {
         MAC_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
@@ -545,7 +551,7 @@ fn cipher_hardware(
     decrypt: bool,
 ) -> Result<(), CryptoError> {
     CIPHER_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let started = crate::uapi::monotonic_ms();
+    let started = crypto_timing_start();
     let result = with_hardware_crypto(|backend| {
         if decrypt {
             backend.decrypt_block(key, input, output)
@@ -553,10 +559,7 @@ fn cipher_hardware(
             backend.encrypt_block(key, input, output)
         }
     });
-    let elapsed =
-        u32::try_from(crate::uapi::monotonic_ms().wrapping_sub(started)).unwrap_or(u32::MAX);
-    CIPHER_TOTAL_MS.fetch_add(elapsed, Ordering::Relaxed);
-    CIPHER_MAX_MS.fetch_max(elapsed, Ordering::Relaxed);
+    record_crypto_timing(started, &CIPHER_TOTAL_MS, &CIPHER_MAX_MS);
     if result.is_err() {
         CIPHER_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
@@ -1527,6 +1530,24 @@ extern "C" fn crypto_get_random(output: *mut core::ffi::c_void, length: usize) -
 unsafe extern "C" {
     fn os_zalloc(size: usize) -> *mut core::ffi::c_void;
     fn os_free(pointer: *mut core::ffi::c_void);
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::elapsed_millis;
+
+    #[test]
+    fn optional_timing_requires_both_samples() {
+        assert_eq!(elapsed_millis(None, Some(9)), None);
+        assert_eq!(elapsed_millis(Some(7), None), None);
+        assert_eq!(elapsed_millis(Some(7), Some(9)), Some(2));
+    }
+
+    #[test]
+    fn optional_timing_preserves_wrapping_clock_semantics() {
+        assert_eq!(elapsed_millis(Some(u64::MAX - 1), Some(1)), Some(3));
+        assert_eq!(elapsed_millis(Some(0), Some(u64::MAX)), Some(u32::MAX));
+    }
 }
 
 #[cfg(all(test, feature = "wifi-security-rustcrypto"))]
