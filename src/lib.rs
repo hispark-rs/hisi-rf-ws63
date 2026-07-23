@@ -361,6 +361,15 @@ mod composition;
 mod profile;
 #[cfg(all(
     feature = "net",
+    feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port"
+))]
+pub use composition::{
+    IncrementalRadioController, IncrementalRadioParts, IncrementalRadioRunner,
+    init_incremental_after_blocking_bootstrap,
+};
+#[cfg(all(
+    feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{InitError, RadioController, Resources, init, station_mac_address};

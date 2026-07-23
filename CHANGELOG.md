@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.18] - 2026-07-23
+
+### Added
+
+- Added an opt-in owned incremental composition path. Its explicit
+  `init_incremental_after_blocking_bootstrap` entry completes the existing
+  non-sliceable vendor bootstrap before transferring Wi-Fi and supplicant
+  ownership to a bounded runner.
+- Added an opaque WS63 incremental controller/runner facade, including typed
+  wait intent, deadline, platform wait, and one-budgeted-step operations.
+
+### Changed
+
+- The incremental `Initialize` command now acknowledges the already completed
+  bootstrap in one bounded step, including deterministic cancellation, rather
+  than pretending to execute vendor initialization incrementally.
+- The default blocking `init` and `RadioRunner` path remain unchanged.
+
 ## [0.1.0-alpha.17] - 2026-07-23
 
 ### Added

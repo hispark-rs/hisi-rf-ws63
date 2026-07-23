@@ -1,12 +1,21 @@
 use core::ffi::c_void;
 use core::fmt;
 use core::num::NonZeroUsize;
+use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioConfig, WifiParts,
+    RadioConfig, RadioResources, WifiBackend, WifiParts,
 };
 
+#[cfg(feature = "incremental-backend-experiment")]
+use hisi_rf_core::{
+    IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalWaitError,
+    IncrementalWaitIntent, IncrementalWaitPlatform, WaitSet, WorkBudget,
+};
+
+#[cfg(feature = "incremental-backend-experiment")]
+use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 use crate::netif_smoltcp::Ws63Device;
 use crate::profile::{ActiveProfile, Profile, Storage};
@@ -76,10 +85,83 @@ const RADIO_RUNNER_PRIORITY: u8 = 10;
 type CoreRadioController<const EVENTS: usize> =
     hisi_rf_core::RadioController<Ws63WifiBackend<'static>, Ws63Device, EVENTS>;
 
+#[cfg(feature = "incremental-backend-experiment")]
+type CoreIncrementalRadioController<const EVENTS: usize> =
+    hisi_rf_core::RadioController<OwnedIncrementalSupplicantBackend, Ws63Device, EVENTS>;
+
 /// WS63 controller bound to the caller-owned storage that will hold its runner.
 pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
     inner: CoreRadioController<EVENTS>,
     storage: &'static Storage<P, EVENTS>,
+}
+
+/// WS63 controller whose vendor bootstrap has completed before construction.
+///
+/// This type is available only through the non-default A5B experiment. Its
+/// scan/connect/disconnect work is bounded, but construction remains a
+/// synchronous prerequisite until the vendor initialization boundary itself
+/// can be split or assigned a measured worst-case latency.
+#[cfg(feature = "incremental-backend-experiment")]
+pub struct IncrementalRadioController<P: Profile + 'static, const EVENTS: usize> {
+    inner: CoreIncrementalRadioController<EVENTS>,
+    _profile: core::marker::PhantomData<P>,
+}
+
+/// Wi-Fi handles and the explicit A5B bounded runner.
+#[cfg(feature = "incremental-backend-experiment")]
+pub struct IncrementalRadioParts<const EVENTS: usize> {
+    /// Existing async Wi-Fi controller and WS63 L2 device.
+    pub wifi: WifiParts<Ws63Device, EVENTS>,
+    /// Runner that advances at most one budgeted backend action per call.
+    pub runner: IncrementalRadioRunner<EVENTS>,
+}
+
+/// Opaque WS63 runner over the owned initialized backend.
+#[cfg(feature = "incremental-backend-experiment")]
+pub struct IncrementalRadioRunner<const EVENTS: usize> {
+    inner: hisi_rf_core::IncrementalRadioRunner<OwnedIncrementalSupplicantBackend, EVENTS>,
+}
+
+#[cfg(feature = "incremental-backend-experiment")]
+impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EVENTS> {
+    /// Split into the stable Wi-Fi handles and an opt-in bounded runner.
+    pub fn split(self, budget: WorkBudget) -> IncrementalRadioParts<EVENTS> {
+        let hisi_rf_core::IncrementalRadioParts { wifi, runner } =
+            self.inner.split_incremental(budget);
+        IncrementalRadioParts {
+            wifi,
+            runner: IncrementalRadioRunner { inner: runner },
+        }
+    }
+}
+
+#[cfg(feature = "incremental-backend-experiment")]
+impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
+    /// Advance at most one bounded driver action.
+    pub fn run_once(
+        &mut self,
+        ready: WaitSet,
+    ) -> Result<IncrementalDriverEvent, IncrementalRadioRunnerError> {
+        self.inner.run_once(ready)
+    }
+
+    /// Snapshot immediate work, wake subscriptions, and the next deadline.
+    pub fn wait_intent(&self) -> IncrementalWaitIntent {
+        self.inner.wait_intent()
+    }
+
+    /// Wait for one subscribed source without consuming a control command.
+    pub async fn wait_ready<P: IncrementalWaitPlatform>(
+        &self,
+        platform: &mut P,
+    ) -> Result<WaitSet, IncrementalWaitError<P::Error>> {
+        self.inner.wait_ready(platform).await
+    }
+
+    /// Monotonic deadline requested by the active operation.
+    pub fn next_deadline_us(&self) -> Option<u64> {
+        self.inner.next_deadline_us()
+    }
 }
 
 impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
@@ -112,6 +194,87 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     resources: Resources,
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<RadioController<P, EVENTS>, InitError> {
+    let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
+    let inner = crate::hisi_rf_backend::resources(
+        resources.efuse,
+        resources.km,
+        resources.spacc,
+        resources.pke,
+        resources.trng,
+        crypto_storage,
+    );
+    match hisi_rf_core::init(config, inner, state) {
+        Ok(controller) => Ok(RadioController {
+            inner: controller,
+            storage,
+        }),
+        Err(error) => {
+            release_profile_reservation(reservation)?;
+            Err(InitError::Core(error))
+        }
+    }
+}
+
+/// Complete the existing blocking vendor bootstrap, then transfer ownership to
+/// the non-default bounded A5B runner.
+///
+/// This function is intentionally named after its blocking prerequisite. It
+/// does not claim that vendor initialization is incremental; only operations
+/// after the returned controller is split use [`WorkBudget`]. A bootstrap
+/// failure consumes the one-shot storage and resources because vendor tasks
+/// may already own the installed task reservation; retry with fresh firmware
+/// state rather than reusing this storage.
+#[cfg(feature = "incremental-backend-experiment")]
+pub fn init_incremental_after_blocking_bootstrap<
+    P: Profile + ActiveProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: RadioConfig,
+    resources: Resources,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
+    let (state, crypto_storage, _reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
+    let RadioResources {
+        mut backend,
+        device,
+    } = crate::hisi_rf_backend::resources(
+        resources.efuse,
+        resources.km,
+        resources.spacc,
+        resources.pke,
+        resources.trng,
+        crypto_storage,
+    );
+    if let Err(error) = backend.initialize(&config.wifi) {
+        // The vendor bootstrap may already have spawned tasks through this
+        // reservation. It is installed in the process-wide compatibility
+        // adapter and cannot be safely detached or reused after a partial
+        // failure, so this one-shot storage remains claimed.
+        return Err(InitError::Core(Error::Backend(error)));
+    }
+    let backend = match backend.into_incremental() {
+        Ok(backend) => backend,
+        Err(error) => return Err(InitError::Core(Error::Backend(error))),
+    };
+    match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
+        Ok(controller) => Ok(IncrementalRadioController {
+            inner: controller,
+            _profile: core::marker::PhantomData,
+        }),
+        Err(error) => Err(InitError::Core(error)),
+    }
+}
+
+fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<
+    (
+        &'static hisi_rf_core::RadioState<EVENTS>,
+        &'static mut Ws63CryptoStorage,
+        &'static hisi_rf_rtos_driver::TaskReservation,
+    ),
+    InitError,
+> {
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
     hisi_rf_rtos_driver::require_runtime(
@@ -136,25 +299,13 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
         hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::Runtime)?;
         return Err(InitError::Runtime(error));
     }
-    let inner = crate::hisi_rf_backend::resources(
-        resources.efuse,
-        resources.km,
-        resources.spacc,
-        resources.pke,
-        resources.trng,
-        crypto_storage,
-    );
-    match hisi_rf_core::init(config, inner, state) {
-        Ok(controller) => Ok(RadioController {
-            inner: controller,
-            storage,
-        }),
-        Err(error) => {
-            hisi_rf_rtos_driver::release_task_reservation(reservation)
-                .map_err(InitError::Runtime)?;
-            Err(InitError::Core(error))
-        }
-    }
+    Ok((state, crypto_storage, reservation))
+}
+
+fn release_profile_reservation(
+    reservation: &'static hisi_rf_rtos_driver::TaskReservation,
+) -> Result<(), InitError> {
+    hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::Runtime)
 }
 
 /// Return the station MAC address installed by the initialized WS63 netif.

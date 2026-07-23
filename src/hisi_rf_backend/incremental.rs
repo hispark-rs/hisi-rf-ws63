@@ -1,8 +1,10 @@
 //! Non-default A5B scan/connect/disconnect slice for the upstream supplicant.
 //!
-//! Initialization still enters blocking vendor calls, so this module
-//! deliberately borrows an already initialized backend and rejects initialize.
-//! It is not wired into the default [`hisi_rf_core::RadioRunner`].
+//! Initialization still enters blocking vendor calls. This module therefore
+//! accepts only a backend that has completed that explicit prerequisite; the
+//! incremental `Initialize` command acknowledges the established state and
+//! never re-enters vendor initialization. It is not wired into the default
+//! [`hisi_rf_core::RadioRunner`].
 
 use core::num::NonZeroU32;
 
@@ -15,18 +17,18 @@ use hisi_rf_core::{
 use ws63_radio_sys::supplicant::{Event, PollResult};
 
 use super::{
-    ActiveWifi, NativeConnectEvent, Ws63ScanResult, Ws63WifiBackend, channel_to_frequency,
+    NativeConnectEvent, Ws63ScanResult, Ws63WifiBackend, channel_to_frequency,
     classify_native_connect_event, map_error, map_native_error, not_initialized, staged_error,
 };
 use crate::upstream_supplicant::NativeSupplicant;
 
-const ERROR_UNSUPPORTED_REQUEST: u32 = 0x5732_b001;
 const ERROR_STALE_OPERATION: u32 = 0x5732_b002;
 const ERROR_WORK_BUDGET: u32 = 0x5732_b003;
 const ERROR_OPERATION_TIMEOUT: u32 = 0x5732_b004;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperationKind {
+    Initialize,
     Scan,
     Connect(ConnectionInfo),
     Disconnect,
@@ -57,6 +59,10 @@ struct ActiveOperation {
 }
 
 impl ActiveOperation {
+    fn initialize(id: OperationId, now_us: u64) -> Self {
+        Self::new(id, OperationKind::Initialize, 0, now_us)
+    }
+
     fn connect(id: OperationId, info: ConnectionInfo, timeout_ms: u32, now_us: u64) -> Self {
         Self::new(id, OperationKind::Connect(info), timeout_ms, now_us)
     }
@@ -102,6 +108,7 @@ impl ActiveOperation {
     fn observe(&mut self, kind: u8, status: i32) -> OperationOutcome {
         self.last_event_kind = kind;
         match self.kind {
+            OperationKind::Initialize => OperationOutcome::Continue,
             OperationKind::Scan => OperationOutcome::Continue,
             OperationKind::Connect(info) => match classify_native_connect_event(kind) {
                 NativeConnectEvent::Progress => OperationOutcome::Continue,
@@ -193,58 +200,88 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
     }
 }
 
-pub(crate) struct Ws63OperationPort<'a> {
-    wifi: &'a mut ActiveWifi<'static>,
-    supplicant: &'a mut NativeSupplicant,
-}
-
-impl SupplicantPort for Ws63OperationPort<'_> {
+impl SupplicantPort for Ws63WifiBackend<'static> {
     fn start_scan(&mut self) -> Result<(), BackendError> {
-        self.supplicant
+        let supplicant = self.supplicant.as_mut().ok_or_else(not_initialized)?;
+        supplicant
             .begin_scan_cache_capture()
             .map_err(map_native_error)?;
-        if let Err(error) = self.wifi.begin_scan() {
-            self.supplicant.cancel_scan_cache_capture();
+        let wifi = self.wifi.as_mut().ok_or_else(not_initialized)?;
+        if let Err(error) = wifi.begin_scan() {
+            supplicant.cancel_scan_cache_capture();
             return Err(map_error(error));
         }
         Ok(())
     }
 
     fn poll_scan(&mut self) -> Result<Option<usize>, BackendError> {
-        self.wifi.poll_scan().map_err(map_error)
+        self.wifi
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .poll_scan()
+            .map_err(map_error)
     }
 
     fn scan_result(&self, index: usize) -> Option<ScanResult> {
-        self.wifi.scan_result(index).and_then(convert_scan_result)
+        self.wifi
+            .as_ref()?
+            .scan_result(index)
+            .and_then(convert_scan_result)
     }
 
     fn scan_cache_pending(&self) -> bool {
-        self.supplicant.scan_cache_capture_pending()
+        self.supplicant
+            .as_ref()
+            .is_some_and(NativeSupplicant::scan_cache_capture_pending)
     }
 
     fn cancel_scan(&mut self) {
-        self.wifi.cancel_scan();
-        self.supplicant.cancel_scan_cache_capture();
+        if let Some(wifi) = self.wifi.as_mut() {
+            wifi.cancel_scan();
+        }
+        if let Some(supplicant) = self.supplicant.as_mut() {
+            supplicant.cancel_scan_cache_capture();
+        }
     }
 
     fn configure(&mut self, config: &StationConfig) -> Result<(), BackendError> {
-        self.supplicant.configure(config).map_err(map_native_error)
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .configure(config)
+            .map_err(map_native_error)
     }
 
     fn connect(&mut self) -> Result<(), BackendError> {
-        self.supplicant.connect().map_err(map_native_error)
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .connect()
+            .map_err(map_native_error)
     }
 
     fn disconnect(&mut self) -> Result<(), BackendError> {
-        self.supplicant.disconnect().map_err(map_native_error)
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .disconnect()
+            .map_err(map_native_error)
     }
 
     fn poll(&mut self, budget: NonZeroU32) -> Result<PollResult, BackendError> {
-        self.supplicant.poll(budget).map_err(map_native_error)
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .poll(budget)
+            .map_err(map_native_error)
     }
 
     fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
-        self.supplicant.next_event().map_err(map_native_error)
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .next_event()
+            .map_err(map_native_error)
     }
 }
 
@@ -301,13 +338,54 @@ impl Ws63WifiBackend<'static> {
     /// Borrow the bounded supplicant slice after blocking initialization.
     pub(crate) fn incremental_supplicant(
         &mut self,
-    ) -> Result<IncrementalSupplicantBackend<Ws63OperationPort<'_>, Ws63Clock>, BackendError> {
-        let wifi = self.wifi.as_mut().ok_or_else(not_initialized)?;
-        let supplicant = self.supplicant.as_mut().ok_or_else(not_initialized)?;
-        Ok(IncrementalSupplicantBackend::new(
-            Ws63OperationPort { wifi, supplicant },
-            Ws63Clock,
-        ))
+    ) -> Result<IncrementalSupplicantBackend<&mut Self, Ws63Clock>, BackendError> {
+        self.ensure_incremental_ready()?;
+        Ok(IncrementalSupplicantBackend::new(self, Ws63Clock))
+    }
+
+    fn ensure_incremental_ready(&self) -> Result<(), BackendError> {
+        if self.wifi.is_none() || self.supplicant.is_none() {
+            return Err(not_initialized());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_incremental(
+        self,
+    ) -> Result<OwnedIncrementalSupplicantBackend, BackendError> {
+        self.ensure_incremental_ready()?;
+        Ok(OwnedIncrementalSupplicantBackend {
+            inner: IncrementalSupplicantBackend::new(self, Ws63Clock),
+        })
+    }
+}
+
+/// Owned bounded backend created only after the explicit blocking bootstrap.
+pub(crate) struct OwnedIncrementalSupplicantBackend {
+    inner: IncrementalSupplicantBackend<Ws63WifiBackend<'static>, Ws63Clock>,
+}
+
+impl IncrementalWifiBackend for OwnedIncrementalSupplicantBackend {
+    fn start(&mut self, id: OperationId, request: IncrementalRequest) -> Result<(), BackendError> {
+        self.inner.start(id, request)
+    }
+
+    fn poll(
+        &mut self,
+        id: OperationId,
+        reason: WakeReason,
+        budget: WorkBudget,
+        scan_output: &mut [ScanResult],
+    ) -> Result<WorkReport, BackendError> {
+        self.inner.poll(id, reason, budget, scan_output)
+    }
+
+    fn cancel(&mut self, id: OperationId) -> Result<(), BackendError> {
+        self.inner.cancel(id)
+    }
+
+    fn next_deadline_us(&self, id: OperationId) -> Option<u64> {
+        self.inner.next_deadline_us(id)
     }
 }
 
@@ -341,13 +419,7 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
                 self.port.disconnect()?;
                 ActiveOperation::disconnect(id, config.disconnect_timeout_ms, now_us)
             }
-            IncrementalRequest::Initialize(_) => {
-                return Err(staged_error(
-                    BackendErrorClass::Other,
-                    ERROR_UNSUPPORTED_REQUEST,
-                    DiagnosticStage::Operation,
-                ));
-            }
+            IncrementalRequest::Initialize(_) => ActiveOperation::initialize(id, now_us),
         };
         self.active = Some(active);
         Ok(())
@@ -361,6 +433,27 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
         scan_output: &mut [ScanResult],
     ) -> Result<WorkReport, BackendError> {
         let started_us = self.clock.now_us();
+        let initialized = {
+            let active = self.active_mut(id)?;
+            matches!(active.kind, OperationKind::Initialize)
+                .then_some(active.cancellation_requested)
+        };
+        if let Some(cancelled) = initialized {
+            self.active = None;
+            return WorkReport::try_new(
+                id,
+                budget,
+                0,
+                0,
+                true,
+                if cancelled {
+                    PollDisposition::Cancelled
+                } else {
+                    PollDisposition::Complete(IncrementalCompletion::Initialized)
+                },
+            )
+            .ok_or_else(|| operation_error(ERROR_WORK_BUDGET));
+        }
         let timeout = {
             let active = self.active_mut(id)?;
             if started_us >= active.deadline_us {
@@ -603,6 +696,7 @@ fn timeout_error(active: &ActiveOperation) -> BackendError {
         BackendErrorClass::Timeout,
         ERROR_OPERATION_TIMEOUT | u32::from(active.last_event_kind),
         match active.kind {
+            OperationKind::Initialize => DiagnosticStage::Initialize,
             OperationKind::Scan => DiagnosticStage::Scan,
             OperationKind::Connect(_) => DiagnosticStage::Connect,
             OperationKind::Disconnect => DiagnosticStage::Disconnect,
@@ -990,14 +1084,47 @@ mod tests {
     }
 
     #[test]
-    fn initialize_remains_fail_closed() {
+    fn initialize_acknowledges_the_explicit_bootstrap() {
         let id = operation_id();
         let mut port = FakePort::new(poll_result(0, false), [None, None]);
         let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
-        let error = backend
+        backend
             .start(id, IncrementalRequest::Initialize(WifiConfig::default()))
-            .unwrap_err();
-        assert_eq!(error.class(), BackendErrorClass::Other);
-        assert_eq!(error.code(), ERROR_UNSUPPORTED_REQUEST);
+            .unwrap();
+        let report = backend
+            .poll(
+                id,
+                WakeReason::Command,
+                WorkBudget::try_new(1, 1).unwrap(),
+                &mut [],
+            )
+            .unwrap();
+        assert_eq!(report.consumed_events(), 0);
+        assert_eq!(report.elapsed_us(), 0);
+        assert!(report.made_progress());
+        assert_eq!(
+            report.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Initialized)
+        );
+    }
+
+    #[test]
+    fn initialize_can_be_cancelled_before_acknowledgement() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(id, IncrementalRequest::Initialize(WifiConfig::default()))
+            .unwrap();
+        backend.cancel(id).unwrap();
+        let report = backend
+            .poll(
+                id,
+                WakeReason::Command,
+                WorkBudget::try_new(1, 1).unwrap(),
+                &mut [],
+            )
+            .unwrap();
+        assert_eq!(report.disposition(), PollDisposition::Cancelled);
     }
 }

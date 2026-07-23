@@ -14,6 +14,12 @@ use hisi_rf_core::{
 #[allow(dead_code)]
 mod incremental;
 
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port"
+))]
+pub(crate) use incremental::OwnedIncrementalSupplicantBackend;
+
 fn backend_error(class: BackendErrorClass, code: u32) -> BackendError {
     BackendError::new(class, code).with_profile_revision(crate::profile::PROFILE_REVISION)
 }
