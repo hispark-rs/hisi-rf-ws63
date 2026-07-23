@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the credential-free `bootstrap_profile` firmware fixture. It executes
+  the real WS63 composition root only through native supplicant construction,
+  then emits all stage counters and worst observed durations without starting
+  scan or association.
+
+## [0.1.0-alpha.19] - 2026-07-23
+
+### Added
+
 - Added secret-free, stage-level bootstrap diagnostics for resource claim,
   hardware crypto installation and self-tests, vendor memory/timebase/Wi-Fi
   initialization, station/event setup, and native supplicant construction.

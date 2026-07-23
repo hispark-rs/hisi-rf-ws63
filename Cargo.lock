@@ -446,6 +446,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hisi-panic-handler"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82838ac70a30951282f15df5741eeb38f748f5347d419c91b93751ceccc49876"
+
+[[package]]
 name = "hisi-rf-core"
 version = "0.1.0-alpha.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -473,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.19"
+version = "0.1.0-alpha.20"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
@@ -482,6 +488,7 @@ dependencies = [
  "hisi-crypto-ws63",
  "hisi-hal",
  "hisi-nvs",
+ "hisi-panic-handler",
  "hisi-rf-core",
  "hisi-rf-rtos-driver",
  "hisi-riscv-rt",
