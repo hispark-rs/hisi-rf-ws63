@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Extended the non-default incremental backend with a genuine WS63 scan state
+  machine: the vendor ioctl only starts work, scan/cache progress is polled,
+  retained results are copied under the caller's event budget, and truncation
+  is explicit.
+- Scan cancellation now waits for the old vendor transaction and hostap cache
+  feed to quiesce before completing, preventing untagged late scan callbacks
+  from leaking into a subsequent operation generation.
+
+### Changed
+
+- Split the existing blocking `Wifi::scan` implementation over crate-private
+  begin/poll/result/cancel primitives. The public blocking behavior and default
+  backend remain unchanged.
+
 ## [0.1.0-alpha.16] - 2026-07-23
 
 ### Added

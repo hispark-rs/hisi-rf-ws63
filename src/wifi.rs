@@ -877,6 +877,36 @@ impl<'d> Wifi<'d> {
 
         #[cfg(target_arch = "riscv32")]
         {
+            self.begin_scan()?;
+            let started_at = crate::uapi::monotonic_ms();
+            loop {
+                if let Some(count) = self.poll_scan()? {
+                    let copy_len = count.min(output.len());
+                    for (index, destination) in output[..copy_len].iter_mut().enumerate() {
+                        *destination = self
+                            .scan_result(index)
+                            .ok_or(Error::ScanFailed(ScanStatus::Failed))?;
+                    }
+                    return Ok(copy_len);
+                }
+                if crate::uapi::monotonic_ms().wrapping_sub(started_at) >= timeout_ms as u64 {
+                    self.cancel_scan();
+                    return Err(Error::Timeout);
+                }
+                crate::runtime::sleep_ms(1);
+            }
+        }
+    }
+
+    /// Start a station scan without waiting for the scan-done callback.
+    pub(crate) fn begin_scan(&mut self) -> Result<(), Error> {
+        #[cfg(not(target_arch = "riscv32"))]
+        {
+            Err(Error::UnsupportedTarget)
+        }
+
+        #[cfg(target_arch = "riscv32")]
+        {
             let started = critical_section::with(|cs| {
                 let state = SCAN_STATE.borrow(cs);
                 if state.active.get() {
@@ -905,8 +935,7 @@ impl<'d> Wifi<'d> {
                 extra_ies_len: 0,
                 acs_scan: 0,
             };
-            // The official code also frees scan parameters immediately after
-            // this synchronous ioctl returns.
+            // The vendor driver copies these parameters before the ioctl returns.
             let result = crate::wal::ioctl(
                 &self.ifname,
                 IOCTL_SCAN,
@@ -916,34 +945,61 @@ impl<'d> Wifi<'d> {
                 finish_scan();
                 return Err(Error::StartScan(result));
             }
-
-            let started_at = crate::uapi::monotonic_ms();
-            loop {
-                let (done, status, count) = critical_section::with(|cs| {
-                    let state = SCAN_STATE.borrow(cs);
-                    (state.done.get(), state.status.get(), state.count.get())
-                });
-                if done {
-                    finish_scan();
-                    if status != ScanStatus::Success {
-                        return Err(Error::ScanFailed(status));
-                    }
-                    let copy_len = count.min(output.len());
-                    // SAFETY: scan-done is emitted after result callbacks. The
-                    // event callback no longer writes these initialized slots.
-                    unsafe {
-                        let stored = &*SCAN_RESULTS.0.get();
-                        output[..copy_len].copy_from_slice(&stored[..copy_len]);
-                    }
-                    return Ok(copy_len);
-                }
-                if crate::uapi::monotonic_ms().wrapping_sub(started_at) >= timeout_ms as u64 {
-                    finish_scan();
-                    return Err(Error::Timeout);
-                }
-                crate::runtime::sleep_ms(1);
-            }
+            Ok(())
         }
+    }
+
+    /// Observe scan completion without sleeping or copying the result set.
+    pub(crate) fn poll_scan(&mut self) -> Result<Option<usize>, Error> {
+        #[cfg(not(target_arch = "riscv32"))]
+        {
+            Err(Error::UnsupportedTarget)
+        }
+
+        #[cfg(target_arch = "riscv32")]
+        {
+            let (done, status, count) = critical_section::with(|cs| {
+                let state = SCAN_STATE.borrow(cs);
+                (state.done.get(), state.status.get(), state.count.get())
+            });
+            if !done {
+                return Ok(None);
+            }
+            finish_scan();
+            if status != ScanStatus::Success {
+                return Err(Error::ScanFailed(status));
+            }
+            Ok(Some(count))
+        }
+    }
+
+    /// Copy one retained result after [`Self::poll_scan`] reports completion.
+    pub(crate) fn scan_result(&self, index: usize) -> Option<ScanResult> {
+        #[cfg(not(target_arch = "riscv32"))]
+        {
+            let _ = index;
+            None
+        }
+
+        #[cfg(target_arch = "riscv32")]
+        {
+            let (done, count) = critical_section::with(|cs| {
+                let state = SCAN_STATE.borrow(cs);
+                (state.done.get(), state.count.get())
+            });
+            if !done || index >= count {
+                return None;
+            }
+            // SAFETY: scan-done is emitted after all result callbacks, so no
+            // callback can still mutate a retained slot.
+            Some(unsafe { (*SCAN_RESULTS.0.get())[index] })
+        }
+    }
+
+    /// Stop observing the current scan and reject any late result callbacks.
+    pub(crate) fn cancel_scan(&mut self) {
+        #[cfg(target_arch = "riscv32")]
+        finish_scan();
     }
 
     /// Associate with a discovered unencrypted access point.

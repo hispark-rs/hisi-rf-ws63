@@ -1362,6 +1362,11 @@ impl NativeSupplicant {
         Ok(())
     }
 
+    /// Whether the current scan can still publish or has queued cache work.
+    pub(crate) fn scan_cache_capture_pending(&self) -> bool {
+        NATIVE_SCAN_ACTIVE.load(Ordering::Acquire) || SCAN_EVENT_QUEUE.has_pending()
+    }
+
     /// Abort a failed vendor scan without leaking events into the next scan.
     pub(crate) fn cancel_scan_cache_capture(&mut self) {
         NATIVE_SCAN_ACTIVE.store(false, Ordering::Release);
