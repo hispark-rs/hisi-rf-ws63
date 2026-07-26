@@ -53,7 +53,7 @@ observed in the pinned payload. Applications consume the controller with
 `start_runner()` and receive only the Wi-Fi control/L2 handles; they do not call
 the runtime-driver spawn API themselves.
 
-`Storage::report()` exposes deterministic `hisi-rf-resource-report/v2`
+`Storage::report()` exposes deterministic `hisi-rf-resource-report/v3`
 metadata. The current report accounts for bounded radio state, the 4,384-byte
 caller-owned crypto DMA scratch, and the 48 KiB linker-owned packet RAM. Task
 stacks and the supplicant arena remain explicitly uncalibrated until their
