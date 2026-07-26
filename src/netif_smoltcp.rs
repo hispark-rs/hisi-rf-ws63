@@ -116,8 +116,8 @@ pub fn rx_push(frame: &[u8]) {
         b.rx_high_watermark = b.rx_high_watermark.max(b.rx_count);
         true
     });
-    #[cfg(feature = "incremental-backend-experiment")]
     if queued {
+        #[cfg(feature = "incremental-backend-experiment")]
         crate::incremental_wait::signal_l2_rx();
     }
 }
