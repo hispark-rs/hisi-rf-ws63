@@ -52,11 +52,21 @@ unsafe extern "C" {
 unsafe fn calibrate_systick_clock() {
     const CALIBRATION_US: u32 = 100_000;
 
+    trace_timebase_detail(b"systick_count_start", b"begin");
     let systick_start = unsafe { rom_systick_get_count() };
+    trace_timebase_detail(b"systick_count_start", b"completed");
+    trace_timebase_detail(b"tcxo_count_start", b"begin");
     let tcxo_start = unsafe { rom_tcxo_get_us() };
+    trace_timebase_detail(b"tcxo_count_start", b"completed");
+    trace_timebase_detail(b"tcxo_delay", b"begin");
     let _ = unsafe { rom_tcxo_delay_us(CALIBRATION_US) };
+    trace_timebase_detail(b"tcxo_delay", b"completed");
+    trace_timebase_detail(b"systick_count_end", b"begin");
     let systick_delta = unsafe { rom_systick_get_count() }.wrapping_sub(systick_start);
+    trace_timebase_detail(b"systick_count_end", b"completed");
+    trace_timebase_detail(b"tcxo_count_end", b"begin");
     let tcxo_delta = unsafe { rom_tcxo_get_us() }.wrapping_sub(tcxo_start);
+    trace_timebase_detail(b"tcxo_count_end", b"completed");
     if tcxo_delta == 0 {
         return;
     }
@@ -82,14 +92,27 @@ pub(crate) fn initialize_rom_timebases() -> u32 {
         // vendor `hw_init`. hisi-riscv-rt has already copied the original
         // platform ROM-data initializer, including both HAL function tables and
         // the 32 kHz / 24 MHz conversion values, to their fixed DTCM ABI slots.
+        trace_timebase_detail(b"systick_init", b"begin");
         uapi_systick_init();
+        trace_timebase_detail(b"systick_init", b"completed");
+        trace_timebase_detail(b"tcxo_init", b"begin");
         let result = uapi_tcxo_init();
+        trace_timebase_detail(b"tcxo_init", b"completed");
+        trace_timebase_detail(b"systick_calibration", b"begin");
         calibrate_systick_clock();
+        trace_timebase_detail(b"systick_calibration", b"completed");
         if result == 0 {
             TIMEBASE_READY.store(true, Ordering::Release);
         }
         result
     }
+}
+
+fn trace_timebase_detail(name: &[u8], event: &[u8]) {
+    #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
+    crate::blocking_diagnostics::trace_bootstrap_detail(name, event);
+    #[cfg(not(all(feature = "bootstrap-stage-diag", target_arch = "riscv32")))]
+    let _ = (name, event);
 }
 
 #[cfg(any(
