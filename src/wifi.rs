@@ -474,7 +474,11 @@ impl<'d> WpaWifi<'d> {
             );
             // The vendor-oracle WPA profiles initialize their shared cipher
             // environment before either WPA2-PSK or SAE starts.
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"cipher_env_init", b"begin");
             unsafe { uapi_drv_cipher_env_init() };
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"cipher_env_init", b"completed");
             #[cfg(feature = "wifi-wpa3-personal")]
             {
                 // The vendor SAE path enters mbedTLS through the harden-adapter
@@ -485,7 +489,11 @@ impl<'d> WpaWifi<'d> {
                     return Err(Error::CryptoInitialize(registered));
                 }
             }
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"wifi_init", b"begin");
             let init = unsafe { uapi_wifi_init(2, 7) };
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"wifi_init", b"completed");
             if init != 0 {
                 return Err(Error::Initialize(init));
             }
@@ -844,7 +852,11 @@ impl<'d> Wifi<'d> {
             let vendor_wifi_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(
                 crate::blocking_diagnostics::BootstrapStage::VendorWifiInitialize,
             );
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"wifi_init", b"begin");
             let init = unsafe { uapi_wifi_init(2, 7) };
+            #[cfg(feature = "bootstrap-stage-diag")]
+            crate::blocking_diagnostics::trace_bootstrap_detail(b"wifi_init", b"completed");
             if init != 0 {
                 return Err(Error::Initialize(init));
             }
