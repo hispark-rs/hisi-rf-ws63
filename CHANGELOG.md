@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.24] - 2026-07-26
+
+### Added
+
+- Added allocation-free diagnostics for the experimental incremental runner
+  and WS63 wait bridge. The snapshots distinguish bounded runner transitions,
+  selected wake-source batches, raw backend/L2 signal calls, executor
+  notifications, pending/ready wait polls, timer readiness, terminal outcomes,
+  and fail-closed errors without recording network configuration or secrets.
+
 ## [0.1.0-alpha.23] - 2026-07-26
 
 ### Fixed

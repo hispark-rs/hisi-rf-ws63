@@ -375,6 +375,9 @@ mod composition;
     feature = "upstream-supplicant-port"
 ))]
 mod incremental_wait;
+#[cfg(feature = "incremental-backend-experiment")]
+#[doc(hidden)]
+pub use incremental_wait::Ws63IncrementalWaitDiagnostics;
 #[cfg(all(
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")

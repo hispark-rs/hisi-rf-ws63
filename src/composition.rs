@@ -10,16 +10,16 @@ use hisi_rf_core::{
 
 #[cfg(feature = "incremental-backend-experiment")]
 use hisi_rf_core::{
-    IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalWaitError,
-    IncrementalWaitIntent, IncrementalWaitPlatform, RadioResources, WaitSet, WifiBackend,
-    WorkBudget,
+    IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalRunnerDiagnostics,
+    IncrementalWaitError, IncrementalWaitIntent, IncrementalWaitPlatform, RadioResources, WaitSet,
+    WifiBackend, WorkBudget,
 };
 
 #[cfg(feature = "incremental-backend-experiment")]
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-backend-experiment")]
-use crate::incremental_wait::Ws63IncrementalWaitPlatform;
+use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
 use crate::profile::{ActiveProfile, Profile, Storage};
 
@@ -179,6 +179,16 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     /// Monotonic deadline requested by the active operation.
     pub fn next_deadline_us(&self) -> Option<u64> {
         self.inner.next_deadline_us()
+    }
+
+    /// Snapshot chip-neutral runner workload and selected wake sources.
+    pub fn diagnostics(&self) -> IncrementalRunnerDiagnostics {
+        self.inner.diagnostics()
+    }
+
+    /// Snapshot raw WS63 callback/L2/timer wait-bridge activity.
+    pub fn wait_diagnostics(&self) -> Ws63IncrementalWaitDiagnostics {
+        self.platform.diagnostics()
     }
 }
 

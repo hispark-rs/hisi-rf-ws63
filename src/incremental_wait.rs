@@ -11,11 +11,41 @@ use embassy_sync::waitqueue::AtomicWaker;
 #[cfg(target_arch = "riscv32")]
 use embassy_time::Timer;
 use hisi_rf_core::{IncrementalWaitPlatform, WaitSet};
-use portable_atomic::{AtomicU8, Ordering};
+use portable_atomic::{AtomicU8, AtomicU32, Ordering};
+
+/// Secret-free counters for the WS63 incremental wait bridge.
+///
+/// Counters saturate at `u32::MAX` and never participate in readiness or wake
+/// decisions. Multiple signal calls may intentionally coalesce into one ready
+/// batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Ws63IncrementalWaitDiagnostics {
+    /// Native supplicant or vendor callback signal calls.
+    pub backend_signals: u32,
+    /// L2 receive signal calls.
+    pub l2_rx_signals: u32,
+    /// Calls made to the executor waker after recording a signal.
+    pub waker_notifications: u32,
+    /// Polls of the platform wait contract.
+    pub poll_calls: u32,
+    /// Polls that returned `Pending`.
+    pub pending_polls: u32,
+    /// Polls that returned at least one ready source.
+    pub ready_polls: u32,
+    /// Ready polls containing the monotonic timer source.
+    pub timer_ready_polls: u32,
+}
 
 struct WaitSignals {
     pending: AtomicU8,
     waker: AtomicWaker,
+    backend_signals: AtomicU32,
+    l2_rx_signals: AtomicU32,
+    waker_notifications: AtomicU32,
+    poll_calls: AtomicU32,
+    pending_polls: AtomicU32,
+    ready_polls: AtomicU32,
+    timer_ready_polls: AtomicU32,
 }
 
 impl WaitSignals {
@@ -23,11 +53,25 @@ impl WaitSignals {
         Self {
             pending: AtomicU8::new(0),
             waker: AtomicWaker::new(),
+            backend_signals: AtomicU32::new(0),
+            l2_rx_signals: AtomicU32::new(0),
+            waker_notifications: AtomicU32::new(0),
+            poll_calls: AtomicU32::new(0),
+            pending_polls: AtomicU32::new(0),
+            ready_polls: AtomicU32::new(0),
+            timer_ready_polls: AtomicU32::new(0),
         }
     }
 
     fn signal(&self, source: WaitSet) {
+        if source.contains(WaitSet::BACKEND) {
+            saturating_increment(&self.backend_signals);
+        }
+        if source.contains(WaitSet::L2_RX) {
+            saturating_increment(&self.l2_rx_signals);
+        }
         self.pending.fetch_or(source.bits(), Ordering::Release);
+        saturating_increment(&self.waker_notifications);
         self.waker.wake();
     }
 
@@ -41,6 +85,18 @@ impl WaitSignals {
             ready = ready.union(WaitSet::L2_RX);
         }
         ready
+    }
+
+    fn diagnostics(&self) -> Ws63IncrementalWaitDiagnostics {
+        Ws63IncrementalWaitDiagnostics {
+            backend_signals: self.backend_signals.load(Ordering::Relaxed),
+            l2_rx_signals: self.l2_rx_signals.load(Ordering::Relaxed),
+            waker_notifications: self.waker_notifications.load(Ordering::Relaxed),
+            poll_calls: self.poll_calls.load(Ordering::Relaxed),
+            pending_polls: self.pending_polls.load(Ordering::Relaxed),
+            ready_polls: self.ready_polls.load(Ordering::Relaxed),
+            timer_ready_polls: self.timer_ready_polls.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -126,6 +182,10 @@ impl Ws63IncrementalWaitPlatform {
             self.timer = None;
         }
     }
+
+    pub(crate) fn diagnostics(&self) -> Ws63IncrementalWaitDiagnostics {
+        self.signals.diagnostics()
+    }
 }
 
 impl IncrementalWaitPlatform for Ws63IncrementalWaitPlatform {
@@ -137,6 +197,7 @@ impl IncrementalWaitPlatform for Ws63IncrementalWaitPlatform {
         sources: WaitSet,
         deadline_us: Option<u64>,
     ) -> Poll<Result<WaitSet, Self::Error>> {
+        saturating_increment(&self.signals.poll_calls);
         self.signals.waker.register(cx.waker());
 
         let mut ready = self.take_ready(sources);
@@ -156,11 +217,22 @@ impl IncrementalWaitPlatform for Ws63IncrementalWaitPlatform {
         }
 
         if ready.is_empty() {
+            saturating_increment(&self.signals.pending_polls);
             Poll::Pending
         } else {
+            saturating_increment(&self.signals.ready_polls);
+            if ready.contains(WaitSet::TIMER) {
+                saturating_increment(&self.signals.timer_ready_polls);
+            }
             Poll::Ready(Ok(ready))
         }
     }
+}
+
+fn saturating_increment(counter: &AtomicU32) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
 #[cfg(test)]
@@ -202,6 +274,18 @@ mod tests {
             platform.poll_ready(&mut cx, WaitSet::BACKEND, None),
             Poll::Ready(Ok(ready)) if ready == WaitSet::BACKEND
         ));
+        assert_eq!(
+            platform.diagnostics(),
+            Ws63IncrementalWaitDiagnostics {
+                backend_signals: 1,
+                l2_rx_signals: 0,
+                waker_notifications: 1,
+                poll_calls: 2,
+                pending_polls: 1,
+                ready_polls: 1,
+                timer_ready_polls: 0,
+            }
+        );
     }
 
     #[test]
@@ -236,5 +320,6 @@ mod tests {
             platform.poll_ready(&mut cx, WaitSet::TIMER, Some(0)),
             Poll::Ready(Ok(ready)) if ready == WaitSet::TIMER
         ));
+        assert_eq!(platform.diagnostics().timer_ready_polls, 1);
     }
 }
