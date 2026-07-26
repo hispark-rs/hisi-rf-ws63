@@ -70,16 +70,9 @@ fn valid_symbol(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$'))
 }
 
-fn write_rom_fallbacks(output: &Path, source: &Path, strong_roots: &[String]) {
+fn append_rom_fallbacks(assembly: &mut String, source: &Path, strong_roots: &[String]) {
     let source = fs::read_to_string(source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
-    // Keep these as linker-script symbols. A `.weak` + `.set` absolute symbol
-    // emitted by global_asm makes LLD encode the absolute ROM address itself as
-    // the displacement of an R_RISCV_CALL_PLT relocation.
-    let mut linker_script = String::from(
-        "/* Generated WS63 mask-ROM fallbacks. */\n\
-         /* PROVIDE keeps application-owned strong definitions authoritative. */\n",
-    );
     for line in source.lines() {
         let Some((name, value)) = line
             .trim()
@@ -101,14 +94,17 @@ fn write_rom_fallbacks(output: &Path, source: &Path, strong_roots: &[String]) {
         {
             continue;
         }
-        linker_script.push_str("PROVIDE(");
-        linker_script.push_str(name);
-        linker_script.push_str(" = ");
-        linker_script.push_str(value);
-        linker_script.push_str(");\n");
+        // Strong absolute symbols are carried by this crate's rlib, so the
+        // contract remains transitive when applications depend only on
+        // `hisi-rf`. Symbols implemented by Rust are excluded above.
+        assembly.push_str(".globl ");
+        assembly.push_str(name);
+        assembly.push_str("\n.set ");
+        assembly.push_str(name);
+        assembly.push_str(", ");
+        assembly.push_str(value);
+        assembly.push('\n');
     }
-    fs::write(output, linker_script)
-        .unwrap_or_else(|error| panic!("write {}: {error}", output.display()));
 }
 
 fn callback_target(name: &str) -> &str {
@@ -192,13 +188,14 @@ fn append_callback_fallbacks(assembly: &mut String, source: &Path) {
     }
 }
 
-fn write_link_contract(output: &Path, callbacks: &Path, roots: &[String]) {
+fn write_link_contract(output: &Path, callbacks: &Path, roots: &[String], rom: &Path) {
     let mut assembly = String::from(
         ".weak __nv_storage_start\n\
          .set __nv_storage_start, 0x005fc000\n\
          .weak __nv_storage_length\n\
          .set __nv_storage_length, 0x00004000\n",
     );
+    append_rom_fallbacks(&mut assembly, rom, roots);
     append_callback_fallbacks(&mut assembly, callbacks);
     assembly.push_str(
         ".section .rodata.hisi_ws63_rf_roots,\"a\",@progbits\n\
@@ -278,15 +275,11 @@ fn main() {
         ));
     }
     roots.push("__hisi_ws63_rom_patch_table".to_owned());
-    let rom_fallbacks = out_dir.join("ws63-rom-fallbacks.x");
-    write_rom_fallbacks(&rom_fallbacks, &rom, &roots);
-    println!("cargo:rom_fallbacks={}", rom_fallbacks.display());
     let contract = out_dir.join("ws63-radio-link-contract.S");
-    write_link_contract(&contract, &callbacks, &roots);
+    write_link_contract(&contract, &callbacks, &roots, &rom);
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-arg=-T{}", rom_fallbacks.display());
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
     for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
         let (name, mode) = archive

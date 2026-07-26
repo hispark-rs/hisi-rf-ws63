@@ -1,8 +1,7 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.22"
+version = "0.1.0-alpha.23"
 edition = "2024"
-links = "hisi_rf_ws63"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
 repository = "https://github.com/hispark-rs/hisi-rf-ws63"

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.23] - 2026-07-26
+
+### Fixed
+
+- Embedded mask-ROM fallback addresses as strong absolute ELF symbols in the
+  backend rlib. The complete link contract now remains transitive when a
+  firmware depends only on the `hisi-rf` facade; it no longer relies on a
+  non-transitive Cargo linker-script argument.
+
 ## [0.1.0-alpha.22] - 2026-07-26
 
 ### Fixed
@@ -306,7 +315,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.15...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.23...HEAD
+[0.1.0-alpha.23]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.22...v0.1.0-alpha.23
+[0.1.0-alpha.22]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.21...v0.1.0-alpha.22
+[0.1.0-alpha.21]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.20...v0.1.0-alpha.21
+[0.1.0-alpha.20]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.19...v0.1.0-alpha.20
+[0.1.0-alpha.19]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.18...v0.1.0-alpha.19
+[0.1.0-alpha.18]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.17...v0.1.0-alpha.18
+[0.1.0-alpha.17]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.16...v0.1.0-alpha.17
+[0.1.0-alpha.16]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.15...v0.1.0-alpha.16
 [0.1.0-alpha.15]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.14...v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
