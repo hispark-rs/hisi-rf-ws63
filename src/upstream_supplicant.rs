@@ -2797,6 +2797,8 @@ unsafe extern "C" fn wait_for_work(_: *mut c_void, timeout_ms: u32) -> c_int {
 
 unsafe extern "C" fn wake_runner(_: *mut c_void) {
     let _ = RUNNER_WAKE.up();
+    #[cfg(feature = "incremental-backend-experiment")]
+    crate::incremental_wait::signal_backend();
 }
 
 #[cfg(test)]

@@ -91,7 +91,7 @@ pub fn rx_push(frame: &[u8]) {
     if frame.len() > MTU {
         return;
     }
-    with_bridge(|b| {
+    let queued = with_bridge(|b| {
         let prefix_len = frame.len().min(FRAME_PREFIX);
         b.last_rx_prefix[..prefix_len].copy_from_slice(&frame[..prefix_len]);
         b.last_rx_len = frame.len();
@@ -107,14 +107,24 @@ pub fn rx_push(frame: &[u8]) {
         }
         if b.rx_count >= RX_DEPTH {
             b.rx_dropped = b.rx_dropped.saturating_add(1);
-            return;
+            return false;
         }
         let slot = (b.rx_head + b.rx_count) % RX_DEPTH;
         b.rx[slot][..frame.len()].copy_from_slice(frame);
         b.rx_len[slot] = frame.len();
         b.rx_count += 1;
         b.rx_high_watermark = b.rx_high_watermark.max(b.rx_count);
+        true
     });
+    #[cfg(feature = "incremental-backend-experiment")]
+    if queued {
+        crate::incremental_wait::signal_l2_rx();
+    }
+}
+
+#[cfg(feature = "incremental-backend-experiment")]
+pub(crate) fn rx_ready() -> bool {
+    with_bridge(|bridge| bridge.rx_count != 0)
 }
 
 fn has_udp_ports(frame: &[u8], source_port: u16, destination_port: u16) -> bool {

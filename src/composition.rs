@@ -18,6 +18,8 @@ use hisi_rf_core::{
 #[cfg(feature = "incremental-backend-experiment")]
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 use crate::hisi_rf_backend::Ws63WifiBackend;
+#[cfg(feature = "incremental-backend-experiment")]
+use crate::incremental_wait::Ws63IncrementalWaitPlatform;
 use crate::netif_smoltcp::Ws63Device;
 use crate::profile::{ActiveProfile, Profile, Storage};
 
@@ -121,6 +123,7 @@ pub struct IncrementalRadioParts<const EVENTS: usize> {
 #[cfg(feature = "incremental-backend-experiment")]
 pub struct IncrementalRadioRunner<const EVENTS: usize> {
     inner: hisi_rf_core::IncrementalRadioRunner<OwnedIncrementalSupplicantBackend, EVENTS>,
+    platform: Ws63IncrementalWaitPlatform,
 }
 
 #[cfg(feature = "incremental-backend-experiment")]
@@ -131,7 +134,10 @@ impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EV
             self.inner.split_incremental(budget);
         IncrementalRadioParts {
             wifi,
-            runner: IncrementalRadioRunner { inner: runner },
+            runner: IncrementalRadioRunner {
+                inner: runner,
+                platform: Ws63IncrementalWaitPlatform::new(),
+            },
         }
     }
 }
@@ -152,7 +158,18 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     }
 
     /// Wait for one subscribed source without consuming a control command.
-    pub async fn wait_ready<P: IncrementalWaitPlatform>(
+    pub async fn wait_ready(
+        &mut self,
+    ) -> Result<WaitSet, IncrementalWaitError<core::convert::Infallible>> {
+        self.inner.wait_ready(&mut self.platform).await
+    }
+
+    /// Wait through an explicitly supplied platform adapter.
+    ///
+    /// This is retained for conformance fixtures. Applications should use
+    /// [`Self::wait_ready`], which owns the WS63 callback/L2/timer bridge.
+    #[doc(hidden)]
+    pub async fn wait_ready_with<P: IncrementalWaitPlatform>(
         &self,
         platform: &mut P,
     ) -> Result<WaitSet, IncrementalWaitError<P::Error>> {

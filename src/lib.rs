@@ -371,6 +371,12 @@ pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supp
 mod composition;
 #[cfg(all(
     feature = "net",
+    feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port"
+))]
+mod incremental_wait;
+#[cfg(all(
+    feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 mod profile;

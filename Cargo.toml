@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.20"
+version = "0.1.0-alpha.21"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -29,6 +29,8 @@ ws63-radio-sys = { version = "=0.1.0-alpha.7", default-features = false }
 hisi-hal = { version = "0.7.0-alpha.3", features = ["chip-ws63", "unstable"] }
 critical-section = "1"
 portable-atomic = { version = "1", default-features = false, features = ["critical-section"] }
+embassy-sync = { version = "0.7", default-features = false, optional = true }
+embassy-time = { version = "0.5", default-features = false, optional = true }
 static_cell = "2"
 zeroize = { version = "1", default-features = false }
 # The netif->smoltcp bridge (feature `net`): a no_std/no-alloc TCP/IP stack to
@@ -110,6 +112,8 @@ rf-queue-guard = []
 incremental-backend-experiment = [
     "net",
     "upstream-supplicant-port",
+    "dep:embassy-sync",
+    "dep:embassy-time",
     "hisi-rf-core/incremental-backend-experiment",
 ]
 
@@ -128,7 +132,7 @@ hisi-riscv-rt = { version = "0.5.6", default-features = false, features = [
     "ws63-bgle-32k",
     "ws63-radio-main-stack-32k",
 ] }
-hisi-rtos = "0.1.0-alpha.10"
+hisi-rtos = { version = "0.1.0-alpha.10", features = ["embassy"] }
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]

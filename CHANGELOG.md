@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.21] - 2026-07-26
+
+### Added
+
+- Added the target-owned incremental wait platform that combines backend
+  callback wakes, level-triggered L2 RX readiness, and monotonic operation
+  deadlines. The WS63 runner now exposes `wait_ready()` without requiring an
+  application-defined platform adapter.
+- Added allocation-free wake registration and source-filtering tests. Callback
+  and RX paths only publish bounded readiness and wake the executor; vendor and
+  network work still runs in normal runner context.
+
+### Changed
+
+- Retained `wait_ready_with` as a hidden conformance hook while making the
+  composition-owned wait platform the normal experimental API.
+- Enabled the `hisi-rtos` Embassy time driver in target fixtures so deadline
+  wakes share the RTOS timer instead of introducing a second target timer.
+
 ## [0.1.0-alpha.20] - 2026-07-26
 
 ### Added
