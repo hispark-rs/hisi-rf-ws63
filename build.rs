@@ -280,6 +280,7 @@ fn main() {
     roots.push("__hisi_ws63_rom_patch_table".to_owned());
     let rom_fallbacks = out_dir.join("ws63-rom-fallbacks.x");
     write_rom_fallbacks(&rom_fallbacks, &rom, &roots);
+    println!("cargo:rom_fallbacks={}", rom_fallbacks.display());
     let contract = out_dir.join("ws63-radio-link-contract.S");
     write_link_contract(&contract, &callbacks, &roots);
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.22] - 2026-07-26
+
+### Fixed
+
+- Exported the generated WS63 mask-ROM fallback linker script through Cargo
+  dependency metadata so the user-facing `hisi-rf` facade can preserve the
+  complete native link contract across the crate boundary.
+
 ## [0.1.0-alpha.21] - 2026-07-26
 
 ### Added
