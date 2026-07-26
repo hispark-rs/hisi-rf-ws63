@@ -228,9 +228,12 @@ fn main() {
     }
 
     // Internal firmware examples use hisi-riscv-rt's neutral entry script.
-    // Declaring it here keeps `cargo build --example ...` self-contained; the
-    // runtime dependency supplies the script and the selected memory profile.
+    // Declaring the complete link contract here keeps `cargo build --example
+    // ...` self-contained; the runtime dependency supplies the script and the
+    // selected memory profile. Relaxation must remain disabled because the
+    // guarded ROM callback veneers have a fixed, link-asserted address order.
     println!("cargo:rustc-link-arg=-Thisi-riscv-link.x");
+    println!("cargo:rustc-link-arg=--no-relax");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let lib_dir = PathBuf::from(
