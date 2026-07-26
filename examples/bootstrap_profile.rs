@@ -48,6 +48,12 @@ fn main() -> ! {
     let _runtime = hisi_rtos::start_with_port(
         hisi_rtos::PortedConfig {
             radio_task_policy: hisi_rtos::RunPolicy::Cooperative,
+            // UART stage tracing is intentionally synchronous and can extend
+            // the vendor's bootstrap scheduler-lock interval. Keep the normal
+            // runtime default at 100 ms; only this diagnostic fixture gets a
+            // wider observation window.
+            #[cfg(feature = "bootstrap-stage-diag")]
+            max_scheduler_lock_duration: core::num::NonZeroU32::new(5_000).unwrap(),
             ..hisi_rtos::PortedConfig::default()
         },
         hisi_rtos::Resources {

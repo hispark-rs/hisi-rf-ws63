@@ -108,6 +108,7 @@ pub(crate) fn initialize_rom_timebases() -> u32 {
     }
 }
 
+#[cfg(target_arch = "riscv32")]
 fn trace_timebase_detail(name: &[u8], event: &[u8]) {
     #[cfg(all(feature = "bootstrap-stage-diag", target_arch = "riscv32"))]
     crate::blocking_diagnostics::trace_bootstrap_detail(name, event);

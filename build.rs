@@ -227,6 +227,11 @@ fn main() {
         return;
     }
 
+    // Internal firmware examples use hisi-riscv-rt's neutral entry script.
+    // Declaring it here keeps `cargo build --example ...` self-contained; the
+    // runtime dependency supplies the script and the selected memory profile.
+    println!("cargo:rustc-link-arg=-Thisi-riscv-link.x");
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let lib_dir = PathBuf::from(
         env::var_os("DEP_WS63_RADIO_SYS_LIB_DIR")

@@ -405,7 +405,10 @@ mod tests {
         assert_eq!(diagnostic.code(), DiagnosticCode::ResourceUnavailable);
         assert_eq!(diagnostic.stage(), DiagnosticStage::Runtime);
         assert_eq!(diagnostic.action(), RecoveryAction::ProvideResources);
-        assert_eq!(diagnostic.profile_revision(), Some("ws63-wifi-2026-07-22"));
+        assert_eq!(
+            diagnostic.profile_revision(),
+            Some(crate::profile::PROFILE_REVISION)
+        );
         assert_eq!(
             diagnostic.trace().get(0).map(|entry| entry.value()),
             Some(7)

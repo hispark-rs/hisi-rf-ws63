@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the real WS63 composition root only through native supplicant construction,
   then emits all stage counters and worst observed durations without starting
   scan or association.
+- Added the HIL-verified 32 KiB radio main-stack requirement to resource-report
+  schema v3 and made the internal firmware fixture select the corresponding
+  `hisi-riscv-rt` memory profile.
+
+### Fixed
+
+- Emit mask-ROM fallback addresses as linker-script symbols so stock rust-lld
+  resolves RISC-V call relocations to their true absolute ROM destinations.
+- Initialize and trace the ROM systick/TCXO timebase before timed radio stages,
+  while keeping hardware crypto usable when timing is not yet available.
+- Prevent synchronous vendor Wi-Fi bootstrap from overflowing the runtime's
+  non-radio 8 KiB main stack and corrupting adjacent vendor BSS. The explicit
+  32 KiB profile completed 20/20 hardware-reset bootstrap trials.
 
 ## [0.1.0-alpha.19] - 2026-07-23
 

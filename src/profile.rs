@@ -9,9 +9,10 @@ use static_cell::StaticCell;
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v2";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-22";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v3";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
+const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 
 mod sealed {
     pub trait Sealed {}
@@ -175,6 +176,8 @@ pub struct ResourceReport {
     pub crypto_dma_bytes: usize,
     /// Linker-owned `.wifi_pkt_ram` bytes.
     pub linker_packet_ram_bytes: usize,
+    /// HIL-verified main-stack envelope required by synchronous radio bootstrap.
+    pub main_stack_bytes_required: usize,
     /// Observed dynamic-task requirement for the current payload.
     pub dynamic_tasks_required: usize,
     /// Runtime-internal task count, once the runtime exposes admission metadata.
@@ -208,6 +211,7 @@ impl ResourceReport {
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
             crypto_dma_bytes: Ws63CryptoStorage::size_bytes(),
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
+            main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
             runtime_internal_tasks: None,
             task_stack_bytes: None,
@@ -230,6 +234,7 @@ impl ResourceReport {
                 "\"event_capacity\":{},",
                 "\"caller_owned_bytes\":{},\"radio_state_bytes\":{},",
                 "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
+                "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
                 "\"runtime_internal_tasks\":null,\"task_stack_bytes\":null,",
                 "\"supplicant_arena_bytes\":null,\"flash_bytes\":null,",
@@ -251,6 +256,7 @@ impl ResourceReport {
             self.radio_state_bytes,
             self.crypto_dma_bytes,
             self.linker_packet_ram_bytes,
+            self.main_stack_bytes_required,
             self.dynamic_tasks_required,
             self.runtime_resources_calibrated,
         )
@@ -295,12 +301,13 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v2");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v3");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
+        assert_eq!(report.main_stack_bytes_required, 0x8000);
         assert_eq!(report.dynamic_tasks_required, 6);
         assert_eq!(report.task_admission, "owner-bound-reservation");
         assert_eq!(report.runtime_internal_tasks, None);
@@ -319,8 +326,13 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v2\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v3\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
+        assert!(
+            output
+                .as_str()
+                .contains("\"main_stack_bytes_required\":32768")
+        );
         assert!(
             output
                 .as_str()
