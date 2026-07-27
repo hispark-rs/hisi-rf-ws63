@@ -217,6 +217,16 @@ pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
     upstream_supplicant::diagnostic_snapshot()
 }
 
+/// Return call counts plus last/max latency for association-related WAL ioctls.
+///
+/// The four triplets describe initial associate, stale-state disconnect,
+/// bounded associate retry, and normal deauthenticate respectively.
+#[cfg(feature = "upstream-supplicant-port")]
+#[doc(hidden)]
+pub fn upstream_supplicant_association_ioctl_diagnostic_snapshot() -> [u32; 12] {
+    upstream_supplicant::association_ioctl_diagnostic_snapshot()
+}
+
 /// Return bounded WS63 external-auth status retry diagnostics.
 #[cfg(feature = "upstream-supplicant-port")]
 pub fn upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2] {

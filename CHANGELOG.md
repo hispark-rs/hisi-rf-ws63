@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tightened the opt-in incremental connect fixture's per-step work budget from
+  5 seconds to 100 milliseconds after a 20-reset transition-mode HIL matrix
+  completed 20/20 with a 38 ms maximum runner step. Added secret-free
+  association/deauthentication ioctl latency counters to distinguish WAL
+  latency from hostap event-loop work. This is transition-mode evidence only;
+  pure WPA3 remains an external validation gate.
 - Split firmware-example and Embassy wait support into explicit features so
   enabling the incremental backend contract alone does not install a
   process-wide executor or time driver.

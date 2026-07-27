@@ -78,6 +78,10 @@ static DIAG_ASSOCIATE_PMF: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATE_PWE: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATE_AKM: AtomicU32 = AtomicU32::new(0);
 static DIAG_LAST_IOCTL_STATUS: AtomicU32 = AtomicU32::new(0);
+static DIAG_ASSOCIATE_FIRST_IOCTL: TimedIoctl = TimedIoctl::new();
+static DIAG_ASSOCIATE_CLEAR_IOCTL: TimedIoctl = TimedIoctl::new();
+static DIAG_ASSOCIATE_RETRY_IOCTL: TimedIoctl = TimedIoctl::new();
+static DIAG_DEAUTHENTICATE_IOCTL: TimedIoctl = TimedIoctl::new();
 static DIAG_EXTERNAL_AUTH_CALLBACKS: AtomicU32 = AtomicU32::new(0);
 static DIAG_EXTERNAL_AUTH_REJECTS: AtomicU32 = AtomicU32::new(0);
 static DIAG_EXTERNAL_AUTH_LENGTH: AtomicU32 = AtomicU32::new(0);
@@ -94,6 +98,43 @@ static DIAG_ASSOCIATION_EVENT: AuthenticationProgress = AuthenticationProgress::
 static DIAG_ASSOCIATION_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static DIAG_ASSOCIATION_ATTEMPTS: [AssociationAttempt; ASSOCIATION_ATTEMPT_CAPACITY] =
     [const { AssociationAttempt::new() }; ASSOCIATION_ATTEMPT_CAPACITY];
+
+struct TimedIoctl {
+    calls: AtomicU32,
+    last_elapsed_ms: AtomicU32,
+    max_elapsed_ms: AtomicU32,
+}
+
+impl TimedIoctl {
+    const fn new() -> Self {
+        Self {
+            calls: AtomicU32::new(0),
+            last_elapsed_ms: AtomicU32::new(0),
+            max_elapsed_ms: AtomicU32::new(0),
+        }
+    }
+
+    fn call(&self, operation: impl FnOnce() -> c_int) -> c_int {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let started_at = crate::uapi::try_monotonic_ms();
+        let status = operation();
+        if let (Some(started_at), Some(finished_at)) = (started_at, crate::uapi::try_monotonic_ms())
+        {
+            let elapsed = u32::try_from(finished_at.wrapping_sub(started_at)).unwrap_or(u32::MAX);
+            self.last_elapsed_ms.store(elapsed, Ordering::Relaxed);
+            self.max_elapsed_ms.fetch_max(elapsed, Ordering::Relaxed);
+        }
+        status
+    }
+
+    fn snapshot(&self) -> [u32; 3] {
+        [
+            self.calls.load(Ordering::Acquire),
+            self.last_elapsed_ms.load(Ordering::Acquire),
+            self.max_elapsed_ms.load(Ordering::Acquire),
+        ]
+    }
+}
 
 const PORT_FREE: u8 = 0;
 const PORT_INSTALLING: u8 = 1;
@@ -2540,11 +2581,13 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         crypto: &mut crypto,
     };
     DIAG_ASSOCIATE_CALLS.fetch_add(1, Ordering::Relaxed);
-    let first_status = crate::wal::ioctl(
-        driver.ifname(),
-        IOCTL_ASSOCIATE,
-        (&mut association as *mut VendorAssociateRequest).cast(),
-    );
+    let first_status = DIAG_ASSOCIATE_FIRST_IOCTL.call(|| {
+        crate::wal::ioctl(
+            driver.ifname(),
+            IOCTL_ASSOCIATE,
+            (&mut association as *mut VendorAssociateRequest).cast(),
+        )
+    });
     let mut status = first_status;
     let mut disconnect_status = 0;
     if status != 0 {
@@ -2554,17 +2597,21 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         // association is recovered by an explicit disconnect and one retry.
         // This is bounded and preserves the final ioctl status for diagnosis.
         let mut reason = WLAN_REASON_PREV_AUTH_NOT_VALID;
-        disconnect_status = crate::wal::ioctl(
-            driver.ifname(),
-            IOCTL_DISCONNECT,
-            (&mut reason as *mut u16).cast(),
-        );
-        if disconnect_status == 0 {
-            status = crate::wal::ioctl(
+        disconnect_status = DIAG_ASSOCIATE_CLEAR_IOCTL.call(|| {
+            crate::wal::ioctl(
                 driver.ifname(),
-                IOCTL_ASSOCIATE,
-                (&mut association as *mut VendorAssociateRequest).cast(),
-            );
+                IOCTL_DISCONNECT,
+                (&mut reason as *mut u16).cast(),
+            )
+        });
+        if disconnect_status == 0 {
+            status = DIAG_ASSOCIATE_RETRY_IOCTL.call(|| {
+                crate::wal::ioctl(
+                    driver.ifname(),
+                    IOCTL_ASSOCIATE,
+                    (&mut association as *mut VendorAssociateRequest).cast(),
+                )
+            });
         }
     }
     if status != 0 {
@@ -2616,6 +2663,27 @@ pub(crate) fn diagnostic_snapshot() -> [u32; 11] {
         DIAG_EXTERNAL_AUTH_CALLBACKS.load(Ordering::Acquire),
         DIAG_EXTERNAL_AUTH_REJECTS.load(Ordering::Acquire),
         DIAG_EXTERNAL_AUTH_LENGTH.load(Ordering::Acquire),
+    ]
+}
+
+pub(crate) fn association_ioctl_diagnostic_snapshot() -> [u32; 12] {
+    let first = DIAG_ASSOCIATE_FIRST_IOCTL.snapshot();
+    let clear = DIAG_ASSOCIATE_CLEAR_IOCTL.snapshot();
+    let retry = DIAG_ASSOCIATE_RETRY_IOCTL.snapshot();
+    let deauthenticate = DIAG_DEAUTHENTICATE_IOCTL.snapshot();
+    [
+        first[0],
+        first[1],
+        first[2],
+        clear[0],
+        clear[1],
+        clear[2],
+        retry[0],
+        retry[1],
+        retry[2],
+        deauthenticate[0],
+        deauthenticate[1],
+        deauthenticate[2],
     ]
 }
 
@@ -2768,11 +2836,13 @@ unsafe extern "C" fn deauthenticate(driver: *mut c_void, reason: u16) -> c_int {
         return -1;
     };
     let mut reason = reason;
-    crate::wal::ioctl(
-        driver.ifname(),
-        IOCTL_DISCONNECT,
-        (&mut reason as *mut u16).cast(),
-    )
+    DIAG_DEAUTHENTICATE_IOCTL.call(|| {
+        crate::wal::ioctl(
+            driver.ifname(),
+            IOCTL_DISCONNECT,
+            (&mut reason as *mut u16).cast(),
+        )
+    })
 }
 
 fn key_request(key: &Key, material: *mut u8, material_len: usize) -> Option<KeyExtension> {

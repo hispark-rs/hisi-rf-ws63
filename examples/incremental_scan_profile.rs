@@ -47,13 +47,13 @@ const SCAN_RESULT_DEPTH: usize = 32;
 #[cfg(not(feature = "incremental-connect-profile"))]
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero incremental work budget");
-// Transition-mode reset matrices measured the current non-preemptible hostap
-// boundary at up to 4.018 s while recovering status 30 and a missing first
-// EAPOL frame. This 5 s fixture budget describes that measured legacy boundary;
-// A5B is not complete until the C state machine is split into smaller steps.
+// The association ioctl timing probe measured a 40 ms maximum across a
+// transition-mode 10-reset matrix, including status-30 and first-EAPOL
+// recovery. Keep a conservative 100 ms fixture budget while the remaining
+// synchronous hostap callbacks are split into smaller steps.
 #[cfg(feature = "incremental-connect-profile")]
 const RUNNER_BUDGET: WorkBudget =
-    WorkBudget::try_new(8, 5_000_000).expect("non-zero incremental work budget");
+    WorkBudget::try_new(8, 100_000).expect("non-zero incremental work budget");
 
 #[cfg(all(
     feature = "incremental-connect-profile",
@@ -456,6 +456,8 @@ fn write_connect_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) 
     let temporary_reject =
         hisi_rf_ws63::upstream_supplicant_temporary_reject_recovery_diagnostic_snapshot();
     let native = hisi_rf_ws63::upstream_supplicant_diagnostic_snapshot();
+    let association_ioctl =
+        hisi_rf_ws63::upstream_supplicant_association_ioctl_diagnostic_snapshot();
     let external_auth_retry =
         hisi_rf_ws63::upstream_supplicant_external_auth_retry_diagnostic_snapshot();
     let event = hisi_rf_ws63::upstream_supplicant_event_diagnostic_snapshot();
@@ -481,6 +483,7 @@ fn write_connect_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) 
     uart.write(b"\r\n");
 
     write_snapshot(uart, b"RFDBG_A5B_CONNECT_NATIVE", &native);
+    write_snapshot(uart, b"RFDBG_A5B_CONNECT_ASSOC_IOCTL", &association_ioctl);
     write_snapshot(
         uart,
         b"RFDBG_A5B_CONNECT_EXT_AUTH_RETRY",
