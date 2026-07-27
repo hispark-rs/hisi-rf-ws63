@@ -1,0 +1,12 @@
+# ROM entry points called directly by Rust/LTO objects.
+#
+# Native archive calls are discovered from their ELF relocations in build.rs.
+# Rust object relocations do not exist yet while the build script runs, so this
+# bounded manifest makes that additional callable surface explicit. Every name
+# must exist in the machine-owned WS63 ROM symbol table.
+uapi_systick_get_ms
+uapi_systick_get_count
+uapi_tcxo_get_us
+uapi_tcxo_delay_us
+uapi_systick_init
+uapi_tcxo_init

@@ -169,6 +169,26 @@ fn collect_callable_rom_symbols(
     callable
 }
 
+fn add_declared_callable_rom_symbols(
+    callable: &mut BTreeSet<String>,
+    source: &Path,
+    rom_symbols: &BTreeMap<String, String>,
+) {
+    let source_text = fs::read_to_string(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+    for name in source_text.lines().map(str::trim) {
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        assert!(valid_symbol(name), "invalid declared ROM call: {name:?}");
+        assert!(
+            rom_symbols.contains_key(name),
+            "declared ROM call is absent from the WS63 symbol table: {name}"
+        );
+        callable.insert(name.to_owned());
+    }
+}
+
 fn append_rom_fallbacks(
     assembly: &mut String,
     rom_symbols: &BTreeMap<String, String>,
@@ -359,6 +379,8 @@ fn main() {
         env::var_os("DEP_WS63_RADIO_SYS_ROM_SYMBOLS")
             .expect("ws63-radio-sys did not export ROM symbols"),
     );
+    let rust_rom_calls = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"))
+        .join("link/ws63-rom-call-symbols.txt");
     let callbacks = PathBuf::from(
         env::var_os("DEP_WS63_RADIO_SYS_ROM_CALLBACKS")
             .expect("ws63-radio-sys did not export ROM callbacks"),
@@ -404,7 +426,8 @@ fn main() {
         }
     }
     census_archives.push(lib_dir.join("librom_callback.a"));
-    let callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
+    let mut callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
+    add_declared_callable_rom_symbols(&mut callable_rom_symbols, &rust_rom_calls, &rom_symbols);
     let contract = out_dir.join("ws63-radio-link-contract.S");
     write_link_contract(
         &contract,
@@ -428,6 +451,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static:+whole-archive=rom_callback");
 
     println!("cargo:rerun-if-changed={}", rom.display());
+    println!("cargo:rerun-if-changed={}", rust_rom_calls.display());
     println!("cargo:rerun-if-changed={}", callbacks.display());
     println!("cargo:rerun-if-changed={}", patch_object.display());
     println!("cargo:rerun-if-changed={}", lib_dir.display());
