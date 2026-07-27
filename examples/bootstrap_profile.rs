@@ -101,7 +101,16 @@ fn main() -> ! {
     }
 
     match result {
-        Ok(_controller) => uart.write(b"RFDBG_BOOTSTRAP_PROFILE_OK\r\n"),
+        Ok(_controller) => {
+            uart.write(b"RFDBG_BOOTSTRAP_PROFILE_OK\r\n");
+            let report = RADIO_STORAGE.report();
+            let diagnostics = hisi_rtos::diagnostics();
+            uart.write(b"A5U_TASK_STACK_ADMISSION_OK bytes=0x");
+            uart.write(&hex8(report.task_stack_bytes.unwrap_or(0) as u32));
+            uart.write(b" reserved=0x");
+            uart.write(&hex8(u32::from(diagnostics.dynamic_reserved)));
+            uart.write(b"\r\n");
+        }
         Err(error) => {
             let diagnostic = error.diagnostic();
             uart.write(b"RFDBG_BOOTSTRAP_PROFILE_ERR code=");

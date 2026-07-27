@@ -897,6 +897,14 @@ pub(crate) fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError
             let available = available.min(u8::MAX as usize) as u32;
             (required << 8) | available
         }
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
+            required,
+            available,
+        } => {
+            let required_kib = (required / 1024).min(u16::MAX as usize) as u32;
+            let available_kib = (available / 1024).min(u16::MAX as usize) as u32;
+            0x8000_0000 | (required_kib << 16) | available_kib
+        }
     }
 }
 
@@ -957,6 +965,19 @@ mod tests {
                 }
             ),
             0x0503
+        );
+    }
+
+    #[test]
+    fn stack_admission_code_retains_required_and_available_kib() {
+        assert_eq!(
+            task_admission_code(
+                hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
+                    required: 144 * 1024,
+                    available: 120 * 1024,
+                }
+            ),
+            0x8090_0078
         );
     }
 

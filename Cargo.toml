@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.25"
+version = "0.1.0-alpha.26"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -33,7 +33,7 @@ hisi-alloc = "0.1.0-alpha.2"
 hisi-storage = "0.1.0-alpha.1"
 hisi-nvs = "0.1.0-alpha.1"
 hisi-rf-core = "=0.1.0-alpha.14"
-hisi-rf-rtos-driver = "0.1.0-alpha.16"
+hisi-rf-rtos-driver = "0.1.0-alpha.17"
 hisi-crypto = { version = "0.1.0-alpha.4", optional = true }
 hisi-crypto-ws63 = { version = "=0.1.0-alpha.3", optional = true, default-features = false }
 ws63-radio-sys = { version = "=0.1.0-alpha.8", default-features = false }
@@ -163,7 +163,7 @@ hisi-riscv-rt = { version = "0.5.6", default-features = false, features = [
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-hisi-rtos = { version = "0.1.0-alpha.12", optional = true }
+hisi-rtos = { version = "0.1.0-alpha.13", optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }

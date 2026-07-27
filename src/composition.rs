@@ -309,15 +309,26 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
     hisi_rf_rtos_driver::require_runtime(
-        hisi_rf_rtos_driver::RuntimeRequirements::V1_3_PORTED_COOPERATIVE,
+        hisi_rf_rtos_driver::RuntimeRequirements::V1_4_PORTED_COOPERATIVE,
     )
     .map_err(InitError::Runtime)?;
     hisi_rf_rtos_driver::current_task().map_err(InitError::Runtime)?;
-    let required = NonZeroUsize::new(P::DYNAMIC_TASKS_REQUIRED).ok_or(InitError::TaskAdmission(
-        hisi_rf_rtos_driver::TaskAdmissionError::Runtime(hisi_rf_rtos_driver::Error::Runtime),
-    ))?;
+    let required_slots =
+        NonZeroUsize::new(P::DYNAMIC_TASKS_REQUIRED).ok_or(InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(hisi_rf_rtos_driver::Error::Runtime),
+        ))?;
+    let stack_bytes =
+        NonZeroUsize::new(P::TASK_STACK_BYTES_PER_TASK).ok_or(InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(hisi_rf_rtos_driver::Error::Runtime),
+        ))?;
+    let required = hisi_rf_rtos_driver::TaskResourceRequirements::new(required_slots, stack_bytes)
+        .ok_or(InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                hisi_rf_rtos_driver::Error::ResourceExhausted,
+            ),
+        ))?;
     let reservation =
-        hisi_rf_rtos_driver::reserve_task_capacity(required).map_err(InitError::TaskAdmission)?;
+        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::TaskAdmission)?;
     let (state, crypto_storage, reservation) = match storage.claim(reservation) {
         Ok(claimed) => claimed,
         Err(reservation) => {
@@ -405,6 +416,18 @@ fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> 
                 DiagnosticTraceKind::ResourceAvailable,
                 available.min(u32::MAX as usize) as u32,
             ),
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
+            required,
+            available,
+        } => BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_a000 | code)
+            .with_trace(
+                DiagnosticTraceKind::ResourceRequired,
+                required.min(u32::MAX as usize) as u32,
+            )
+            .with_trace(
+                DiagnosticTraceKind::ResourceAvailable,
+                available.min(u32::MAX as usize) as u32,
+            ),
     };
     backend = backend
         .with_stage(DiagnosticStage::Runtime)
@@ -446,6 +469,29 @@ mod tests {
         assert_eq!(
             diagnostic.trace().get(1).map(|entry| entry.value()),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn task_stack_admission_error_reports_exact_bytes_without_secrets() {
+        let diagnostic = InitError::TaskAdmission(
+            hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
+                required: 144 * 1024,
+                available: 120 * 1024,
+            },
+        )
+        .diagnostic();
+
+        assert_eq!(diagnostic.code(), DiagnosticCode::ResourceUnavailable);
+        assert_eq!(diagnostic.stage(), DiagnosticStage::Runtime);
+        assert_eq!(diagnostic.action(), RecoveryAction::ProvideResources);
+        assert_eq!(
+            diagnostic.trace().get(0).map(|entry| entry.value()),
+            Some(144 * 1024)
+        );
+        assert_eq!(
+            diagnostic.trace().get(1).map(|entry| entry.value()),
+            Some(120 * 1024)
         );
     }
 

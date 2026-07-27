@@ -9,7 +9,7 @@ use static_cell::StaticCell;
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v3";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v4";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
@@ -26,6 +26,8 @@ pub trait Profile: sealed::Sealed {
     const SECURITY: &'static str;
     /// Dynamic task slots observed for this profile's pinned payload.
     const DYNAMIC_TASKS_REQUIRED: usize;
+    /// Stack bytes reserved for every dynamic task in this profile.
+    const TASK_STACK_BYTES_PER_TASK: usize;
 }
 
 /// Upstream-hostap WPA2-Personal with the smoltcp L2 adapter.
@@ -36,6 +38,7 @@ impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
+    const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -46,6 +49,7 @@ impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
+    const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
@@ -69,10 +73,9 @@ pub type SelectedProfile = WifiWpa3Smoltcp;
 /// Caller-owned static storage for one WS63 radio instance.
 ///
 /// This currently owns the bounded control/event state, mandatory radio runner,
-/// and SPACC DMA scratch. Packet RAM remains linker-owned, while task stacks and
-/// the supplicant arena remain runtime-owned and are reported as uncalibrated
-/// rather than hidden in this type. Those resources move here only after their
-/// ownership contracts can be enforced before initialization.
+/// and SPACC DMA scratch. Packet RAM remains linker-owned. Task stacks are
+/// atomically reserved through the runtime capability before hardware startup;
+/// the remaining shared supplicant arena is still linker-owned and uncalibrated.
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
     runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
@@ -204,8 +207,8 @@ impl ResourceReport {
             radio_backend: "hisi-rf-ws63",
             supplicant_backend: "hostap-2.11-native",
             crypto_backend: "hisi-crypto-ws63-mixed",
-            runtime_contract: "hisi-rf-rtos-driver/v1.3-ported-cooperative",
-            task_admission: "owner-bound-reservation",
+            runtime_contract: "hisi-rf-rtos-driver/v1.4-ported-cooperative",
+            task_admission: "owner-bound-slot-stack-reservation",
             event_capacity: EVENTS,
             caller_owned_bytes: core::mem::size_of::<Storage<P, EVENTS>>(),
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
@@ -213,8 +216,8 @@ impl ResourceReport {
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
             main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
-            runtime_internal_tasks: None,
-            task_stack_bytes: None,
+            runtime_internal_tasks: Some(2),
+            task_stack_bytes: Some(P::DYNAMIC_TASKS_REQUIRED * P::TASK_STACK_BYTES_PER_TASK),
             supplicant_arena_bytes: None,
             flash_bytes: None,
             runtime_resources_calibrated: false,
@@ -236,7 +239,7 @@ impl ResourceReport {
                 "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
-                "\"runtime_internal_tasks\":null,\"task_stack_bytes\":null,",
+                "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
                 "\"supplicant_arena_bytes\":null,\"flash_bytes\":null,",
                 "\"runtime_resources_calibrated\":{}}}"
             ),
@@ -258,6 +261,8 @@ impl ResourceReport {
             self.linker_packet_ram_bytes,
             self.main_stack_bytes_required,
             self.dynamic_tasks_required,
+            self.runtime_internal_tasks.unwrap_or(0),
+            self.task_stack_bytes.unwrap_or(0),
             self.runtime_resources_calibrated,
         )
     }
@@ -301,7 +306,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v3");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v4");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -309,9 +314,9 @@ mod tests {
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.main_stack_bytes_required, 0x8000);
         assert_eq!(report.dynamic_tasks_required, 6);
-        assert_eq!(report.task_admission, "owner-bound-reservation");
-        assert_eq!(report.runtime_internal_tasks, None);
-        assert_eq!(report.task_stack_bytes, None);
+        assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
+        assert_eq!(report.runtime_internal_tasks, Some(2));
+        assert_eq!(report.task_stack_bytes, Some(6 * 24 * 1024));
         assert_eq!(report.supplicant_arena_bytes, None);
         assert_eq!(report.flash_bytes, None);
         assert!(!report.runtime_resources_calibrated);
@@ -326,7 +331,7 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v3\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v4\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -336,7 +341,12 @@ mod tests {
         assert!(
             output
                 .as_str()
-                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.3-ported-cooperative\"")
+                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.4-ported-cooperative\"")
+        );
+        assert!(
+            output
+                .as_str()
+                .contains("\"runtime_internal_tasks\":2,\"task_stack_bytes\":147456")
         );
         assert!(
             output
