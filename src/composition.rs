@@ -8,17 +8,18 @@ use hisi_rf_core::{
     RadioConfig, WifiParts,
 };
 
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 use hisi_rf_core::{
     IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalRunnerDiagnostics,
-    IncrementalWaitError, IncrementalWaitIntent, IncrementalWaitPlatform, RadioResources, WaitSet,
-    WifiBackend, WorkBudget,
+    IncrementalWaitError, IncrementalWaitIntent, IncrementalWaitPlatform, WaitSet, WorkBudget,
 };
+#[cfg(feature = "incremental-backend-experiment")]
+use hisi_rf_core::{RadioResources, WifiBackend};
 
 #[cfg(feature = "incremental-backend-experiment")]
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 use crate::hisi_rf_backend::Ws63WifiBackend;
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
 use crate::profile::{ActiveProfile, Profile, Storage};
@@ -106,12 +107,13 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
 /// can be split or assigned a measured worst-case latency.
 #[cfg(feature = "incremental-backend-experiment")]
 pub struct IncrementalRadioController<P: Profile + 'static, const EVENTS: usize> {
+    #[cfg_attr(not(feature = "incremental-embassy-wait"), allow(dead_code))]
     inner: CoreIncrementalRadioController<EVENTS>,
     _profile: core::marker::PhantomData<P>,
 }
 
 /// Wi-Fi handles and the explicit A5B bounded runner.
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 pub struct IncrementalRadioParts<const EVENTS: usize> {
     /// Existing async Wi-Fi controller and WS63 L2 device.
     pub wifi: WifiParts<Ws63Device, EVENTS>,
@@ -120,13 +122,13 @@ pub struct IncrementalRadioParts<const EVENTS: usize> {
 }
 
 /// Opaque WS63 runner over the owned initialized backend.
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 pub struct IncrementalRadioRunner<const EVENTS: usize> {
     inner: hisi_rf_core::IncrementalRadioRunner<OwnedIncrementalSupplicantBackend, EVENTS>,
     platform: Ws63IncrementalWaitPlatform,
 }
 
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EVENTS> {
     /// Split into the stable Wi-Fi handles and an opt-in bounded runner.
     pub fn split(self, budget: WorkBudget) -> IncrementalRadioParts<EVENTS> {
@@ -142,7 +144,7 @@ impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EV
     }
 }
 
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     /// Advance at most one bounded driver action.
     pub fn run_once(
@@ -248,10 +250,11 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
 ///
 /// This function is intentionally named after its blocking prerequisite. It
 /// does not claim that vendor initialization is incremental; only operations
-/// after the returned controller is split use [`WorkBudget`]. A bootstrap
-/// failure consumes the one-shot storage and resources because vendor tasks
-/// may already own the installed task reservation; retry with fresh firmware
-/// state rather than reusing this storage.
+/// after the returned controller is split use
+/// [`hisi_rf_core::WorkBudget`]. A bootstrap failure consumes the one-shot
+/// storage and resources because vendor tasks may already own the installed
+/// task reservation; retry with fresh firmware state rather than reusing this
+/// storage.
 #[cfg(feature = "incremental-backend-experiment")]
 pub fn init_incremental_after_blocking_bootstrap<
     P: Profile + ActiveProfile + 'static,

@@ -217,6 +217,18 @@ pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
     upstream_supplicant::diagnostic_snapshot()
 }
 
+/// Return secret-free scan queue and callback diagnostics.
+#[cfg(all(feature = "upstream-supplicant-port", target_arch = "riscv32"))]
+#[doc(hidden)]
+pub fn upstream_supplicant_scan_diagnostic_snapshot() -> [u32; 10] {
+    let native = upstream_supplicant::scan_diagnostic_snapshot();
+    let wifi = wifi::scan_diagnostic_snapshot();
+    [
+        native[0], native[1], native[2], native[3], native[4], native[5], wifi[0], wifi[1],
+        wifi[2], wifi[3],
+    ]
+}
+
 /// Return public IEEE 802.11 Authentication header diagnostics.
 ///
 /// The snapshot intentionally excludes frame bodies and cryptographic payloads.
@@ -372,10 +384,11 @@ mod composition;
 #[cfg(all(
     feature = "net",
     feature = "incremental-backend-experiment",
+    feature = "incremental-embassy-wait",
     feature = "upstream-supplicant-port"
 ))]
 mod incremental_wait;
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 #[doc(hidden)]
 pub use incremental_wait::Ws63IncrementalWaitDiagnostics;
 #[cfg(all(
@@ -388,10 +401,13 @@ mod profile;
     feature = "incremental-backend-experiment",
     feature = "upstream-supplicant-port"
 ))]
-pub use composition::{
-    IncrementalRadioController, IncrementalRadioParts, IncrementalRadioRunner,
-    init_incremental_after_blocking_bootstrap,
-};
+pub use composition::{IncrementalRadioController, init_incremental_after_blocking_bootstrap};
+#[cfg(all(
+    feature = "net",
+    feature = "incremental-embassy-wait",
+    feature = "upstream-supplicant-port"
+))]
+pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
 #[cfg(all(
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")

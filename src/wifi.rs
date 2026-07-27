@@ -1483,6 +1483,26 @@ fn finish_scan() {
 }
 
 #[cfg(target_arch = "riscv32")]
+pub(crate) fn scan_diagnostic_snapshot() -> [u32; 4] {
+    critical_section::with(|cs| {
+        let state = SCAN_STATE.borrow(cs);
+        let status = match state.status.get() {
+            ScanStatus::Success => 0,
+            ScanStatus::Failed => 1,
+            ScanStatus::Refused => 2,
+            ScanStatus::Timeout => 3,
+            ScanStatus::Unknown(value) => value,
+        };
+        [
+            u32::from(state.active.get()),
+            u32::from(state.done.get()),
+            state.count.get() as u32,
+            status,
+        ]
+    })
+}
+
+#[cfg(target_arch = "riscv32")]
 fn finish_connection() {
     critical_section::with(|cs| CONNECTION_STATE.borrow(cs).active.set(false));
 }

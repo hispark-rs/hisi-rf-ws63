@@ -117,12 +117,12 @@ pub fn rx_push(frame: &[u8]) {
         true
     });
     if queued {
-        #[cfg(feature = "incremental-backend-experiment")]
+        #[cfg(feature = "incremental-embassy-wait")]
         crate::incremental_wait::signal_l2_rx();
     }
 }
 
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
 pub(crate) fn rx_ready() -> bool {
     with_bridge(|bridge| bridge.rx_count != 0)
 }

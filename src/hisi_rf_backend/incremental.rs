@@ -595,7 +595,26 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             return self.clear_with_error(error);
         }
 
-        let wait = WaitSet::BACKEND.union(WaitSet::TIMER);
+        let scan_work_pending = if is_scan {
+            let cache_pending = self.port.scan_cache_pending();
+            let active = self.active_mut(id)?;
+            cache_pending
+                || active
+                    .scan_total
+                    .is_some_and(|total| active.scan_seen < total)
+        } else {
+            false
+        };
+        // A full output grant means the native output ring may still hold
+        // work even though no new callback edge will arrive. Scan work already
+        // owned by this backend is level-ready for the same reason.
+        let output_work_pending =
+            result.output_pending != 0 && consumed == budget.max_events().get();
+        let wait = if made_progress && (scan_work_pending || output_work_pending) {
+            WaitSet::empty()
+        } else {
+            WaitSet::BACKEND.union(WaitSet::TIMER)
+        };
         let terminal = !matches!(outcome, OperationOutcome::Continue);
         let disposition = match outcome {
             OperationOutcome::Complete(completion) => PollDisposition::Complete(completion),
@@ -948,7 +967,7 @@ mod tests {
         assert_eq!(report.consumed_events(), 2);
         assert!(matches!(
             report.disposition(),
-            PollDisposition::BudgetExhausted(wait) if wait.contains(WaitSet::BACKEND)
+            PollDisposition::BudgetExhausted(wait) if wait.is_empty()
         ));
         drop(backend);
         assert_eq!(port.next_event, 0);
@@ -1016,7 +1035,7 @@ mod tests {
         assert_eq!(first.consumed_events(), 2);
         assert!(matches!(
             first.disposition(),
-            PollDisposition::BudgetExhausted(_)
+            PollDisposition::BudgetExhausted(wait) if wait.is_empty()
         ));
 
         let second = backend

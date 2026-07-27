@@ -34,6 +34,12 @@ static EAPOL_PENDING: AtomicBool = AtomicBool::new(false);
 static MGMT_RX_QUEUE: MgmtRxQueue = MgmtRxQueue::new();
 static NATIVE_SCAN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SCAN_EVENT_QUEUE: ScanEventQueue = ScanEventQueue::new();
+
+fn notify_runner() {
+    let _ = RUNNER_WAKE.up();
+    #[cfg(feature = "incremental-embassy-wait")]
+    crate::incremental_wait::signal_backend();
+}
 static LINK_EVENT_QUEUE: LinkEventQueue = LinkEventQueue::new();
 static EXTERNAL_AUTH_QUEUE: ExternalAuthQueue = ExternalAuthQueue::new();
 static DIAG_SCAN_STARTS: AtomicU32 = AtomicU32::new(0);
@@ -1721,7 +1727,7 @@ pub(crate) fn enqueue_mgmt_rx(frequency_mhz: u32, rssi_dbm: i32, frame: &[u8]) -
             DIAG_AUTH_RX_LAST.observe();
         }
         DIAG_MGMT_EVENTS.fetch_add(1, Ordering::Relaxed);
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1764,7 +1770,7 @@ pub(crate) fn enqueue_external_auth(
         if action == 0 {
             DIAG_EXTERNAL_AUTH_STARTED.observe();
         }
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1808,7 +1814,7 @@ pub(crate) fn enqueue_scan_result(
     );
     if queued {
         DIAG_SCAN_RESULTS.fetch_add(1, Ordering::Relaxed);
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1823,7 +1829,7 @@ pub(crate) fn enqueue_scan_done(status: i32) -> bool {
     let queued = SCAN_EVENT_QUEUE.enqueue_done(status);
     if queued {
         DIAG_SCAN_DONE.fetch_add(1, Ordering::Relaxed);
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1875,7 +1881,7 @@ pub(crate) fn enqueue_associate_result(
     if queued {
         DIAG_ASSOCIATE_EVENTS.fetch_add(1, Ordering::Relaxed);
         DIAG_ASSOCIATION_EVENT.observe();
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1898,7 +1904,7 @@ pub(crate) fn enqueue_disconnect(reason: u16, ies: &[u8]) -> bool {
         &[],
     );
     if queued {
-        let _ = RUNNER_WAKE.up();
+        notify_runner();
     }
     queued
 }
@@ -1906,7 +1912,7 @@ pub(crate) fn enqueue_disconnect(reason: u16, ies: &[u8]) -> bool {
 unsafe extern "C" fn eapol_notify(_: *mut c_void, _: *mut c_void) {
     DIAG_EAPOL_EVENTS.fetch_add(1, Ordering::Relaxed);
     EAPOL_PENDING.store(true, Ordering::Release);
-    let _ = RUNNER_WAKE.up();
+    notify_runner();
 }
 
 /// Install the native OS/eloop hooks after `hisi-rtos` has installed its RF
@@ -2495,6 +2501,18 @@ pub(crate) fn diagnostic_snapshot() -> [u32; 11] {
     ]
 }
 
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn scan_diagnostic_snapshot() -> [u32; 6] {
+    [
+        DIAG_SCAN_STARTS.load(Ordering::Acquire),
+        DIAG_SCAN_RESULTS.load(Ordering::Acquire),
+        DIAG_SCAN_DONE.load(Ordering::Acquire),
+        u32::from(NATIVE_SCAN_ACTIVE.load(Ordering::Acquire)),
+        u32::from(SCAN_EVENT_QUEUE.has_pending()),
+        SCAN_EVENT_QUEUE.dropped.load(Ordering::Acquire),
+    ]
+}
+
 pub(crate) fn authentication_diagnostic_snapshot() -> [u32; 12] {
     let tx = DIAG_TX_AUTH.snapshot();
     let rx = DIAG_RX_AUTH.snapshot();
@@ -2796,9 +2814,7 @@ unsafe extern "C" fn wait_for_work(_: *mut c_void, timeout_ms: u32) -> c_int {
 }
 
 unsafe extern "C" fn wake_runner(_: *mut c_void) {
-    let _ = RUNNER_WAKE.up();
-    #[cfg(feature = "incremental-backend-experiment")]
-    crate::incremental_wait::signal_backend();
+    notify_runner();
 }
 
 #[cfg(test)]

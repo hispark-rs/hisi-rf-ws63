@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a credential-free `incremental_scan_profile` HIL fixture that exercises
+  the production composition root, RTOS/Embassy wait bridge, bounded
+  incremental initialize/scan runner, work-budget continuation, and
+  secret-free diagnostics on real WS63 silicon.
+
+### Changed
+
+- Split firmware-example and Embassy wait support into explicit features so
+  enabling the incremental backend contract alone does not install a
+  process-wide executor or time driver.
+- Treat locally owned scan/output work as immediately runnable instead of
+  waiting for a callback edge that may never recur after a bounded batch.
+
+### Fixed
+
+- Wake both the legacy runtime semaphore and the incremental wait bridge from
+  scan, management, association, disconnect, and EAPOL callbacks.
+- Restore WS63 mask-ROM fallbacks to linker-script `PROVIDE` definitions.
+  Strong assembler aliases can be misinterpreted as PC-relative
+  `R_RISCV_CALL_PLT` displacements when LTO preserves call relocations.
+
 ## [0.1.0-alpha.24] - 2026-07-26
 
 ### Added

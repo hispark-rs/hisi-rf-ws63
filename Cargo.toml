@@ -15,6 +15,18 @@ required-features = [
     "wpa2-personal",
     "incremental-backend-experiment",
     "bootstrap-stage-diag",
+    "firmware-example",
+]
+
+[[example]]
+name = "incremental_scan_profile"
+path = "examples/incremental_scan_profile.rs"
+required-features = [
+    "wpa2-personal",
+    "incremental-backend-experiment",
+    "incremental-embassy-wait",
+    "bootstrap-stage-diag",
+    "firmware-example",
 ]
 
 [dependencies]
@@ -112,9 +124,21 @@ rf-queue-guard = []
 incremental-backend-experiment = [
     "net",
     "upstream-supplicant-port",
+    "hisi-rf-core/incremental-backend-experiment",
+]
+# Firmware-example support without selecting an async executor or time driver.
+# Keeping this separate preserves the blocking bootstrap as a minimal HIL
+# baseline even when the crate also ships an Embassy-backed incremental fixture.
+firmware-example = ["dep:hisi-rtos"]
+# WS63 async wait bridge for the incremental runner. This is explicit so Cargo
+# feature unification cannot pull the process-wide Embassy time driver into
+# unrelated firmware examples.
+incremental-embassy-wait = [
+    "incremental-backend-experiment",
+    "firmware-example",
     "dep:embassy-sync",
     "dep:embassy-time",
-    "hisi-rf-core/incremental-backend-experiment",
+    "hisi-rtos/embassy",
 ]
 
 [build-dependencies]
@@ -125,6 +149,7 @@ object = { version = "0.37", default-features = false, features = ["archive", "r
 # Keep this off host unit-test builds: riscv-rt's startup assembly is not valid
 # for the macOS/Linux host assembler.
 [target.'cfg(target_arch = "riscv32")'.dev-dependencies]
+embassy-executor = { version = "0.10", features = ["platform-riscv32", "executor-thread"] }
 hisi-riscv-rt = { version = "0.5.6", default-features = false, features = [
     "chip-ws63",
     "bundled-memory-x",
@@ -132,8 +157,10 @@ hisi-riscv-rt = { version = "0.5.6", default-features = false, features = [
     "ws63-bgle-32k",
     "ws63-radio-main-stack-32k",
 ] }
-hisi-rtos = { version = "0.1.0-alpha.10", features = ["embassy"] }
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
+
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+hisi-rtos = { version = "0.1.0-alpha.12", optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }
