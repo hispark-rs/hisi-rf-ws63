@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.25] - 2026-07-28
+
 ### Added
 
 - Added a credential-free `incremental_scan_profile` HIL fixture that exercises
@@ -24,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the exact `ws63-radio-sys` dependency to `0.1.0-alpha.8`, which
+  carries the association status-30 recovery diagnostics used by this release.
 - Tightened the opt-in incremental connect fixture's per-step work budget from
   5 seconds to 100 milliseconds after a 20-reset transition-mode HIL matrix
   completed 20/20 with a 38 ms maximum runner step. Added secret-free
