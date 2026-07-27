@@ -14,6 +14,7 @@ use hisi_rf_core::{
     PollDisposition, ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig, WaitSet,
     WakeReason, WorkBudget, WorkReport,
 };
+use portable_atomic::{AtomicU32, Ordering};
 use ws63_radio_sys::supplicant::{Event, PollResult};
 
 use super::{
@@ -25,6 +26,17 @@ use crate::upstream_supplicant::NativeSupplicant;
 const ERROR_STALE_OPERATION: u32 = 0x5732_b002;
 const ERROR_WORK_BUDGET: u32 = 0x5732_b003;
 const ERROR_OPERATION_TIMEOUT: u32 = 0x5732_b004;
+const FIRST_EAPOL_RECONNECT_DELAY_US: u64 = 1_000_000;
+// The WS63 vendor hostap fork defers same-SSID reconnect by 5 ms after a
+// disconnect event (`events.c`, CONFIG_SSID_RECONNECT). Match that observed
+// cleanup window instead of resubmitting from the disconnect callback turn.
+const RECONNECT_SETTLE_US: u64 = 5_000;
+const FIRST_EAPOL_TIMEOUT_MASK: u32 = 0x0000_000f;
+const FIRST_EAPOL_RETRY_MASK: u32 = 0x00ff_0000;
+const FIRST_EAPOL_RETRY_PENDING: u32 = 1 << 24;
+
+static DIAG_FIRST_EAPOL_RECONNECTS: AtomicU32 = AtomicU32::new(0);
+static DIAG_EXTERNAL_AUTH_RECONNECTS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperationKind {
@@ -49,13 +61,18 @@ struct ActiveOperation {
     deadline_us: u64,
     backend_deadline_us: Option<u64>,
     cancellation_requested: bool,
+    first_eapol_reconnect_deadline_us: Option<u64>,
+    first_eapol_reconnect_submitted: bool,
+    external_auth_reconnect_deadline_us: Option<u64>,
+    external_auth_reconnect_submitted: bool,
+    reconnect_after_disconnect: bool,
+    reconnect_submit_deadline_us: Option<u64>,
     last_event_kind: u8,
     last_disconnect_status: Option<i32>,
     scan_total: Option<usize>,
     scan_seen: usize,
     scan_written: usize,
     scan_truncated: bool,
-    scan_timed_out: bool,
 }
 
 impl ActiveOperation {
@@ -82,13 +99,18 @@ impl ActiveOperation {
             deadline_us: now_us.saturating_add(u64::from(timeout_ms).saturating_mul(1_000)),
             backend_deadline_us: None,
             cancellation_requested: false,
+            first_eapol_reconnect_deadline_us: None,
+            first_eapol_reconnect_submitted: false,
+            external_auth_reconnect_deadline_us: None,
+            external_auth_reconnect_submitted: false,
+            reconnect_after_disconnect: false,
+            reconnect_submit_deadline_us: None,
             last_event_kind: 0,
             last_disconnect_status: None,
             scan_total: None,
             scan_seen: 0,
             scan_written: 0,
             scan_truncated: false,
-            scan_timed_out: false,
         }
     }
 
@@ -101,8 +123,86 @@ impl ActiveOperation {
     }
 
     fn next_deadline_us(&self) -> u64 {
-        self.backend_deadline_us
-            .map_or(self.deadline_us, |deadline| deadline.min(self.deadline_us))
+        let deadline = self
+            .backend_deadline_us
+            .map_or(self.deadline_us, |deadline| deadline.min(self.deadline_us));
+        let deadline = self
+            .first_eapol_reconnect_deadline_us
+            .map_or(deadline, |reconnect| reconnect.min(deadline));
+        let deadline = self
+            .external_auth_reconnect_deadline_us
+            .map_or(deadline, |reconnect| reconnect.min(deadline));
+        self.reconnect_submit_deadline_us
+            .map_or(deadline, |reconnect| reconnect.min(deadline))
+    }
+
+    fn should_submit_first_eapol_reconnect(&mut self, recovery: u32, now_us: u64) -> bool {
+        if !matches!(self.kind, OperationKind::Connect(_))
+            || self.cancellation_requested
+            || self.first_eapol_reconnect_submitted
+            || recovery & FIRST_EAPOL_TIMEOUT_MASK == 0
+            || recovery & FIRST_EAPOL_RETRY_MASK == 0
+            || recovery & FIRST_EAPOL_RETRY_PENDING != 0
+        {
+            return false;
+        }
+        let deadline = self
+            .first_eapol_reconnect_deadline_us
+            .get_or_insert_with(|| now_us.saturating_add(FIRST_EAPOL_RECONNECT_DELAY_US));
+        if now_us < *deadline {
+            return false;
+        }
+        self.first_eapol_reconnect_submitted = true;
+        self.first_eapol_reconnect_deadline_us = None;
+        true
+    }
+
+    fn should_submit_external_auth_reconnect(&mut self, stalled: bool, now_us: u64) -> bool {
+        if !matches!(self.kind, OperationKind::Connect(_))
+            || self.cancellation_requested
+            || self.external_auth_reconnect_submitted
+        {
+            return false;
+        }
+        if !stalled {
+            self.external_auth_reconnect_deadline_us = None;
+            return false;
+        }
+        let deadline = self
+            .external_auth_reconnect_deadline_us
+            .get_or_insert_with(|| now_us.saturating_add(FIRST_EAPOL_RECONNECT_DELAY_US));
+        if now_us < *deadline {
+            return false;
+        }
+        self.external_auth_reconnect_submitted = true;
+        self.external_auth_reconnect_deadline_us = None;
+        true
+    }
+
+    fn request_reconnect_after_disconnect(&mut self) {
+        self.reconnect_after_disconnect = true;
+    }
+
+    fn observe_reconnect_disconnect(&mut self, kind: u8, now_us: u64) {
+        if self.reconnect_after_disconnect
+            && !self.cancellation_requested
+            && classify_native_connect_event(kind) == NativeConnectEvent::Disconnected
+        {
+            self.reconnect_after_disconnect = false;
+            self.reconnect_submit_deadline_us = Some(now_us.saturating_add(RECONNECT_SETTLE_US));
+        }
+    }
+
+    fn take_reconnect_when_settled(&mut self, now_us: u64) -> bool {
+        if self
+            .reconnect_submit_deadline_us
+            .is_some_and(|deadline| now_us >= deadline)
+        {
+            self.reconnect_submit_deadline_us = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn observe(&mut self, kind: u8, status: i32) -> OperationOutcome {
@@ -156,6 +256,8 @@ pub(crate) trait SupplicantPort {
     fn disconnect(&mut self) -> Result<(), BackendError>;
     fn poll(&mut self, budget: NonZeroU32) -> Result<PollResult, BackendError>;
     fn next_event(&mut self) -> Result<Option<Event>, BackendError>;
+    fn recovery_diagnostic_word(&self) -> u32;
+    fn external_auth_retry_stalled(&self) -> bool;
 }
 
 impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
@@ -197,6 +299,14 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
 
     fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
         (**self).next_event()
+    }
+
+    fn recovery_diagnostic_word(&self) -> u32 {
+        (**self).recovery_diagnostic_word()
+    }
+
+    fn external_auth_retry_stalled(&self) -> bool {
+        (**self).external_auth_retry_stalled()
     }
 }
 
@@ -283,6 +393,23 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
             .next_event()
             .map_err(map_native_error)
     }
+
+    fn recovery_diagnostic_word(&self) -> u32 {
+        crate::upstream_supplicant::recovery_diagnostic_word()
+    }
+
+    fn external_auth_retry_stalled(&self) -> bool {
+        self.supplicant
+            .as_ref()
+            .is_some_and(NativeSupplicant::external_auth_retry_stalled)
+    }
+}
+
+pub(crate) fn reconnect_diagnostic_snapshot() -> [u32; 2] {
+    [
+        DIAG_FIRST_EAPOL_RECONNECTS.load(Ordering::Acquire),
+        DIAG_EXTERNAL_AUTH_RECONNECTS.load(Ordering::Acquire),
+    ]
 }
 
 trait MonotonicClock {
@@ -454,24 +581,6 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             )
             .ok_or_else(|| operation_error(ERROR_WORK_BUDGET));
         }
-        let timeout = {
-            let active = self.active_mut(id)?;
-            if started_us >= active.deadline_us {
-                if matches!(active.kind, OperationKind::Scan) {
-                    active.cancellation_requested = true;
-                    active.scan_timed_out = true;
-                    None
-                } else {
-                    Some(timeout_error(active))
-                }
-            } else {
-                None
-            }
-        };
-        if let Some(error) = timeout {
-            return self.clear_with_error(error);
-        }
-
         let event_budget = u32::from(budget.max_events().get());
         let result = match self
             .port
@@ -497,7 +606,13 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             };
             consumed += 1;
             made_progress = true;
-            outcome = self.active_mut(id)?.observe(event.kind, event.status);
+            {
+                let now_us = self.clock.now_us();
+                let active = self.active_mut(id)?;
+                let outcome_from_event = active.observe(event.kind, event.status);
+                active.observe_reconnect_disconnect(event.kind, now_us);
+                outcome = outcome_from_event;
+            }
             if !matches!(outcome, OperationOutcome::Continue) {
                 break;
             }
@@ -514,15 +629,7 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             }
 
             if !self.port.scan_cache_pending() {
-                let (cancelled, timed_out) = {
-                    let active = self.active_mut(id)?;
-                    (active.cancellation_requested, active.scan_timed_out)
-                };
-                if timed_out {
-                    let error = timeout_error(self.active_mut(id)?);
-                    self.active = None;
-                    return Err(error);
-                }
+                let cancelled = self.active_mut(id)?.cancellation_requested;
                 if cancelled {
                     made_progress = true;
                     outcome = OperationOutcome::Cancelled;
@@ -569,30 +676,71 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             }
         }
 
-        let finished_us = self.clock.now_us();
+        if matches!(outcome, OperationOutcome::Continue) {
+            let now_us = self.clock.now_us();
+            if self.active_mut(id)?.take_reconnect_when_settled(now_us) {
+                if let Err(error) = self.port.connect() {
+                    return self.clear_with_error(error);
+                }
+                made_progress = true;
+            }
+
+            let recovery = self.port.recovery_diagnostic_word();
+            let external_auth_stalled = self.port.external_auth_retry_stalled();
+            let now_us = self.clock.now_us();
+            let (submit_first_eapol, submit_external_auth) = {
+                let active = self.active_mut(id)?;
+                (
+                    active.should_submit_first_eapol_reconnect(recovery, now_us),
+                    active.should_submit_external_auth_reconnect(external_auth_stalled, now_us),
+                )
+            };
+            if submit_first_eapol || submit_external_auth {
+                if let Err(error) = self.port.disconnect() {
+                    return self.clear_with_error(error);
+                }
+                self.active_mut(id)?.request_reconnect_after_disconnect();
+                if submit_first_eapol {
+                    DIAG_FIRST_EAPOL_RECONNECTS.fetch_add(1, Ordering::Relaxed);
+                }
+                if submit_external_auth {
+                    DIAG_EXTERNAL_AUTH_RECONNECTS.fetch_add(1, Ordering::Relaxed);
+                }
+                made_progress = true;
+            }
+        }
+
+        let mut finished_us = self.clock.now_us();
+        // Linearize scan completion against its timeout as late as possible.
+        // The vendor callback can publish `done` after the first `poll_scan`
+        // snapshot but before this deadline check. A final snapshot makes a
+        // completion published before this point win; a later callback belongs
+        // after the operation's timeout boundary.
+        if is_scan
+            && matches!(outcome, OperationOutcome::Continue)
+            && finished_us >= self.active_mut(id)?.deadline_us
+            && self.active_mut(id)?.scan_total.is_none()
+        {
+            let total = match self.port.poll_scan() {
+                Ok(total) => total,
+                Err(error) => return self.clear_with_error(error),
+            };
+            if let Some(total) = total {
+                self.active_mut(id)?.scan_total = Some(total);
+                made_progress = true;
+                finished_us = self.clock.now_us();
+                if total == 0 && !self.port.scan_cache_pending() {
+                    outcome =
+                        OperationOutcome::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                            count: 0,
+                            truncated: false,
+                        }));
+                }
+            }
+        }
         let elapsed = finished_us.wrapping_sub(started_us);
         if elapsed > u64::from(budget.max_time_us().get()) || elapsed > u64::from(u32::MAX) {
             return self.clear_with_error(operation_error(ERROR_WORK_BUDGET));
-        }
-
-        let timeout = {
-            let active = self.active_mut(id)?;
-            active.backend_deadline_us = (result.next_deadline_ms != u64::MAX)
-                .then(|| result.next_deadline_ms.saturating_mul(1_000));
-            if finished_us >= active.deadline_us && matches!(outcome, OperationOutcome::Continue) {
-                if matches!(active.kind, OperationKind::Scan) {
-                    active.cancellation_requested = true;
-                    active.scan_timed_out = true;
-                    None
-                } else {
-                    Some(timeout_error(active))
-                }
-            } else {
-                None
-            }
-        };
-        if let Some(error) = timeout {
-            return self.clear_with_error(error);
         }
 
         let scan_work_pending = if is_scan {
@@ -605,6 +753,23 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
         } else {
             false
         };
+        let timeout = {
+            let active = self.active_mut(id)?;
+            active.backend_deadline_us = (result.next_deadline_ms != u64::MAX)
+                .then(|| result.next_deadline_ms.saturating_mul(1_000));
+            if finished_us >= active.deadline_us
+                && matches!(outcome, OperationOutcome::Continue)
+                && !(is_scan && made_progress && scan_work_pending)
+            {
+                Some(timeout_error(active))
+            } else {
+                None
+            }
+        };
+        if let Some(error) = timeout {
+            return self.clear_with_error(error);
+        }
+
         // A full output grant means the native output ring may still hold
         // work even though no new callback edge will arrive. Scan work already
         // owned by this backend is level-ready for the same reason.
@@ -727,7 +892,7 @@ fn timeout_error(active: &ActiveOperation) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hisi_rf_core::{OperationTracker, WifiConfig};
+    use hisi_rf_core::{OperationTracker, Passphrase, SaePwe, WifiConfig};
     use ws63_radio_sys::supplicant::{ABI_VERSION, EVENT_DATA_LEN};
 
     struct FakePort {
@@ -737,9 +902,14 @@ mod tests {
         disconnect_calls: u8,
         scan_results: [Option<ScanResult>; 3],
         scan_total: Option<usize>,
+        scan_poll_calls: u8,
+        scan_complete_on_poll: u8,
         scan_cache_pending: bool,
         scan_start_calls: u8,
         scan_cancel_calls: u8,
+        connect_calls: u8,
+        recovery_diagnostic_word: u32,
+        external_auth_retry_stalled: bool,
     }
 
     impl FakePort {
@@ -751,9 +921,14 @@ mod tests {
                 disconnect_calls: 0,
                 scan_results: [None; 3],
                 scan_total: None,
+                scan_poll_calls: 0,
+                scan_complete_on_poll: 0,
                 scan_cache_pending: false,
                 scan_start_calls: 0,
                 scan_cancel_calls: 0,
+                connect_calls: 0,
+                recovery_diagnostic_word: 0,
+                external_auth_retry_stalled: false,
             }
         }
     }
@@ -765,6 +940,11 @@ mod tests {
         }
 
         fn poll_scan(&mut self) -> Result<Option<usize>, BackendError> {
+            self.scan_poll_calls += 1;
+            if self.scan_complete_on_poll != 0 && self.scan_poll_calls < self.scan_complete_on_poll
+            {
+                return Ok(None);
+            }
             Ok(self.scan_total)
         }
 
@@ -786,6 +966,7 @@ mod tests {
         }
 
         fn connect(&mut self) -> Result<(), BackendError> {
+            self.connect_calls += 1;
             Ok(())
         }
 
@@ -802,6 +983,14 @@ mod tests {
             let event = self.events.get(self.next_event).copied().flatten();
             self.next_event += 1;
             Ok(event)
+        }
+
+        fn recovery_diagnostic_word(&self) -> u32 {
+            self.recovery_diagnostic_word
+        }
+
+        fn external_auth_retry_stalled(&self) -> bool {
+            self.external_auth_retry_stalled
         }
     }
 
@@ -833,6 +1022,24 @@ mod tests {
             security: Security::Open,
             channel: 1,
         }
+    }
+
+    fn transition_station_config(timeout_ms: u32) -> StationConfig {
+        let result = ScanResult {
+            ssid: Ssid::try_from_bytes(b"transition-ap").unwrap(),
+            bssid: [1, 2, 3, 4, 5, 6],
+            frequency_mhz: 2_412,
+            rssi_dbm: -40,
+            security: Security::Wpa2Wpa3PersonalTransition,
+            channel: 1,
+        };
+        StationConfig::wpa3_personal(
+            &result,
+            Passphrase::try_from_ascii(b"testtest").unwrap(),
+            SaePwe::Both,
+            timeout_ms,
+        )
+        .unwrap()
     }
 
     fn poll_result(work_completed: u32, output_pending: bool) -> PollResult {
@@ -868,6 +1075,157 @@ mod tests {
             active.observe(super::super::NATIVE_EVENT_AUTHORIZED, 0),
             OperationOutcome::Complete(IncrementalCompletion::Connected(connection()))
         );
+    }
+
+    #[test]
+    fn first_eapol_reconnect_waits_for_the_recovery_deadline_and_runs_once() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        // timeout=1, disconnect event=1, completed cached-association retry=1.
+        port.recovery_diagnostic_word = 0x0001_0011;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Connect(transition_station_config(10_000)),
+            )
+            .unwrap();
+
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+        let first = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert!(matches!(first.disposition(), PollDisposition::Pending(_)));
+        assert_eq!(backend.next_deadline_us(id), Some(1_000_000));
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.clock.0 = 999_999;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.clock.0 = 1_000_000;
+        let reconnect = backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert!(reconnect.made_progress());
+        assert_eq!(backend.port.disconnect_calls, 1);
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.result = poll_result(0, true);
+        backend.port.events[0] = Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 0));
+        backend.clock.0 = 1_000_001;
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.next_deadline_us(id), Some(1_005_001));
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.result = poll_result(0, false);
+        backend.clock.0 = 1_005_001;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.connect_calls, 2);
+
+        backend.clock.0 = 2_000_000;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.disconnect_calls, 1);
+        assert_eq!(backend.port.connect_calls, 2);
+    }
+
+    #[test]
+    fn first_eapol_reconnect_does_not_run_without_completed_recovery_evidence() {
+        for recovery in [0, 0x0000_0011, 0x0101_0011] {
+            let id = operation_id();
+            let mut port = FakePort::new(poll_result(0, false), [None, None]);
+            port.recovery_diagnostic_word = recovery;
+            let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(2_000_000));
+            backend
+                .start(
+                    id,
+                    IncrementalRequest::Connect(transition_station_config(10_000)),
+                )
+                .unwrap();
+            backend
+                .poll(
+                    id,
+                    WakeReason::Timer,
+                    WorkBudget::try_new(1, 100).unwrap(),
+                    &mut [],
+                )
+                .unwrap();
+            assert_eq!(backend.port.connect_calls, 1);
+            assert_eq!(backend.port.disconnect_calls, 0);
+        }
+    }
+
+    #[test]
+    fn external_auth_reconnect_requires_a_persistent_post_retry_stall() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.external_auth_retry_stalled = true;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Connect(transition_station_config(10_000)),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.next_deadline_us(id), Some(1_000_000));
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.external_auth_retry_stalled = false;
+        backend.clock.0 = 500_000;
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.next_deadline_us(id), Some(10_000_000));
+
+        backend.port.external_auth_retry_stalled = true;
+        backend.clock.0 = 1_000_000;
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.clock.0 = 2_000_000;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.disconnect_calls, 1);
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.result = poll_result(0, true);
+        backend.port.events[0] = Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 0));
+        backend.clock.0 = 2_000_001;
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.next_deadline_us(id), Some(2_005_001));
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.result = poll_result(0, false);
+        backend.clock.0 = 2_005_001;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.connect_calls, 2);
+
+        backend.clock.0 = 3_000_000;
+        backend
+            .poll(id, WakeReason::Timer, budget, &mut [])
+            .unwrap();
+        assert_eq!(backend.port.disconnect_calls, 1);
+        assert_eq!(backend.port.connect_calls, 2);
     }
 
     #[test]
@@ -1100,6 +1458,156 @@ mod tests {
         assert_eq!(output[0], ScanResult::empty());
         drop(backend);
         assert_eq!(port.scan_cancel_calls, 0);
+    }
+
+    #[test]
+    fn scan_timeout_cancels_the_native_scan_and_clears_the_expired_deadline() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_cache_pending = true;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(2_000));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+            )
+            .unwrap();
+        backend.clock.0 = 3_000;
+
+        let error = backend
+            .poll(
+                id,
+                WakeReason::Timer,
+                WorkBudget::try_new(2, 100).unwrap(),
+                &mut [],
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ERROR_OPERATION_TIMEOUT);
+        assert!(backend.next_deadline_us(id).is_none());
+        drop(backend);
+        assert_eq!(port.scan_cancel_calls, 1);
+        assert!(!port.scan_cache_pending);
+    }
+
+    #[test]
+    fn scan_completion_ready_at_the_deadline_wins_over_timeout() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_total = Some(1);
+        port.scan_results = [Some(scan_result(b"ready", 1)), None, None];
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+            )
+            .unwrap();
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 1];
+
+        let report = backend
+            .poll(
+                id,
+                WakeReason::Backend,
+                WorkBudget::try_new(2, 100).unwrap(),
+                &mut output,
+            )
+            .unwrap();
+
+        assert_eq!(
+            report.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 1,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[0].ssid.as_bytes(), b"ready");
+    }
+
+    #[test]
+    fn scan_completion_published_during_deadline_check_is_retained() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_total = Some(1);
+        port.scan_complete_on_poll = 2;
+        port.scan_results = [Some(scan_result(b"late-ready", 1)), None, None];
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+            )
+            .unwrap();
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 1];
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+
+        let retained = backend
+            .poll(id, WakeReason::Timer, budget, &mut output)
+            .unwrap();
+        assert!(matches!(
+            retained.disposition(),
+            PollDisposition::Pending(wait) if wait.is_empty()
+        ));
+        assert_eq!(backend.port.scan_poll_calls, 2);
+
+        let completed = backend
+            .poll(id, WakeReason::Backend, budget, &mut output)
+            .unwrap();
+        assert_eq!(
+            completed.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 1,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[0].ssid.as_bytes(), b"late-ready");
+    }
+
+    #[test]
+    fn scan_owned_results_are_drained_after_the_hardware_deadline() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_total = Some(3);
+        port.scan_results = [
+            Some(scan_result(b"first", 1)),
+            Some(scan_result(b"second", 2)),
+            Some(scan_result(b"third", 3)),
+        ];
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+            )
+            .unwrap();
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 3];
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+
+        for now_us in [1_000, 1_001] {
+            backend.clock.0 = now_us;
+            let report = backend
+                .poll(id, WakeReason::Backend, budget, &mut output)
+                .unwrap();
+            assert!(matches!(
+                report.disposition(),
+                PollDisposition::BudgetExhausted(_)
+            ));
+        }
+        backend.clock.0 = 1_002;
+        let report = backend
+            .poll(id, WakeReason::Backend, budget, &mut output)
+            .unwrap();
+
+        assert_eq!(
+            report.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 3,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[2].ssid.as_bytes(), b"third");
     }
 
     #[test]

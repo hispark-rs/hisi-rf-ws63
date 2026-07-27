@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the production composition root, RTOS/Embassy wait bridge, bounded
   incremental initialize/scan runner, work-budget continuation, and
   secret-free diagnostics on real WS63 silicon.
+- Extended the incremental fixture with an opt-in, credential-redacted
+  association/disconnect profile for WPA2 and WPA3 transition-mode reliability
+  experiments. The fixture reports the observed AP security mode and bounded
+  authentication, association, EAPOL, and recovery counters without emitting
+  credentials or frame contents.
+- Added host coverage for scan completion racing its deadline, bounded result
+  draining after the hardware deadline, first-EAPOL recovery, external-auth
+  retry ownership, and disconnect-before-reconnect ordering.
 
 ### Changed
 
@@ -21,11 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process-wide executor or time driver.
 - Treat locally owned scan/output work as immediately runnable instead of
   waiting for a callback edge that may never recur after a bounded batch.
+- Keep the transition-mode recovery path experimental. Current repeated-reset
+  HIL still shows non-deterministic association-to-EAPOL and SAE-retry failures,
+  so this evidence does not establish pure-WPA3 support or release readiness.
 
 ### Fixed
 
 - Wake both the legacy runtime semaphore and the incremental wait bridge from
   scan, management, association, disconnect, and EAPOL callbacks.
+- Abort an expired vendor scan before admitting a replacement transaction, and
+  take one final completion snapshot at the timeout linearization point so a
+  scan-done callback already published by the IRQ cannot be discarded.
 - Restore WS63 mask-ROM fallbacks to linker-script `PROVIDE` definitions.
   Strong assembler aliases can be misinterpreted as PC-relative
   `R_RISCV_CALL_PLT` displacements when LTO preserves call relocations.

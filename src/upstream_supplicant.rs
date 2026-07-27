@@ -23,7 +23,8 @@ use ws63_radio_sys::supplicant::{
     hisi_wpa_feed_associate_result, hisi_wpa_feed_disconnect, hisi_wpa_feed_eapol,
     hisi_wpa_feed_external_auth, hisi_wpa_feed_mgmt, hisi_wpa_feed_scan_done,
     hisi_wpa_feed_scan_result, hisi_wpa_init, hisi_wpa_next_event, hisi_wpa_os_install,
-    hisi_wpa_os_uninstall, hisi_wpa_poll, hisi_wpa_recovery_diagnostic_word, key_flag,
+    hisi_wpa_os_uninstall, hisi_wpa_poll, hisi_wpa_recovery_diagnostic_word,
+    hisi_wpa_temporary_reject_recovery_diagnostic_word, key_flag,
 };
 
 static RUNNER_WAKE: Semaphore = Semaphore::new(0);
@@ -59,6 +60,7 @@ static DIAG_EAPOL_FALLBACK_POLLS: AtomicU32 = AtomicU32::new(0);
 static DIAG_EAPOL_FALLBACK_HITS: AtomicU32 = AtomicU32::new(0);
 static DIAG_EVENT_RING: AtomicU32 = AtomicU32::new(0);
 static DIAG_RECOVERY: AtomicU32 = AtomicU32::new(0);
+static DIAG_TEMP_REJECT_RETRY: AtomicU32 = AtomicU32::new(0);
 static DIAG_TEMP_REJECT_CLEARS: AtomicU32 = AtomicU32::new(0);
 static DIAG_TEMP_REJECT_CLEAR_FAILURES: AtomicU32 = AtomicU32::new(0);
 static DIAG_TEMP_REJECT_CLEAR_STATUS: AtomicU32 = AtomicU32::new(0);
@@ -86,6 +88,8 @@ static DIAG_EXTERNAL_AUTH_STARTED: AuthenticationProgress = AuthenticationProgre
 static DIAG_AUTH_TX_LAST: AuthenticationProgress = AuthenticationProgress::new();
 static DIAG_AUTH_RX_LAST: AuthenticationProgress = AuthenticationProgress::new();
 static DIAG_EXTERNAL_AUTH_STATUS_SENT: AuthenticationProgress = AuthenticationProgress::new();
+static DIAG_EXTERNAL_AUTH_STATUS_RETRIES: AtomicU32 = AtomicU32::new(0);
+static DIAG_EXTERNAL_AUTH_STATUS_RETRY_STATUS: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATION_EVENT: AuthenticationProgress = AuthenticationProgress::new();
 static DIAG_ASSOCIATION_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static DIAG_ASSOCIATION_ATTEMPTS: [AssociationAttempt; ASSOCIATION_ATTEMPT_CAPACITY] =
@@ -954,6 +958,28 @@ const KEY_DEFAULT_MULTICAST: u8 = 2;
 struct DriverContext {
     ifname: UnsafeCell<[u8; IFNAME_CAPACITY]>,
     send_action_cookie: UnsafeCell<u64>,
+    external_auth_status: UnsafeCell<CachedExternalAuthStatus>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedExternalAuthStatus {
+    valid: bool,
+    status: u16,
+    bssid: [u8; 6],
+    pmkid_present: bool,
+    pmkid: [u8; 16],
+}
+
+impl CachedExternalAuthStatus {
+    const fn empty() -> Self {
+        Self {
+            valid: false,
+            status: 0,
+            bssid: [0; 6],
+            pmkid_present: false,
+            pmkid: [0; 16],
+        }
+    }
 }
 
 // SAFETY: the interface name is written only while PORT_INSTALLING and is
@@ -966,6 +992,7 @@ impl DriverContext {
         Self {
             ifname: UnsafeCell::new([0; IFNAME_CAPACITY]),
             send_action_cookie: UnsafeCell::new(0),
+            external_auth_status: UnsafeCell::new(CachedExternalAuthStatus::empty()),
         }
     }
 
@@ -980,6 +1007,9 @@ impl DriverContext {
         unsafe {
             self.ifname.get().write(stored);
             self.send_action_cookie.get().write(0);
+            self.external_auth_status
+                .get()
+                .write(CachedExternalAuthStatus::empty());
         }
         true
     }
@@ -997,6 +1027,49 @@ impl DriverContext {
         // SAFETY: callbacks are installed only after initialization and the
         // name remains immutable for the firmware lifetime.
         unsafe { &*self.ifname.get() }
+    }
+
+    fn cache_external_auth_status(&self, status: &ExternalAuthStatus) {
+        // SAFETY: hostap invokes this hook from the unique RadioRunner owner.
+        unsafe {
+            self.external_auth_status
+                .get()
+                .write(CachedExternalAuthStatus {
+                    valid: true,
+                    status: status.status,
+                    bssid: status.bssid,
+                    pmkid_present: status.pmkid_present != 0,
+                    pmkid: status.pmkid,
+                });
+        }
+    }
+
+    fn send_cached_external_auth_status(&self) -> c_int {
+        // SAFETY: all reads and writes are serialized by the RadioRunner.
+        let cached = unsafe { &*self.external_auth_status.get() };
+        if !cached.valid {
+            return -1;
+        }
+        let mut request = VendorExternalAuthStatus {
+            action: 0,
+            bssid: cached.bssid,
+            reserved0: 0,
+            ssid: core::ptr::null_mut(),
+            ssid_len: 0,
+            key_mgmt_suite: 0,
+            status: cached.status,
+            reserved1: [0; 2],
+            pmkid: if cached.pmkid_present {
+                cached.pmkid.as_ptr().cast_mut()
+            } else {
+                core::ptr::null_mut()
+            },
+        };
+        crate::wal::ioctl(
+            self.ifname(),
+            IOCTL_SEND_EXTERNAL_AUTH_STATUS,
+            (&mut request as *mut VendorExternalAuthStatus).cast(),
+        )
     }
 }
 
@@ -1214,6 +1287,9 @@ pub(crate) struct NativeSupplicant {
     link_dropped_seen: u32,
     external_auth_dropped_seen: u32,
     eapol_fallback_polls_remaining: u16,
+    external_auth_status_sequence: u32,
+    external_auth_retry_deadline_ms: u64,
+    external_auth_retry_pending: bool,
 }
 
 #[allow(dead_code)]
@@ -1272,6 +1348,9 @@ impl NativeSupplicant {
             link_dropped_seen: LINK_EVENT_QUEUE.dropped.load(Ordering::Acquire),
             external_auth_dropped_seen: EXTERNAL_AUTH_QUEUE.dropped.load(Ordering::Acquire),
             eapol_fallback_polls_remaining: 0,
+            external_auth_status_sequence: 0,
+            external_auth_retry_deadline_ms: 0,
+            external_auth_retry_pending: false,
         })
     }
 
@@ -1573,19 +1652,26 @@ impl NativeSupplicant {
                 DIAG_EAPOL_FALLBACK_HITS.fetch_add(1, Ordering::Relaxed);
             }
         }
+        let now_ms = crate::uapi::monotonic_ms();
+        self.service_external_auth_status_retry(now_ms)?;
         // SAFETY: the unique owner serializes all context calls.
-        let mut result = unsafe {
-            hisi_wpa_poll(
-                self.context.as_ptr(),
-                crate::uapi::monotonic_ms(),
-                rx_budget.max(1),
-            )
-        };
+        let mut result = unsafe { hisi_wpa_poll(self.context.as_ptr(), now_ms, rx_budget.max(1)) };
+        let now_ms = crate::uapi::monotonic_ms();
+        let external_auth_retry_deadline = self.service_external_auth_status_retry(now_ms)?;
+        if let Some(deadline) = external_auth_retry_deadline {
+            result.next_deadline_ms = result.next_deadline_ms.min(deadline);
+        }
         account_poll_work(&mut result, rx_grant, rx_budget);
         // SAFETY: the unique owner serializes this read-only snapshot with
         // every other access to the native context.
         DIAG_RECOVERY.store(
             unsafe { hisi_wpa_recovery_diagnostic_word(self.context.as_ptr()) },
+            Ordering::Release,
+        );
+        DIAG_TEMP_REJECT_RETRY.store(
+            // SAFETY: the unique owner serializes this read-only snapshot with
+            // every other access to the native context.
+            unsafe { hisi_wpa_temporary_reject_recovery_diagnostic_word(self.context.as_ptr()) },
             Ordering::Release,
         );
         if result.status != 0 {
@@ -1596,6 +1682,51 @@ impl NativeSupplicant {
         // grant, the incremental runner observes that exact budget exhaustion
         // without pretending that `hisi_wpa_next_event` has an item.
         Ok(result)
+    }
+
+    fn service_external_auth_status_retry(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<Option<u64>, NativeSupplicantError> {
+        const RETRY_DELAY_MS: u64 = 1_000;
+
+        let status = DIAG_EXTERNAL_AUTH_STATUS_SENT.snapshot();
+        let association = DIAG_ASSOCIATION_EVENT.snapshot();
+        if status[0] != 0 && status[0] != self.external_auth_status_sequence {
+            self.external_auth_status_sequence = status[0];
+            self.external_auth_retry_deadline_ms = now_ms.saturating_add(RETRY_DELAY_MS);
+            self.external_auth_retry_pending =
+                !event_sequence_after(association[0], self.external_auth_status_sequence);
+        }
+        if self.external_auth_retry_pending
+            && event_sequence_after(association[0], self.external_auth_status_sequence)
+        {
+            self.external_auth_retry_pending = false;
+        }
+        if !self.external_auth_retry_pending {
+            return Ok(None);
+        }
+        if now_ms < self.external_auth_retry_deadline_ms {
+            return Ok(Some(self.external_auth_retry_deadline_ms));
+        }
+
+        self.external_auth_retry_pending = false;
+        let status = DRIVER_CONTEXT.send_cached_external_auth_status();
+        DIAG_EXTERNAL_AUTH_STATUS_RETRIES.fetch_add(1, Ordering::Relaxed);
+        DIAG_EXTERNAL_AUTH_STATUS_RETRY_STATUS.store(status as u32, Ordering::Release);
+        if status != 0 {
+            return Err(NativeSupplicantError::ConnectFailed(status));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn external_auth_retry_stalled(&self) -> bool {
+        let association = DIAG_ASSOCIATION_EVENT.snapshot();
+        self.external_auth_status_sequence != 0
+            && !self.external_auth_retry_pending
+            && DIAG_EXTERNAL_AUTH_STATUS_RETRIES.load(Ordering::Acquire) != 0
+            && DIAG_EXTERNAL_AUTH_STATUS_RETRY_STATUS.load(Ordering::Acquire) == 0
+            && !event_sequence_after(association[0], self.external_auth_status_sequence)
     }
 
     fn drain_eapol(&mut self, budget: &mut u32) -> Result<(), NativeSupplicantError> {
@@ -1676,6 +1807,11 @@ impl NativeSupplicant {
             status => Err(NativeSupplicantError::PollFailed(status)),
         }
     }
+}
+
+const fn event_sequence_after(candidate: u32, reference: u32) -> bool {
+    let distance = candidate.wrapping_sub(reference);
+    distance != 0 && distance < (1 << 31)
 }
 
 fn account_poll_work(result: &mut PollResult, rx_grant: u32, rx_remaining: u32) {
@@ -2202,26 +2338,8 @@ unsafe extern "C" fn send_external_auth_status(
     if status.abi_version != ABI_VERSION || status.pmkid_present > 1 {
         return -1;
     }
-    let mut request = VendorExternalAuthStatus {
-        action: 0,
-        bssid: status.bssid,
-        reserved0: 0,
-        ssid: core::ptr::null_mut(),
-        ssid_len: 0,
-        key_mgmt_suite: 0,
-        status: status.status,
-        reserved1: [0; 2],
-        pmkid: if status.pmkid_present == 0 {
-            core::ptr::null_mut()
-        } else {
-            status.pmkid.as_ptr().cast_mut()
-        },
-    };
-    let result = crate::wal::ioctl(
-        driver.ifname(),
-        IOCTL_SEND_EXTERNAL_AUTH_STATUS,
-        (&mut request as *mut VendorExternalAuthStatus).cast(),
-    );
+    driver.cache_external_auth_status(status);
+    let result = driver.send_cached_external_auth_status();
     DIAG_LAST_IOCTL_STATUS.store(result as u32, Ordering::Release);
     if result == 0 {
         DIAG_EXTERNAL_AUTH_STATUS_SENT.observe();
@@ -2501,6 +2619,13 @@ pub(crate) fn diagnostic_snapshot() -> [u32; 11] {
     ]
 }
 
+pub(crate) fn external_auth_retry_diagnostic_snapshot() -> [u32; 2] {
+    [
+        DIAG_EXTERNAL_AUTH_STATUS_RETRIES.load(Ordering::Acquire),
+        DIAG_EXTERNAL_AUTH_STATUS_RETRY_STATUS.load(Ordering::Acquire),
+    ]
+}
+
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn scan_diagnostic_snapshot() -> [u32; 6] {
     [
@@ -2587,11 +2712,12 @@ pub(crate) fn recovery_diagnostic_word() -> u32 {
     DIAG_RECOVERY.load(Ordering::Acquire)
 }
 
-pub(crate) fn temporary_reject_recovery_diagnostic_snapshot() -> [u32; 3] {
+pub(crate) fn temporary_reject_recovery_diagnostic_snapshot() -> [u32; 4] {
     [
         DIAG_TEMP_REJECT_CLEARS.load(Ordering::Acquire),
         DIAG_TEMP_REJECT_CLEAR_FAILURES.load(Ordering::Acquire),
         DIAG_TEMP_REJECT_CLEAR_STATUS.load(Ordering::Acquire),
+        DIAG_TEMP_REJECT_RETRY.load(Ordering::Acquire),
     ]
 }
 
@@ -2856,6 +2982,37 @@ mod tests {
         assert!(!valid_context_layout(0, natural));
         assert!(!valid_context_layout(1, natural.saturating_sub(1)));
         assert!(!valid_context_layout(1, natural + 1));
+    }
+
+    #[test]
+    fn external_auth_retry_owns_the_complete_status_payload() {
+        let driver = DriverContext::new();
+        assert!(driver.initialize(b"wlan0"));
+        let status = ExternalAuthStatus {
+            abi_version: ABI_VERSION,
+            status: 7,
+            bssid: [1, 2, 3, 4, 5, 6],
+            pmkid_present: 1,
+            reserved: 0,
+            pmkid: [0xa5; 16],
+        };
+        driver.cache_external_auth_status(&status);
+
+        // SAFETY: this test is the only owner and does not install callbacks.
+        let cached = unsafe { &*driver.external_auth_status.get() };
+        assert!(cached.valid);
+        assert_eq!(cached.status, status.status);
+        assert_eq!(cached.bssid, status.bssid);
+        assert!(cached.pmkid_present);
+        assert_eq!(cached.pmkid, status.pmkid);
+    }
+
+    #[test]
+    fn event_sequence_order_handles_same_poll_and_wraparound() {
+        assert!(!event_sequence_after(6, 6));
+        assert!(event_sequence_after(7, 6));
+        assert!(!event_sequence_after(5, 6));
+        assert!(event_sequence_after(0, u32::MAX));
     }
 
     #[test]

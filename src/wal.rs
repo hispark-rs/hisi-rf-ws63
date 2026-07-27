@@ -16,6 +16,8 @@ struct IoctlCommand {
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
     fn drv_soc_hwal_wpa_ioctl(ifname: *mut i8, command: *const IoctlCommand) -> c_int;
+    fn oal_get_netdev_by_name(ifname: *const i8) -> *mut c_void;
+    fn wal_force_scan_complete(netdev: *mut c_void) -> u32;
 }
 
 /// Issue one synchronous command through the vendor WAL.
@@ -41,6 +43,29 @@ pub(crate) fn ioctl(ifname: &[u8], command: u32, buffer: *mut c_void) -> c_int {
     }
 }
 
+/// Force the vendor WAL to abort and complete the current station scan.
+#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+pub(crate) fn force_scan_complete(ifname: &[u8]) -> c_int {
+    if !ifname.contains(&0) {
+        return -1;
+    }
+    #[cfg(target_arch = "riscv32")]
+    {
+        // SAFETY: `ifname` is NUL-terminated. The returned netdev is owned by
+        // the initialized vendor Wi-Fi stack and remains live for this
+        // synchronous WAL call.
+        let netdev = unsafe { oal_get_netdev_by_name(ifname.as_ptr().cast()) };
+        if netdev.is_null() {
+            return -1;
+        }
+        unsafe { wal_force_scan_complete(netdev) as c_int }
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        -1
+    }
+}
+
 const _: () = {
     assert!(core::mem::offset_of!(IoctlCommand, buffer) == core::mem::size_of::<usize>());
     assert!(core::mem::size_of::<IoctlCommand>() == 2 * core::mem::size_of::<usize>());
@@ -53,5 +78,6 @@ mod tests {
     #[test]
     fn rejects_non_terminated_interface_name() {
         assert_eq!(ioctl(b"wlan0", 0, core::ptr::null_mut()), -1);
+        assert_eq!(force_scan_complete(b"wlan0"), -1);
     }
 }

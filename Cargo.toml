@@ -22,7 +22,6 @@ required-features = [
 name = "incremental_scan_profile"
 path = "examples/incremental_scan_profile.rs"
 required-features = [
-    "wpa2-personal",
     "incremental-backend-experiment",
     "incremental-embassy-wait",
     "bootstrap-stage-diag",
@@ -140,6 +139,10 @@ incremental-embassy-wait = [
     "dep:embassy-time",
     "hisi-rtos/embassy",
 ]
+# Extend the credential-free incremental scan fixture through one association
+# and disconnect. Credentials are accepted only through compile-time
+# environment variables and the fixture never emits them.
+incremental-connect-profile = []
 
 [build-dependencies]
 ar_archive_writer = "0.5.2"

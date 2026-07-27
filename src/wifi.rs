@@ -1070,7 +1070,10 @@ impl<'d> Wifi<'d> {
     #[cfg(any(target_arch = "riscv32", feature = "incremental-backend-experiment"))]
     pub(crate) fn cancel_scan(&mut self) {
         #[cfg(target_arch = "riscv32")]
-        finish_scan();
+        {
+            let _ = crate::wal::force_scan_complete(&self.ifname);
+            finish_scan();
+        }
     }
 
     /// Associate with a discovered unencrypted access point.

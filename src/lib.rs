@@ -217,6 +217,12 @@ pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
     upstream_supplicant::diagnostic_snapshot()
 }
 
+/// Return bounded WS63 external-auth status retry diagnostics.
+#[cfg(feature = "upstream-supplicant-port")]
+pub fn upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2] {
+    upstream_supplicant::external_auth_retry_diagnostic_snapshot()
+}
+
 /// Return secret-free scan queue and callback diagnostics.
 #[cfg(all(feature = "upstream-supplicant-port", target_arch = "riscv32"))]
 #[doc(hidden)]
@@ -279,10 +285,20 @@ pub fn upstream_supplicant_recovery_diagnostic_word() -> u32 {
     upstream_supplicant::recovery_diagnostic_word()
 }
 
+/// Return bounded reconnect counts for first-EAPOL and external-auth stalls.
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port"
+))]
+#[doc(hidden)]
+pub fn incremental_reconnect_diagnostic_snapshot() -> [u32; 2] {
+    hisi_rf_backend::reconnect_diagnostic_snapshot()
+}
+
 /// Return status-30 stale-association clear counters.
 #[cfg(feature = "upstream-supplicant-port")]
 #[doc(hidden)]
-pub fn upstream_supplicant_temporary_reject_recovery_diagnostic_snapshot() -> [u32; 3] {
+pub fn upstream_supplicant_temporary_reject_recovery_diagnostic_snapshot() -> [u32; 4] {
     upstream_supplicant::temporary_reject_recovery_diagnostic_snapshot()
 }
 

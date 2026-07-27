@@ -18,7 +18,7 @@ mod incremental;
     feature = "incremental-backend-experiment",
     feature = "upstream-supplicant-port"
 ))]
-pub(crate) use incremental::OwnedIncrementalSupplicantBackend;
+pub(crate) use incremental::{OwnedIncrementalSupplicantBackend, reconnect_diagnostic_snapshot};
 
 fn backend_error(class: BackendErrorClass, code: u32) -> BackendError {
     BackendError::new(class, code).with_profile_revision(crate::profile::PROFILE_REVISION)
