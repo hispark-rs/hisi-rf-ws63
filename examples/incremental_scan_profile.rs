@@ -418,6 +418,7 @@ async fn run_connect_profile(
                 monotonic_ms().wrapping_sub(connect_started),
             );
             write_connect_diagnostics(uart);
+            write_heap_metrics(uart, b"RFDBG_A5U_HEAP_CONNECTED");
         }
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_CONNECT_ERR", error);
@@ -433,11 +434,14 @@ async fn run_connect_profile(
 
     let disconnect_started = monotonic_ms();
     match with_timeout(Duration::from_secs(20), controller.disconnect()).await {
-        Ok(Ok(())) => write_metric(
-            uart,
-            b"RFDBG_A5B_DISCONNECT_OK elapsed_ms=0x",
-            monotonic_ms().wrapping_sub(disconnect_started),
-        ),
+        Ok(Ok(())) => {
+            write_metric(
+                uart,
+                b"RFDBG_A5B_DISCONNECT_OK elapsed_ms=0x",
+                monotonic_ms().wrapping_sub(disconnect_started),
+            );
+            write_heap_metrics(uart, b"RFDBG_A5U_HEAP_DISCONNECTED");
+        }
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_DISCONNECT_ERR", error);
             halt()
@@ -447,6 +451,33 @@ async fn run_connect_profile(
             halt()
         }
     }
+}
+
+#[cfg(feature = "incremental-connect-profile")]
+fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, prefix: &[u8]) {
+    let metrics = hisi_rf_ws63::rf_heap_metrics();
+    uart.write(prefix);
+    uart.write(b" arena=0x");
+    uart.write(&hex8(metrics.arena_bytes.min(u32::MAX as usize) as u32));
+    uart.write(b" used=0x");
+    uart.write(&hex8(metrics.used_bytes.min(u32::MAX as usize) as u32));
+    uart.write(b" peak=0x");
+    uart.write(&hex8(metrics.peak_used_bytes.min(u32::MAX as usize) as u32));
+    uart.write(b" live=0x");
+    uart.write(&hex8(metrics.live_allocations.min(u32::MAX as usize) as u32));
+    uart.write(b" peak_live=0x");
+    uart.write(&hex8(
+        metrics.peak_live_allocations.min(u32::MAX as usize) as u32
+    ));
+    uart.write(b" alloc_fail=0x");
+    uart.write(&hex8(
+        metrics.allocation_failures.min(u32::MAX as usize) as u32
+    ));
+    uart.write(b" free_fail=0x");
+    uart.write(&hex8(
+        metrics.deallocation_failures.min(u32::MAX as usize) as u32
+    ));
+    uart.write(b"\r\n");
 }
 
 #[cfg(feature = "incremental-connect-profile")]
