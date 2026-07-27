@@ -83,4 +83,4 @@ jobs:
       - name: Link the no-AP bootstrap profiler with stock rust-lld
         run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,incremental-backend-experiment,bootstrap-stage-diag,firmware-example
       - name: Link the credential-free incremental scan profiler with stock rust-lld
-        run: cargo build -Zbuild-std=core,alloc --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,bootstrap-stage-diag,firmware-example
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,bootstrap-stage-diag,firmware-example
