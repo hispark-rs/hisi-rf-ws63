@@ -423,11 +423,13 @@ async fn run_connect_profile(
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_CONNECT_ERR", error);
             write_connect_diagnostics(uart);
+            write_heap_metrics(uart, b"RFDBG_A5U_HEAP_CONNECT_FAILED");
             halt()
         }
         Err(_) => {
             uart.write(b"RFDBG_A5B_CONNECT_ERR reason=outer_timeout\r\n");
             write_connect_diagnostics(uart);
+            write_heap_metrics(uart, b"RFDBG_A5U_HEAP_CONNECT_FAILED");
             halt()
         }
     }
