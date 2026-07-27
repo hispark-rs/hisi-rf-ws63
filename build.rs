@@ -5,6 +5,7 @@
 //! this chip backend.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -70,16 +71,10 @@ fn valid_symbol(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$'))
 }
 
-fn write_rom_fallbacks(output: &Path, source: &Path, strong_roots: &[String]) {
+fn parse_rom_symbols(source: &Path) -> BTreeMap<String, String> {
     let source = fs::read_to_string(source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
-    // Keep callable ROM addresses in a linker script. Defining them as
-    // assembler aliases makes LLD treat the absolute value as the displacement
-    // of R_RISCV_CALL_PLT when LTO preserves the call relocation.
-    let mut linker_script = String::from(
-        "/* Generated WS63 mask-ROM fallbacks. */\n\
-         /* PROVIDE keeps application-owned strong definitions authoritative. */\n",
-    );
+    let mut symbols = BTreeMap::new();
     for line in source.lines() {
         let Some((name, value)) = line
             .trim()
@@ -93,22 +88,135 @@ fn write_rom_fallbacks(output: &Path, source: &Path, strong_roots: &[String]) {
             value.starts_with("0x") && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit()),
             "invalid ROM address for {name}: {value:?}"
         );
-        // The Rust compatibility layer owns these strong implementations.
-        // A linker-script PROVIDE is conditional, while an assembler alias is
-        // a real definition, so do not create a competing ROM fallback.
-        if matches!(name, "memcpy_s" | "memset_s" | "snprintf_s")
+        assert!(
+            symbols.insert(name.to_owned(), value.to_owned()).is_none(),
+            "duplicate ROM symbol: {name}"
+        );
+    }
+    symbols
+}
+
+fn collect_callable_rom_symbols(
+    archives: &[PathBuf],
+    rom_symbols: &BTreeMap<String, String>,
+) -> BTreeSet<String> {
+    use object::read::archive::ArchiveFile;
+    use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationTarget};
+
+    const R_RISCV_JAL: u32 = 17;
+    const R_RISCV_CALL: u32 = 18;
+    const R_RISCV_CALL_PLT: u32 = 19;
+
+    let mut callable = BTreeSet::new();
+    for archive_path in archives {
+        let archive_data = fs::read(archive_path).unwrap_or_else(|error| {
+            panic!(
+                "read native archive {} for ROM call census: {error}",
+                archive_path.display()
+            )
+        });
+        let archive = ArchiveFile::parse(&*archive_data).unwrap_or_else(|error| {
+            panic!(
+                "parse native archive {} for ROM call census: {error}",
+                archive_path.display()
+            )
+        });
+        for member in archive.members() {
+            let member = member.unwrap_or_else(|error| {
+                panic!(
+                    "read archive member from {} for ROM call census: {error}",
+                    archive_path.display()
+                )
+            });
+            let data = member.data(&*archive_data).unwrap_or_else(|error| {
+                panic!(
+                    "read archive member {}({}): {error}",
+                    archive_path.display(),
+                    String::from_utf8_lossy(member.name())
+                )
+            });
+            let Ok(object) = object::File::parse(data) else {
+                continue;
+            };
+            for section in object.sections() {
+                for (_, relocation) in section.relocations() {
+                    let RelocationTarget::Symbol(symbol_index) = relocation.target() else {
+                        continue;
+                    };
+                    let Ok(symbol) = object.symbol_by_index(symbol_index) else {
+                        continue;
+                    };
+                    let Ok(name) = symbol.name() else {
+                        continue;
+                    };
+                    if !rom_symbols.contains_key(name) {
+                        continue;
+                    }
+                    let RelocationFlags::Elf { r_type } = relocation.flags() else {
+                        panic!(
+                            "{}({}) references ROM symbol {name} with a non-ELF relocation",
+                            archive_path.display(),
+                            String::from_utf8_lossy(member.name())
+                        );
+                    };
+                    if matches!(r_type, R_RISCV_JAL | R_RISCV_CALL | R_RISCV_CALL_PLT) {
+                        callable.insert(name.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    callable
+}
+
+fn append_rom_fallbacks(
+    assembly: &mut String,
+    rom_symbols: &BTreeMap<String, String>,
+    callable: &BTreeSet<String>,
+    strong_roots: &[String],
+) {
+    let owns_strong_definition = |name: &str| {
+        matches!(name, "memcpy_s" | "memset_s" | "snprintf_s")
             || strong_roots.iter().any(|root| root == name)
-        {
+    };
+
+    for (name, address) in rom_symbols {
+        if owns_strong_definition(name) {
             continue;
         }
-        linker_script.push_str("PROVIDE(");
-        linker_script.push_str(name);
-        linker_script.push_str(" = ");
-        linker_script.push_str(value);
-        linker_script.push_str(");\n");
+        if callable.contains(name) {
+            // The symbol must live at an ordinary section-relative address:
+            // rust-lld may preserve R_RISCV_CALL_PLT through LTO and interprets
+            // an absolute assembler alias as a displacement. A weak veneer is
+            // transitive through the rlib and tail-jumps to the fixed ROM
+            // address; an application-owned strong implementation still wins.
+            assembly.push_str(".pushsection .text.hisi_ws63_rom_veneer.");
+            assembly.push_str(name);
+            assembly.push_str(",\"ax\",@progbits\n.balign 2\n.weak ");
+            assembly.push_str(name);
+            assembly.push_str("\n.type ");
+            assembly.push_str(name);
+            assembly.push_str(",@function\n");
+            assembly.push_str(name);
+            assembly.push_str(":\n  li t0, ");
+            assembly.push_str(address);
+            assembly.push_str("\n  jr t0\n.size ");
+            assembly.push_str(name);
+            assembly.push_str(", .-");
+            assembly.push_str(name);
+            assembly.push_str("\n.popsection\n");
+        } else {
+            // Address-only references, including ROM function pointers and
+            // fixed ROM/RAM data, retain their exact machine address.
+            assembly.push_str(".weak ");
+            assembly.push_str(name);
+            assembly.push_str("\n.set ");
+            assembly.push_str(name);
+            assembly.push_str(", ");
+            assembly.push_str(address);
+            assembly.push('\n');
+        }
     }
-    fs::write(output, linker_script)
-        .unwrap_or_else(|error| panic!("write {}: {error}", output.display()));
 }
 
 fn callback_target(name: &str) -> &str {
@@ -192,13 +300,20 @@ fn append_callback_fallbacks(assembly: &mut String, source: &Path) {
     }
 }
 
-fn write_link_contract(output: &Path, callbacks: &Path, roots: &[String]) {
+fn write_link_contract(
+    output: &Path,
+    callbacks: &Path,
+    roots: &[String],
+    rom_symbols: &BTreeMap<String, String>,
+    callable_rom_symbols: &BTreeSet<String>,
+) {
     let mut assembly = String::from(
         ".weak __nv_storage_start\n\
          .set __nv_storage_start, 0x005fc000\n\
          .weak __nv_storage_length\n\
          .set __nv_storage_length, 0x00004000\n",
     );
+    append_rom_fallbacks(&mut assembly, rom_symbols, callable_rom_symbols, roots);
     append_callback_fallbacks(&mut assembly, callbacks);
     assembly.push_str(
         ".section .rodata.hisi_ws63_rf_roots,\"a\",@progbits\n\
@@ -278,14 +393,29 @@ fn main() {
         ));
     }
     roots.push("__hisi_ws63_rom_patch_table".to_owned());
-    let rom_fallbacks = out_dir.join("ws63-rom-fallbacks.x");
-    write_rom_fallbacks(&rom_fallbacks, &rom, &roots);
+    let rom_symbols = parse_rom_symbols(&rom);
+    let mut census_archives = combined_inputs;
+    for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
+        let (name, mode) = archive
+            .split_once(':')
+            .expect("invalid ws63-radio-sys archive metadata");
+        if mode == "whole" {
+            census_archives.push(lib_dir.join(format!("lib{name}.a")));
+        }
+    }
+    census_archives.push(lib_dir.join("librom_callback.a"));
+    let callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
     let contract = out_dir.join("ws63-radio-link-contract.S");
-    write_link_contract(&contract, &callbacks, &roots);
+    write_link_contract(
+        &contract,
+        &callbacks,
+        &roots,
+        &rom_symbols,
+        &callable_rom_symbols,
+    );
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-arg=-T{}", rom_fallbacks.display());
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
     for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
         let (name, mode) = archive

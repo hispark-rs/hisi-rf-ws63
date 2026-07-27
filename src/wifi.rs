@@ -1482,7 +1482,7 @@ fn finish_scan() {
     critical_section::with(|cs| SCAN_STATE.borrow(cs).active.set(false));
 }
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
 pub(crate) fn scan_diagnostic_snapshot() -> [u32; 4] {
     critical_section::with(|cs| {
         let state = SCAN_STATE.borrow(cs);
