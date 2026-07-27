@@ -439,6 +439,17 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-search=native={}", out_dir.display());
+    if env::var_os("CARGO_FEATURE_RF_ELOOP_DIAG").is_some() {
+        for symbol in [
+            "hmac_sta_wait_auth_seq2_rx_etc",
+            "hmac_sta_auth_timeout_etc",
+            "hmac_rx_mgmt_event_adapt",
+            "hmac_tx_mgmt_send_event_etc",
+            "dmac_rx_prepare_data_patch",
+        ] {
+            println!("cargo:rustc-link-arg=--wrap={symbol}");
+        }
+    }
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
     for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
         let (name, mode) = archive

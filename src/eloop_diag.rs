@@ -22,9 +22,13 @@ unsafe extern "C" {
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
+    #[link_name = "__real_hmac_sta_wait_auth_seq2_rx_etc"]
     fn __ws63_vendor_hmac_sta_wait_auth_seq2_rx_etc(vap: *mut c_void, message: *mut c_void) -> u32;
+    #[link_name = "__real_hmac_sta_auth_timeout_etc"]
     fn __ws63_vendor_hmac_sta_auth_timeout_etc(vap: *mut c_void, parameter: *mut c_void) -> u32;
+    #[link_name = "__real_hmac_rx_mgmt_event_adapt"]
     fn __ws63_vendor_hmac_rx_mgmt_event_adapt(vap: *mut c_void, message: *mut c_void) -> i32;
+    #[link_name = "__real_hmac_tx_mgmt_send_event_etc"]
     fn __ws63_vendor_hmac_tx_mgmt_send_event_etc(
         vap: *mut c_void,
         netbuf: *mut c_void,
@@ -33,6 +37,7 @@ unsafe extern "C" {
     fn oal_netbuf_mac_header(netbuf: *const c_void) -> *const u8;
     fn hmac_bridge_vap_xmit_etc(vap: *mut c_void, message: *mut c_void) -> i32;
     fn hwal_netif_rx(netdev: *mut c_void, netbuf: *mut c_void) -> u32;
+    #[link_name = "__real_dmac_rx_prepare_data_patch"]
     fn __ws63_vendor_dmac_rx_prepare_data_patch(
         netbuf: *mut c_void,
         rx_ctl: *mut c_void,
@@ -645,7 +650,7 @@ pub unsafe extern "C" fn wpa_supplicant_event(ctx: *mut c_void, event: i32, data
 
 /// Preserve the vendor wait-auth handler while classifying management frames.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_hmac_sta_wait_auth_seq2_rx_etc")]
 #[inline(never)]
 pub unsafe extern "C" fn hmac_sta_wait_auth_seq2_rx_etc(
     vap: *mut c_void,
@@ -682,7 +687,7 @@ pub unsafe extern "C" fn hmac_sta_wait_auth_seq2_rx_etc(
 /// Observe management frames at the HMAC ingress before asynchronous FSM
 /// dispatch, while preserving the vendor adapter unchanged.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_hmac_rx_mgmt_event_adapt")]
 #[inline(never)]
 pub unsafe extern "C" fn hmac_rx_mgmt_event_adapt(vap: *mut c_void, message: *mut c_void) -> i32 {
     let auth = unsafe { classify_auth_frame(message_netbuf(message)) };
@@ -707,7 +712,7 @@ pub unsafe extern "C" fn hmac_rx_mgmt_event_adapt(vap: *mut c_void, message: *mu
 /// mask-ROM patch list, so enabling diagnostics does not consume another
 /// hardware patch comparator.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_dmac_rx_prepare_data_patch")]
 #[inline(never)]
 pub unsafe extern "C" fn dmac_rx_prepare_data_patch(
     netbuf: *mut c_void,
@@ -745,7 +750,7 @@ pub unsafe extern "C" fn dmac_rx_prepare_data_patch(
 
 /// Record the exact authentication request passed to the vendor TX path.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_hmac_tx_mgmt_send_event_etc")]
 #[inline(never)]
 pub unsafe extern "C" fn hmac_tx_mgmt_send_event_etc(
     vap: *mut c_void,
@@ -891,7 +896,7 @@ pub unsafe extern "C" fn __ws63_diag_dmac_tx_complete_event_handler(
 
 /// Preserve the vendor auth timeout handler while recording expiry timing.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_hmac_sta_auth_timeout_etc")]
 #[inline(never)]
 pub unsafe extern "C" fn hmac_sta_auth_timeout_etc(
     vap: *mut c_void,

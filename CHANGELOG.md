@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the normalized-archive `rf-eloop-diag` link path by wrapping the
+  five vendor MAC diagnostic entry points with stock linker `--wrap` semantics
+  instead of relying on guarded-link archive symbol rewriting.
+
 ## [0.1.0-alpha.25] - 2026-07-28
 
 ### Added
