@@ -19,9 +19,9 @@ pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
-const WS63_CONTROL_STORAGE_BASE_BYTES: usize = 0x1fe0;
+const WS63_CONTROL_STORAGE_BASE_BYTES: usize = 0x2000;
 const WS63_EVENT_SLOT_BYTES: usize = 48;
-const WS63_RADIO_STATE_BASE_BYTES: usize = 0x6d8;
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x704;
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
@@ -630,7 +630,10 @@ mod tests {
             report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
         assert_eq!(report.composition_handle_bytes, 0);
-        assert_eq!(report.radio_state_bytes, 0x7a8);
+        assert_eq!(
+            report.radio_state_bytes,
+            WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES
+        );
         assert!(report.control_storage_bytes >= report.radio_state_bytes + report.crypto_dma_bytes);
     }
 
@@ -680,8 +683,11 @@ mod tests {
             report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
         assert_eq!(report.composition_handle_bytes, 0);
-        assert_eq!(report.control_storage_bytes, 0x20a0);
-        assert_eq!(report.radio_state_bytes, 0x7a8);
+        assert_eq!(report.control_storage_bytes, 0x20c0);
+        assert_eq!(
+            report.radio_state_bytes,
+            WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES
+        );
         assert_eq!(report.event_capacity, 4);
     }
 

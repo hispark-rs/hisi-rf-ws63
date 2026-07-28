@@ -69,7 +69,8 @@ fn main() -> ! {
     uart.write(b" action=");
     uart.write(cancelled.action().as_str().as_bytes());
 
-    let timeout = Error::Backend(BackendError::new(BackendErrorClass::Timeout, 7)).diagnostic();
+    let timeout =
+        Error::Backend(BackendError::new(BackendErrorClass::BackendTimeout, 7)).diagnostic();
     let mut timeout_json = JsonBuffer::new();
     timeout
         .write_json(&mut timeout_json)

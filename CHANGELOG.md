@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.44] - 2026-07-29
+
+### Changed
+
+- Adopted `hisi-rf-core 0.1.0-alpha.17` typed operation and backend
+  timeouts. Protocol deadlines now report `operation.timeout`, while bounded
+  WS63 lifecycle waits retain `backend.timeout`.
+- Updated the caller-owned resource model for the cancellation channel added
+  to the radio control state. RV32 assertions now lock both four-event and
+  eight-event storage layouts.
+
+### Fixed
+
+- Routed dropped incremental controller futures into the backend cancellation
+  path and unified wait source, so abandoned operations receive bounded cleanup
+  without running vendor work from `Drop`.
+
 ## [0.1.0-alpha.43] - 2026-07-29
 
 ### Fixed
@@ -595,7 +612,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.31...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.44...HEAD
+[0.1.0-alpha.44]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.43...v0.1.0-alpha.44
+[0.1.0-alpha.43]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.42...v0.1.0-alpha.43
+[0.1.0-alpha.42]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.41...v0.1.0-alpha.42
+[0.1.0-alpha.41]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.40...v0.1.0-alpha.41
+[0.1.0-alpha.40]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.39...v0.1.0-alpha.40
+[0.1.0-alpha.39]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.38...v0.1.0-alpha.39
+[0.1.0-alpha.38]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.37...v0.1.0-alpha.38
+[0.1.0-alpha.37]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.36...v0.1.0-alpha.37
+[0.1.0-alpha.36]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.35...v0.1.0-alpha.36
+[0.1.0-alpha.35]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.34...v0.1.0-alpha.35
+[0.1.0-alpha.34]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.33...v0.1.0-alpha.34
+[0.1.0-alpha.33]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.32...v0.1.0-alpha.33
+[0.1.0-alpha.32]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.31...v0.1.0-alpha.32
 [0.1.0-alpha.31]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.30...v0.1.0-alpha.31
 [0.1.0-alpha.30]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
 [0.1.0-alpha.29]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.28...v0.1.0-alpha.29

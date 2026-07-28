@@ -68,7 +68,7 @@ BSS, the composition handle, the shared RF arena, bounded event capacity, the
 4,384-byte caller-owned crypto DMA scratch, task stacks, and the 48 KiB
 linker-owned packet RAM. Final-image bytes remain a packaging concern.
 
-Backend failures use the chip-neutral `hisi-rf-error/v2` schema. The WS63
+Backend failures use the chip-neutral `hisi-rf-error/v3` schema. The WS63
 adapter supplies the selected profile revision, protocol stage, raw IEEE or
 hostap status, and at most four numeric context snapshots; it never inserts
 SSID, passphrase, key material, or arbitrary log text into the public error.

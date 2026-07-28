@@ -222,7 +222,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             .map_err(map_native_error)?;
 
         let scan = match self.wifi.as_mut() {
-            Some(wifi) => wifi.scan(&mut self.scans, config.timeout_ms()),
+            Some(wifi) => wifi.scan(&mut self.scans, config.operation_timeout().as_millis()),
             None => {
                 #[cfg(feature = "upstream-supplicant-port")]
                 if let Some(supplicant) = self.supplicant.as_mut() {
@@ -338,7 +338,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                     }
                 }
                 if crate::uapi::monotonic_ms().wrapping_sub(started_at)
-                    >= config.timeout_ms() as u64
+                    >= config.operation_timeout().as_millis() as u64
                 {
                     if let Some(status) = last_disconnect_status {
                         let error = emit_backend_failure(supplicant, status);
@@ -399,7 +399,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                 config.security(),
             )
             .map_err(map_error)?;
-            wifi.connect(&network, config.timeout_ms())
+            wifi.connect(&network, config.operation_timeout().as_millis())
                 .map(to_connection_info)
                 .map_err(map_error)
         }
@@ -437,10 +437,10 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                     }
                 }
                 if crate::uapi::monotonic_ms().wrapping_sub(started_at)
-                    >= config.disconnect_timeout_ms as u64
+                    >= config.disconnect_timeout.as_millis() as u64
                 {
                     return Err(staged_error(
-                        BackendErrorClass::Timeout,
+                        BackendErrorClass::BackendTimeout,
                         2,
                         DiagnosticStage::Disconnect,
                     ));
@@ -464,7 +464,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             self.wifi
                 .as_mut()
                 .ok_or(not_initialized())?
-                .disconnect(config.disconnect_timeout_ms)
+                .disconnect(config.disconnect_timeout.as_millis())
                 .map_err(map_error)
         }
     }
@@ -556,7 +556,7 @@ fn connect_timeout_error(
     eapol_received: u32,
 ) -> BackendError {
     let mut error = staged_error(
-        BackendErrorClass::Timeout,
+        BackendErrorClass::OperationTimeout,
         0x8000_0000
             | ((last_event_kind as u32 & 0x7) << 28)
             | ((context_diagnostic & 0x0fff) << 16)
@@ -625,7 +625,11 @@ fn map_error(error: Ws63Error) -> BackendError {
             DiagnosticStage::Initialize,
         ),
         Ws63Error::Busy => (BackendErrorClass::Busy, 1, DiagnosticStage::Operation),
-        Ws63Error::Timeout => (BackendErrorClass::Timeout, 1, DiagnosticStage::Operation),
+        Ws63Error::Timeout => (
+            BackendErrorClass::OperationTimeout,
+            1,
+            DiagnosticStage::Operation,
+        ),
         Ws63Error::UnsupportedSecurity(mode) => (
             BackendErrorClass::UnsupportedSecurity,
             mode as u32,
@@ -1098,7 +1102,7 @@ mod tests {
             ..Default::default()
         };
         let eapol_stall = connect_timeout_error(3, 0x423, 0x55, Some(associated), 0).diagnostic();
-        assert_eq!(eapol_stall.code(), DiagnosticCode::BackendTimeout);
+        assert_eq!(eapol_stall.code(), DiagnosticCode::OperationTimeout);
         assert_eq!(eapol_stall.stage(), DiagnosticStage::Eapol);
         assert_eq!(eapol_stall.action(), RecoveryAction::RetryOperation);
         assert_eq!(

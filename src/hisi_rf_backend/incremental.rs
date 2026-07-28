@@ -108,7 +108,12 @@ impl ActiveOperation {
     }
 
     fn scan(id: OperationId, config: ScanConfig, now_us: u64) -> Self {
-        Self::new(id, OperationKind::Scan, config.timeout_ms(), now_us)
+        Self::new(
+            id,
+            OperationKind::Scan,
+            config.operation_timeout().as_millis(),
+            now_us,
+        )
     }
 
     fn disconnect(id: OperationId, timeout_ms: u32, now_us: u64) -> Self {
@@ -152,13 +157,14 @@ impl ActiveOperation {
                     bssid: config.bssid,
                     frequency_mhz: channel_to_frequency(config.channel),
                 };
-                let timeout_ms = config.timeout_ms();
+                let timeout_ms = config.operation_timeout().as_millis();
                 let mut active = Self::connect(id, info, timeout_ms, now_us);
                 active.start_phase = StartPhase::ConnectConfigure(config);
                 active
             }
             IncrementalRequest::Disconnect(config) => {
-                let mut active = Self::disconnect(id, config.disconnect_timeout_ms, now_us);
+                let mut active =
+                    Self::disconnect(id, config.disconnect_timeout.as_millis(), now_us);
                 active.start_phase = StartPhase::Disconnect;
                 active
             }
@@ -1010,7 +1016,7 @@ fn convert_scan_result(scan: Ws63ScanResult) -> Option<ScanResult> {
 fn timeout_error(active: &ActiveOperation) -> BackendError {
     let status = active.last_disconnect_status.unwrap_or_default() as u32;
     staged_error(
-        BackendErrorClass::Timeout,
+        BackendErrorClass::OperationTimeout,
         ERROR_OPERATION_TIMEOUT | u32::from(active.last_event_kind),
         match active.kind {
             OperationKind::Initialize => DiagnosticStage::Initialize,
@@ -1136,7 +1142,7 @@ fn fixture_station_config(timeout_ms: u32) -> Option<StationConfig> {
     StationConfig::wpa2_personal(
         &scan,
         Passphrase::try_from_ascii(b"fixture-only")?,
-        timeout_ms,
+        hisi_rf_core::OperationTimeout::try_from_millis(timeout_ms)?,
     )
 }
 
@@ -1306,7 +1312,9 @@ pub(crate) fn operation_error_injection_fixture() -> Option<(Diagnostic, Diagnos
         return None;
     }
     let timeout = match poll_fixture(connect.as_mut()) {
-        Poll::Ready(Err(Error::Backend(error))) if error.class() == BackendErrorClass::Timeout => {
+        Poll::Ready(Err(Error::Backend(error)))
+            if error.class() == BackendErrorClass::OperationTimeout =>
+        {
             error.diagnostic()
         }
         _ => return None,
@@ -1561,7 +1569,7 @@ mod tests {
             &result,
             Passphrase::try_from_ascii(b"testtest").unwrap(),
             SaePwe::Both,
-            timeout_ms,
+            hisi_rf_core::OperationTimeout::try_from_millis(timeout_ms).unwrap(),
         )
         .unwrap()
     }
@@ -2006,7 +2014,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1_000).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1_000).unwrap(),
+                )),
             )
             .unwrap();
         let mut output = [ScanResult::empty(); 1];
@@ -2048,7 +2058,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1_000).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1_000).unwrap(),
+                )),
             )
             .unwrap();
         let budget = WorkBudget::try_new(2, 100).unwrap();
@@ -2074,7 +2086,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
             )
             .unwrap();
         let budget = WorkBudget::try_new(2, 100).unwrap();
@@ -2101,7 +2115,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
             )
             .unwrap();
         let budget = WorkBudget::try_new(2, 100).unwrap();
@@ -2134,7 +2150,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
             )
             .unwrap();
         let budget = WorkBudget::try_new(2, 100).unwrap();
@@ -2178,7 +2196,9 @@ mod tests {
         backend
             .start(
                 id,
-                IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
             )
             .unwrap();
         let budget = WorkBudget::try_new(1, 100).unwrap();
@@ -2271,7 +2291,7 @@ mod tests {
 
         assert_eq!(
             timed_out.code(),
-            hisi_rf_core::DiagnosticCode::BackendTimeout
+            hisi_rf_core::DiagnosticCode::OperationTimeout
         );
         assert_eq!(timed_out.stage(), DiagnosticStage::Connect);
         assert_eq!(timed_out.backend_code(), Some(ERROR_OPERATION_TIMEOUT));

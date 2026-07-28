@@ -265,7 +265,10 @@ async fn scan_profile(
         match with_timeout(
             Duration::from_secs(30),
             controller.scan(
-                ScanConfig::try_from_timeout_ms(15_000).expect("non-zero scan timeout"),
+                ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(15_000)
+                        .expect("non-zero scan timeout"),
+                ),
                 &mut scan_results,
             ),
         )
@@ -287,9 +290,9 @@ async fn scan_profile(
             }
             Ok(Err(error))
                 if scan_attempt == 0
-                    && error.diagnostic().code() == DiagnosticCode::BackendTimeout =>
+                    && error.diagnostic().code() == DiagnosticCode::OperationTimeout =>
             {
-                uart.write(b"RFDBG_A5B_SCAN_RETRY reason=backend_timeout\r\n");
+                uart.write(b"RFDBG_A5B_SCAN_RETRY reason=operation_timeout\r\n");
                 write_scan_diagnostics(uart, b"RFDBG_A5B_SCAN_RETRY");
                 scan_attempt = 1;
                 // `wal_force_scan_complete()` stops the active firmware scan,
@@ -413,9 +416,18 @@ async fn run_connect_profile(
         halt()
     };
     #[cfg(feature = "wpa2-personal")]
-    let config = StationConfig::wpa2_personal(result, passphrase, 60_000);
+    let config = StationConfig::wpa2_personal(
+        result,
+        passphrase,
+        hisi_rf_core::OperationTimeout::try_from_millis(60_000).expect("non-zero connect timeout"),
+    );
     #[cfg(feature = "wpa3-personal")]
-    let config = StationConfig::wpa3_personal(result, passphrase, SaePwe::Both, 60_000);
+    let config = StationConfig::wpa3_personal(
+        result,
+        passphrase,
+        SaePwe::Both,
+        hisi_rf_core::OperationTimeout::try_from_millis(60_000).expect("non-zero connect timeout"),
+    );
     let Some(config) = config else {
         uart.write(b"RFDBG_A5B_CONNECT_ERR reason=security_mismatch\r\n");
         halt()

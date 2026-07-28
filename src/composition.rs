@@ -645,7 +645,7 @@ fn runtime_diagnostic(error: hisi_rf_rtos_driver::Error) -> Diagnostic {
         hisi_rf_rtos_driver::Error::ResourceExhausted | hisi_rf_rtos_driver::Error::NoTaskSlots => {
             BackendErrorClass::ResourceUnavailable
         }
-        hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::Timeout,
+        hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::BackendTimeout,
         _ => BackendErrorClass::Other,
     };
     let code = crate::hisi_rf_backend::runtime_code(error);
@@ -665,7 +665,7 @@ fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> 
             let class = match runtime {
                 hisi_rf_rtos_driver::Error::ResourceExhausted
                 | hisi_rf_rtos_driver::Error::NoTaskSlots => BackendErrorClass::ResourceUnavailable,
-                hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::Timeout,
+                hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::BackendTimeout,
                 _ => BackendErrorClass::Other,
             };
             BackendError::new(class, 0x5732_a000 | code).with_trace(
