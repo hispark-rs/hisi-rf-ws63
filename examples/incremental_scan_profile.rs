@@ -156,10 +156,17 @@ fn main() -> ! {
     uart.write(b"RFDBG_A5B_RTOS_OK\r\n");
 
     let bootstrap_started = monotonic_ms();
+    let resources =
+        hisi_rf_ws63::Resources::<hisi_rf_ws63::SelectedProfile>::builder(efuse, radio_arena)
+            .crypto(p.KM, p.SPACC, p.TRNG);
+    #[cfg(feature = "wpa2-personal")]
+    let resources = resources.build();
+    #[cfg(feature = "wpa3-personal")]
+    let resources = resources.pke(p.PKE).build();
     let parts = RADIO_PARTS.init_with(|| {
         hisi_rf_ws63::init_incremental_after_blocking_bootstrap(
             hisi_rf_core::RadioConfig::default(),
-            hisi_rf_ws63::Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG, radio_arena),
+            resources,
             &RADIO_STORAGE,
         )
         .map(|controller| controller.split(RUNNER_BUDGET))

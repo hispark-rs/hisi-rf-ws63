@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.39] - 2026-07-29
+
 ### Added
 
+- Added a profile-aware typestate resource builder. WPA2 consumes only
+  eFuse/KM/SPACC/TRNG and leaves PKE available to the application; WPA3 cannot
+  be built until its PKE capability is supplied.
 - Added pinned WPA2 and WPA3 `cargo-public-api` snapshots for the complete
   incremental WS63 composition surface. CI now reports an exact API diff in
   addition to rejecting hidden sys/backend/runtime types.
+
+### Deprecated
+
+- Deprecated the six-argument `Resources::new` compatibility constructor for
+  one alpha migration cycle.
 
 ## [0.1.0-alpha.38] - 2026-07-28
 

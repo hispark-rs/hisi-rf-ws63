@@ -89,9 +89,13 @@ fn main() -> ! {
     hisi_rtos::request_reschedule();
     uart.write(b"RFDBG_RTOS_OK\r\n");
 
+    let resources =
+        hisi_rf_ws63::Resources::<hisi_rf_ws63::SelectedProfile>::builder(efuse, radio_arena)
+            .crypto(p.KM, p.SPACC, p.TRNG)
+            .build();
     let result = hisi_rf_ws63::init_incremental_after_blocking_bootstrap(
         hisi_rf_core::RadioConfig::default(),
-        hisi_rf_ws63::Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG, radio_arena),
+        resources,
         &RADIO_STORAGE,
     );
 

@@ -460,7 +460,8 @@ mod profile;
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{
-    DhcpDiagnostics, InitError, InitErrorKind, RadioController, Resources, RxQueueDiagnostics,
+    CryptoReady, DhcpDiagnostics, InitError, InitErrorKind, MissingCrypto, MissingPke,
+    PkeNotRequired, PkeReady, RadioController, Resources, ResourcesBuilder, RxQueueDiagnostics,
     WifiDevice, WifiParts, WifiRxToken, WifiTxToken, init, station_mac_address,
 };
 #[cfg(all(

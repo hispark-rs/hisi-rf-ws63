@@ -10,17 +10,17 @@ hisi_rf_ws63::declare_radio_arena!(static RADIO_ARENA);
 #[entry]
 fn main() -> ! {
     let peripherals = unsafe { hisi_hal::peripherals::Peripherals::steal() };
-    let resources = hisi_rf_ws63::Resources::new(
-        peripherals.EFUSE,
-        peripherals.KM,
-        peripherals.SPACC,
-        peripherals.PKE,
-        peripherals.TRNG,
-        RADIO_ARENA
-            .claim_for::<hisi_rf_ws63::SelectedProfile>()
-            .and_then(|arena| arena.install())
-            .expect("install shared RF arena"),
-    );
+    let arena = RADIO_ARENA
+        .claim_for::<hisi_rf_ws63::SelectedProfile>()
+        .and_then(|arena| arena.install())
+        .expect("install shared RF arena");
+    let resources =
+        hisi_rf_ws63::Resources::<hisi_rf_ws63::SelectedProfile>::builder(peripherals.EFUSE, arena)
+            .crypto(peripherals.KM, peripherals.SPACC, peripherals.TRNG);
+    #[cfg(feature = "wpa2-personal")]
+    let resources = resources.build();
+    #[cfg(feature = "wpa3-personal")]
+    let resources = resources.pke(peripherals.PKE).build();
     let _radio = hisi_rf_ws63::init(
         hisi_rf_core::RadioConfig::default(),
         resources,

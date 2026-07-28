@@ -180,12 +180,14 @@ struct CryptoContentionContext {
 pub(crate) fn install_hardware_crypto(
     km: Km<'static>,
     spacc: Spacc<'static>,
-    pke: Pke<'static>,
+    pke: Option<Pke<'static>>,
     trng: Trng<'static>,
     storage: &'static mut Ws63CryptoStorage,
 ) -> Result<(), CryptoError> {
     let mutex =
         hisi_rf_rtos_driver::mutex_create().map_err(|_| CryptoError::Backend(0xffff_1002))?;
+    #[cfg(feature = "upstream-supplicant-wpa3")]
+    let pke = pke.ok_or(CryptoError::InvalidValue)?;
     #[cfg(not(feature = "upstream-supplicant-wpa3"))]
     let _ = pke;
     let Some(service) = CRYPTO_CELL.try_init(CryptoService {
@@ -702,7 +704,7 @@ pub(crate) fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
 pub(crate) fn install_hardware_crypto(
     _km: Km<'static>,
     _spacc: Spacc<'static>,
-    _pke: Pke<'static>,
+    _pke: Option<Pke<'static>>,
     _trng: Trng<'static>,
     _storage: &'static mut Ws63CryptoStorage,
 ) -> Result<(), CryptoError> {

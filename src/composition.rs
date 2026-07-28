@@ -23,6 +23,10 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
 pub use crate::netif_smoltcp::{DhcpDiagnostics, RxQueueDiagnostics};
+#[cfg(feature = "wpa2-personal")]
+use crate::profile::WifiWpa2Smoltcp;
+#[cfg(feature = "wpa3-personal")]
+use crate::profile::WifiWpa3Smoltcp;
 use crate::profile::{ActiveProfile, InstalledRadioArena, Profile, Storage};
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
@@ -30,13 +34,21 @@ pub struct Resources<P: Profile> {
     efuse: Efuse<'static>,
     km: Km<'static>,
     spacc: Spacc<'static>,
-    pke: Pke<'static>,
+    pke: Option<Pke<'static>>,
     trng: Trng<'static>,
     _arena: InstalledRadioArena<P>,
 }
 
 impl<P: Profile> Resources<P> {
-    /// Assemble the WS63 Wi-Fi backend and L2 device without touching hardware.
+    /// Assemble all WS63 crypto capabilities without touching hardware.
+    ///
+    /// New code should use the profile-aware [`ResourcesBuilder`]. This
+    /// compatibility constructor keeps the pre-A5UX shape for one alpha
+    /// migration cycle and always consumes PKE, even for WPA2.
+    #[deprecated(
+        since = "0.1.0-alpha.39",
+        note = "use Resources::<SelectedProfile>::builder(...).crypto(...), then build() or pke(...).build()"
+    )]
     pub fn new(
         efuse: Efuse<'static>,
         km: Km<'static>,
@@ -49,9 +61,137 @@ impl<P: Profile> Resources<P> {
             efuse,
             km,
             spacc,
-            pke,
+            pke: Some(pke),
             trng,
             _arena: arena,
+        }
+    }
+}
+
+/// Type state: KM/SPACC/TRNG have not been supplied.
+#[doc(hidden)]
+pub struct MissingCrypto;
+
+/// Type state: KM/SPACC/TRNG are uniquely owned by the resource builder.
+#[doc(hidden)]
+pub struct CryptoReady {
+    km: Km<'static>,
+    spacc: Spacc<'static>,
+    trng: Trng<'static>,
+}
+
+/// Type state: the selected profile does not need PKE.
+#[doc(hidden)]
+pub struct PkeNotRequired;
+
+/// Type state: the selected profile requires a PKE token.
+#[doc(hidden)]
+pub struct MissingPke;
+
+/// Type state: PKE is uniquely owned by the resource builder.
+#[doc(hidden)]
+pub struct PkeReady(Pke<'static>);
+
+/// Profile-aware builder for uniquely owned WS63 radio capabilities.
+///
+/// The builder never touches hardware. Its type state makes the selected
+/// profile's required capabilities explicit: WPA2 needs KM/SPACC/TRNG, while
+/// WPA3 additionally requires PKE.
+pub struct ResourcesBuilder<P: Profile, C, E> {
+    efuse: Efuse<'static>,
+    crypto: C,
+    pke: E,
+    arena: InstalledRadioArena<P>,
+}
+
+#[cfg(feature = "wpa2-personal")]
+impl Resources<WifiWpa2Smoltcp> {
+    /// Start assembling the capabilities required by the WPA2 profile.
+    pub fn builder(
+        efuse: Efuse<'static>,
+        arena: InstalledRadioArena<WifiWpa2Smoltcp>,
+    ) -> ResourcesBuilder<WifiWpa2Smoltcp, MissingCrypto, PkeNotRequired> {
+        ResourcesBuilder {
+            efuse,
+            crypto: MissingCrypto,
+            pke: PkeNotRequired,
+            arena,
+        }
+    }
+}
+
+#[cfg(feature = "wpa3-personal")]
+impl Resources<WifiWpa3Smoltcp> {
+    /// Start assembling the capabilities required by the WPA3 profile.
+    pub fn builder(
+        efuse: Efuse<'static>,
+        arena: InstalledRadioArena<WifiWpa3Smoltcp>,
+    ) -> ResourcesBuilder<WifiWpa3Smoltcp, MissingCrypto, MissingPke> {
+        ResourcesBuilder {
+            efuse,
+            crypto: MissingCrypto,
+            pke: MissingPke,
+            arena,
+        }
+    }
+}
+
+impl<P: Profile, E> ResourcesBuilder<P, MissingCrypto, E> {
+    /// Supply the KM, SPACC and TRNG capabilities shared by Personal profiles.
+    pub fn crypto(
+        self,
+        km: Km<'static>,
+        spacc: Spacc<'static>,
+        trng: Trng<'static>,
+    ) -> ResourcesBuilder<P, CryptoReady, E> {
+        ResourcesBuilder {
+            efuse: self.efuse,
+            crypto: CryptoReady { km, spacc, trng },
+            pke: self.pke,
+            arena: self.arena,
+        }
+    }
+}
+
+#[cfg(feature = "wpa3-personal")]
+impl<C> ResourcesBuilder<WifiWpa3Smoltcp, C, MissingPke> {
+    /// Supply the PKE capability required by SAE/P-256.
+    pub fn pke(self, pke: Pke<'static>) -> ResourcesBuilder<WifiWpa3Smoltcp, C, PkeReady> {
+        ResourcesBuilder {
+            efuse: self.efuse,
+            crypto: self.crypto,
+            pke: PkeReady(pke),
+            arena: self.arena,
+        }
+    }
+}
+
+#[cfg(feature = "wpa2-personal")]
+impl ResourcesBuilder<WifiWpa2Smoltcp, CryptoReady, PkeNotRequired> {
+    /// Finish the WPA2 resources without consuming an unused PKE token.
+    pub fn build(self) -> Resources<WifiWpa2Smoltcp> {
+        Resources {
+            efuse: self.efuse,
+            km: self.crypto.km,
+            spacc: self.crypto.spacc,
+            pke: None,
+            trng: self.crypto.trng,
+            _arena: self.arena,
+        }
+    }
+}
+
+#[cfg(feature = "wpa3-personal")]
+impl ResourcesBuilder<WifiWpa3Smoltcp, CryptoReady, PkeReady> {
+    /// Finish the WPA3 resources after all required capabilities are present.
+    pub fn build(self) -> Resources<WifiWpa3Smoltcp> {
+        Resources {
+            efuse: self.efuse,
+            km: self.crypto.km,
+            spacc: self.crypto.spacc,
+            pke: Some(self.pke.0),
+            trng: self.crypto.trng,
+            _arena: self.arena,
         }
     }
 }

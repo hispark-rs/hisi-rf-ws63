@@ -96,7 +96,7 @@ impl<'d> Ws63WifiBackend<'d> {
         efuse: Efuse<'d>,
         km: Km<'d>,
         spacc: Spacc<'d>,
-        pke: Pke<'d>,
+        pke: Option<Pke<'d>>,
         trng: Trng<'d>,
         crypto_storage: &'static mut Ws63CryptoStorage,
     ) -> Self {
@@ -104,7 +104,7 @@ impl<'d> Ws63WifiBackend<'d> {
             efuse: Some(efuse),
             km: Some(km),
             spacc: Some(spacc),
-            pke: Some(pke),
+            pke,
             trng: Some(trng),
             crypto_storage: Some(crypto_storage),
             wifi: None,
@@ -143,10 +143,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
             .spacc
             .take()
             .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0006))?;
-        let pke = self
-            .pke
-            .take()
-            .ok_or_else(|| backend_error(BackendErrorClass::Initialize, 0x1000_0007))?;
+        let pke = self.pke.take();
         let crypto_storage = self
             .crypto_storage
             .take()
@@ -597,7 +594,7 @@ pub fn resources(
     efuse: Efuse<'static>,
     km: Km<'static>,
     spacc: Spacc<'static>,
-    pke: Pke<'static>,
+    pke: Option<Pke<'static>>,
     trng: Trng<'static>,
     crypto_storage: &'static mut Ws63CryptoStorage,
 ) -> RadioResources<Ws63WifiBackend<'static>, Ws63Device> {
