@@ -22,6 +22,7 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
+pub use crate::netif_smoltcp::{DhcpDiagnostics, RxQueueDiagnostics};
 use crate::profile::{ActiveProfile, InstalledRadioArena, Profile, Storage};
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
@@ -139,6 +140,30 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
 
 /// WS63 L2 device exposed only through the standard smoltcp device contract.
 pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
+
+impl WifiDevice {
+    /// Snapshot bounded L2 receive-queue occupancy and loss counters.
+    ///
+    /// The snapshot contains counters only; it never exposes received frame
+    /// contents. Applications can use it to distinguish radio/network
+    /// starvation from an upstream connectivity failure.
+    pub fn rx_queue_diagnostics(&self) -> RxQueueDiagnostics {
+        crate::netif_smoltcp::rx_queue_diagnostics()
+    }
+
+    /// Start a new L2 receive-queue diagnostic window.
+    ///
+    /// Pending frames are preserved. Only the loss, high-watermark, and ICMP
+    /// observation counters are reset.
+    pub fn reset_rx_queue_diagnostics(&self) {
+        crate::netif_smoltcp::reset_rx_queue_diagnostics();
+    }
+
+    /// Snapshot DHCP client/server packets crossing the Rust-visible L2 seam.
+    pub fn dhcp_diagnostics(&self) -> DhcpDiagnostics {
+        crate::netif_smoltcp::dhcp_diagnostics()
+    }
+}
 
 /// Opaque receive token for [`WifiDevice`].
 pub struct WifiRxToken(

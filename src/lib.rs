@@ -451,6 +451,14 @@ pub use incremental_wait::Ws63IncrementalWaitDiagnostics;
 mod profile;
 #[cfg(all(
     feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub use composition::{
+    DhcpDiagnostics, InitError, InitErrorKind, RadioController, Resources, RxQueueDiagnostics,
+    WifiDevice, WifiParts, WifiRxToken, WifiTxToken, init, station_mac_address,
+};
+#[cfg(all(
+    feature = "net",
     feature = "incremental-backend-experiment",
     feature = "upstream-supplicant-port"
 ))]
@@ -461,14 +469,6 @@ pub use composition::{IncrementalRadioController, init_incremental_after_blockin
     feature = "upstream-supplicant-port"
 ))]
 pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
-#[cfg(all(
-    feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
-))]
-pub use composition::{
-    InitError, InitErrorKind, RadioController, Resources, WifiDevice, WifiParts, WifiRxToken,
-    WifiTxToken, init, station_mac_address,
-};
 #[cfg(all(
     feature = "net",
     any(feature = "wpa2-personal", feature = "wpa3-personal")
