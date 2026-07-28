@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.32] - 2026-07-28
+
+### Changed
+
+- Updated `hisi-rf-core` to `0.1.0-alpha.15`, preserving immediate
+  incremental-backend continuation when a terminal deadline is also armed.
+
+### Added
+
+- Added an adversarial production-adapter test proving that cancellation
+  releases key, queue, timer, and operation-slot ownership before a replacement
+  operation starts, while stale generations remain isolated.
+
 ## [0.1.0-alpha.31] - 2026-07-28
 
 ### Added
