@@ -570,6 +570,21 @@ fn connect_timeout_error(
     error
 }
 
+#[cfg(all(feature = "firmware-example", feature = "upstream-supplicant-port"))]
+pub(crate) fn association_rejection_diagnostic_fixture() -> hisi_rf_core::Diagnostic {
+    backend_failure_error(30, 0x445, 0x123).diagnostic()
+}
+
+#[cfg(all(feature = "firmware-example", feature = "upstream-supplicant-port"))]
+pub(crate) fn first_eapol_timeout_diagnostic_fixture() -> hisi_rf_core::Diagnostic {
+    let associated = crate::upstream_supplicant::AssociationAttemptDiagnostic {
+        raw_status: 0,
+        status: 0,
+        ..Default::default()
+    };
+    connect_timeout_error(3, 0x423, 0x55, Some(associated), 0).diagnostic()
+}
+
 /// Build the WS63 resources consumed by `hisi_rf_core::init`.
 #[cfg(feature = "net")]
 pub fn resources(

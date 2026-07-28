@@ -272,6 +272,27 @@ pub fn upstream_supplicant_eapol_diagnostic_snapshot() -> [u32; 8] {
 #[doc(hidden)]
 pub use upstream_supplicant::AssociationAttemptDiagnostic;
 
+/// Credential-free production diagnostic fixtures used by target parity tests.
+///
+/// These fixtures call the same builders as the WS63 connect loop. They are
+/// intentionally available only to firmware examples and are not part of the
+/// normal backend API.
+#[cfg(all(feature = "firmware-example", feature = "upstream-supplicant-port"))]
+#[doc(hidden)]
+pub mod firmware_diagnostic_fixtures {
+    use hisi_rf_core::Diagnostic;
+
+    /// IEEE 802.11 status 30 from the production terminal-connect path.
+    pub fn association_rejection() -> Diagnostic {
+        crate::hisi_rf_backend::association_rejection_diagnostic_fixture()
+    }
+
+    /// Association success followed by a first-EAPOL deadline expiry.
+    pub fn first_eapol_timeout() -> Diagnostic {
+        crate::hisi_rf_backend::first_eapol_timeout_diagnostic_fixture()
+    }
+}
+
 /// Copy the retained association-result timeline into `output`.
 #[cfg(feature = "upstream-supplicant-port")]
 #[doc(hidden)]

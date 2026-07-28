@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.30] - 2026-07-28
+
+### Added
+
+- Added credential-free RV32 fixtures for the production association-rejection
+  and first-EAPOL-timeout diagnostic builders. The same image now verifies
+  stable code, stage, recovery action, profile revision, and bounded trace
+  serialization on QEMU and real WS63 silicon.
+
 ## [0.1.0-alpha.29] - 2026-07-28
 
 ### Added

@@ -10,6 +10,7 @@ use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
 use hisi_rf_core::{BackendError, BackendErrorClass, Error};
+use hisi_rf_ws63::firmware_diagnostic_fixtures;
 use hisi_riscv_rt::entry;
 
 struct JsonBuffer {
@@ -81,6 +82,34 @@ fn main() -> ! {
     uart.write(timeout.stage().as_str().as_bytes());
     uart.write(b" action=");
     uart.write(timeout.action().as_str().as_bytes());
+
+    let rejection = firmware_diagnostic_fixtures::association_rejection();
+    let mut rejection_json = JsonBuffer::new();
+    rejection
+        .write_json(&mut rejection_json)
+        .expect("association-rejection diagnostic JSON fits the fixed buffer");
+    uart.write(b"\r\nRFDBG_A5U_ASSOC_REJECTION_JSON ");
+    uart.write(rejection_json.bytes());
+    uart.write(b"\r\nRFDBG_A5U_ASSOC_REJECTION_OK code=");
+    uart.write(rejection.code().as_str().as_bytes());
+    uart.write(b" stage=");
+    uart.write(rejection.stage().as_str().as_bytes());
+    uart.write(b" action=");
+    uart.write(rejection.action().as_str().as_bytes());
+
+    let eapol_timeout = firmware_diagnostic_fixtures::first_eapol_timeout();
+    let mut eapol_timeout_json = JsonBuffer::new();
+    eapol_timeout
+        .write_json(&mut eapol_timeout_json)
+        .expect("first-EAPOL diagnostic JSON fits the fixed buffer");
+    uart.write(b"\r\nRFDBG_A5U_FIRST_EAPOL_TIMEOUT_JSON ");
+    uart.write(eapol_timeout_json.bytes());
+    uart.write(b"\r\nRFDBG_A5U_FIRST_EAPOL_TIMEOUT_OK code=");
+    uart.write(eapol_timeout.code().as_str().as_bytes());
+    uart.write(b" stage=");
+    uart.write(eapol_timeout.stage().as_str().as_bytes());
+    uart.write(b" action=");
+    uart.write(eapol_timeout.action().as_str().as_bytes());
     uart.write(b"\r\n");
 
     loop {
