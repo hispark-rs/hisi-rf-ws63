@@ -9,7 +9,12 @@
 use core::num::NonZeroU32;
 
 #[cfg(feature = "firmware-example")]
-use core::cell::Cell;
+use core::{
+    cell::Cell,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, ConnectionInfo, DiagnosticStage, DiagnosticTraceKind,
     IncrementalCompletion, IncrementalRequest, IncrementalWifiBackend, OperationId,
@@ -18,7 +23,8 @@ use hisi_rf_core::{
 };
 #[cfg(feature = "firmware-example")]
 use hisi_rf_core::{
-    CommandSequence, Diagnostic, IncrementalBackendDriver, IncrementalDriverEvent, WifiConfig,
+    Diagnostic, Error, IncrementalDriverEvent, Passphrase, RadioConfig, RadioResources, RadioState,
+    WifiEvent, init,
 };
 use portable_atomic::{AtomicU32, Ordering};
 use ws63_radio_sys::supplicant::{Event, PollResult};
@@ -1019,6 +1025,7 @@ fn timeout_error(active: &ActiveOperation) -> BackendError {
 #[cfg(feature = "firmware-example")]
 struct OperationFixturePort {
     scan_pending: bool,
+    disconnect_event_pending: bool,
 }
 
 #[cfg(feature = "firmware-example")]
@@ -1026,6 +1033,7 @@ impl OperationFixturePort {
     const fn new() -> Self {
         Self {
             scan_pending: false,
+            disconnect_event_pending: false,
         }
     }
 }
@@ -1062,6 +1070,7 @@ impl SupplicantPort for OperationFixturePort {
     }
 
     fn disconnect(&mut self) -> Result<(), BackendError> {
+        self.disconnect_event_pending = true;
         Ok(())
     }
 
@@ -1069,14 +1078,25 @@ impl SupplicantPort for OperationFixturePort {
         Ok(PollResult {
             status: 0,
             work_completed: 0,
-            output_pending: 0,
+            output_pending: u32::from(self.disconnect_event_pending),
             reserved: 0,
             next_deadline_ms: u64::MAX,
         })
     }
 
     fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
-        Ok(None)
+        if !self.disconnect_event_pending {
+            return Ok(None);
+        }
+        self.disconnect_event_pending = false;
+        Ok(Some(Event {
+            abi_version: ws63_radio_sys::supplicant::ABI_VERSION,
+            kind: super::NATIVE_EVENT_DISCONNECTED,
+            data_len: 0,
+            status: 0,
+            timestamp_ms: 0,
+            data: [0; ws63_radio_sys::supplicant::EVENT_DATA_LEN],
+        }))
     }
 
     fn recovery_diagnostic_word(&self) -> u32 {
@@ -1099,148 +1119,198 @@ impl MonotonicClock for OperationFixtureClock<'_> {
 }
 
 #[cfg(feature = "firmware-example")]
-fn fixture_sequence(raw: u32) -> Option<CommandSequence> {
-    CommandSequence::try_from_raw(raw)
+fn poll_fixture<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
 }
 
-/// Exercise cancellation and timeout through the production incremental
-/// driver and WS63 backend state machines without touching radio hardware.
+#[cfg(feature = "firmware-example")]
+fn fixture_station_config(timeout_ms: u32) -> Option<StationConfig> {
+    let scan = ScanResult {
+        ssid: Ssid::try_from_bytes(b"source-path-fixture")?,
+        bssid: [0x02, 0, 0, 0, 0, 1],
+        frequency_mhz: 2_412,
+        rssi_dbm: -40,
+        security: Security::Wpa2Personal,
+        channel: 1,
+    };
+    StationConfig::wpa2_personal(
+        &scan,
+        Passphrase::try_from_ascii(b"fixture-only")?,
+        timeout_ms,
+    )
+}
+
+/// Exercise cancellation and timeout through the public controller, facade
+/// command/completion channels, incremental runner, and WS63 backend state
+/// machine without touching radio hardware.
 #[cfg(feature = "firmware-example")]
 pub(crate) fn operation_error_injection_fixture() -> Option<(Diagnostic, Diagnostic)> {
+    static CANCELLATION_STATE: RadioState<4> = RadioState::new();
+    static TIMEOUT_STATE: RadioState<4> = RadioState::new();
+
     let budget = WorkBudget::try_new(4, 100)?;
-    let mut output = [ScanResult::empty(); 1];
 
     let cancellation_clock = Cell::new(0);
     let cancellation_backend = IncrementalSupplicantBackend::new(
         OperationFixturePort::new(),
         OperationFixtureClock(&cancellation_clock),
     );
-    let mut cancellation_driver = IncrementalBackendDriver::new(cancellation_backend, budget);
-    let first_sequence = fixture_sequence(1)?;
-    let replacement_sequence = fixture_sequence(2)?;
-    cancellation_driver
-        .submit(
-            first_sequence,
-            IncrementalRequest::Initialize(WifiConfig::default()),
-        )
-        .ok()?;
-    if !matches!(
-        cancellation_driver
-            .drive_once(WaitSet::empty(), &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Started {
-            sequence,
-            operation: _
-        } if sequence == first_sequence
-    ) {
-        return None;
+    let cancellation_radio = init(
+        RadioConfig::default(),
+        RadioResources {
+            backend: cancellation_backend,
+            device: (),
+        },
+        &CANCELLATION_STATE,
+    )
+    .ok()?;
+    let hisi_rf_core::IncrementalRadioParts {
+        mut wifi,
+        mut runner,
+    } = cancellation_radio.split_incremental(budget);
+    {
+        let mut connect = core::pin::pin!(wifi.controller.connect(fixture_station_config(1_000)?));
+        if !poll_fixture(connect.as_mut()).is_pending() {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Started { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Pending { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Pending { .. }
+        ) {
+            return None;
+        }
     }
-    cancellation_driver
-        .submit(
-            replacement_sequence,
-            IncrementalRequest::Initialize(WifiConfig::default()),
-        )
-        .ok()?;
-    if !matches!(
-        cancellation_driver
-            .drive_once(WaitSet::empty(), &mut output)
-            .ok()?,
-        IncrementalDriverEvent::CancelRequested {
-            sequence,
-            operation: _
-        } if sequence == first_sequence
-    ) {
-        return None;
+
+    {
+        let mut disconnect = core::pin::pin!(wifi.controller.disconnect());
+        if !poll_fixture(disconnect.as_mut()).is_pending() {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::CancelRequested { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Pending { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::BACKEND).ok()?,
+            IncrementalDriverEvent::Cancelled { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Started { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::empty()).ok()?,
+            IncrementalDriverEvent::Pending { .. }
+        ) {
+            return None;
+        }
+        if !matches!(
+            runner.run_once(WaitSet::BACKEND).ok()?,
+            IncrementalDriverEvent::Completed {
+                completion: IncrementalCompletion::Disconnected,
+                ..
+            }
+        ) {
+            return None;
+        }
+        if !matches!(poll_fixture(disconnect.as_mut()), Poll::Ready(Ok(()))) {
+            return None;
+        }
     }
-    if !matches!(
-        cancellation_driver
-            .drive_once(WaitSet::BACKEND, &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Cancelled {
-            sequence,
-            suppressed_completion: false
-        } if sequence == first_sequence
-    ) {
-        return None;
-    }
-    if !matches!(
-        cancellation_driver
-            .drive_once(WaitSet::empty(), &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Started {
-            sequence,
-            operation: _
-        } if sequence == replacement_sequence
-    ) {
-        return None;
-    }
-    if !matches!(
-        cancellation_driver
-            .drive_once(WaitSet::BACKEND, &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Completed {
-            sequence,
-            completion: IncrementalCompletion::Initialized
-        } if sequence == replacement_sequence
-    ) {
-        return None;
-    }
-    let cancellation = BackendError::new(BackendErrorClass::Cancelled, 0).diagnostic();
+
+    let cancellation = loop {
+        let mut event = core::pin::pin!(wifi.controller.next_event());
+        match poll_fixture(event.as_mut()) {
+            Poll::Ready(WifiEvent::Failed(error))
+                if error.class() == BackendErrorClass::Cancelled =>
+            {
+                break error.diagnostic();
+            }
+            Poll::Ready(_) => {}
+            Poll::Pending => return None,
+        }
+    };
 
     let timeout_clock = Cell::new(0);
     let timeout_backend = IncrementalSupplicantBackend::new(
         OperationFixturePort::new(),
         OperationFixtureClock(&timeout_clock),
     );
-    let mut timeout_driver = IncrementalBackendDriver::new(timeout_backend, budget);
-    let timeout_sequence = fixture_sequence(3)?;
-    let recovery_sequence = fixture_sequence(4)?;
-    timeout_driver
-        .submit(
-            timeout_sequence,
-            IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1)?),
-        )
-        .ok()?;
+    let timeout_radio = init(
+        RadioConfig::default(),
+        RadioResources {
+            backend: timeout_backend,
+            device: (),
+        },
+        &TIMEOUT_STATE,
+    )
+    .ok()?;
+    let hisi_rf_core::IncrementalRadioParts {
+        mut wifi,
+        mut runner,
+    } = timeout_radio.split_incremental(budget);
+    let mut connect = core::pin::pin!(wifi.controller.connect(fixture_station_config(1)?));
+    if !poll_fixture(connect.as_mut()).is_pending() {
+        return None;
+    }
     if !matches!(
-        timeout_driver
-            .drive_once(WaitSet::empty(), &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Started {
-            sequence,
-            operation: _
-        } if sequence == timeout_sequence
+        runner.run_once(WaitSet::empty()).ok()?,
+        IncrementalDriverEvent::Started { .. }
+    ) {
+        return None;
+    }
+    if !matches!(
+        runner.run_once(WaitSet::empty()).ok()?,
+        IncrementalDriverEvent::Pending { .. }
+    ) {
+        return None;
+    }
+    if !matches!(
+        runner.run_once(WaitSet::empty()).ok()?,
+        IncrementalDriverEvent::Pending { .. }
     ) {
         return None;
     }
     timeout_clock.set(1_000);
-    let timeout = match timeout_driver
-        .drive_once(WaitSet::TIMER, &mut output)
-        .ok()?
-    {
-        IncrementalDriverEvent::Failed {
-            sequence,
-            error,
-            cancellation_pending: false,
-        } if sequence == timeout_sequence => error.diagnostic(),
-        _ => return None,
-    };
-    timeout_driver
-        .submit(
-            recovery_sequence,
-            IncrementalRequest::Initialize(WifiConfig::default()),
-        )
-        .ok()?;
     if !matches!(
-        timeout_driver
-            .drive_once(WaitSet::empty(), &mut output)
-            .ok()?,
-        IncrementalDriverEvent::Started {
-            sequence,
-            operation: _
-        } if sequence == recovery_sequence
+        runner.run_once(WaitSet::TIMER).ok()?,
+        IncrementalDriverEvent::Failed {
+            cancellation_pending: false,
+            ..
+        }
     ) {
         return None;
     }
+    let timeout = match poll_fixture(connect.as_mut()) {
+        Poll::Ready(Err(Error::Backend(error))) if error.class() == BackendErrorClass::Timeout => {
+            error.diagnostic()
+        }
+        _ => return None,
+    };
 
     Some((cancellation, timeout))
 }
@@ -2184,5 +2254,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.disposition(), PollDisposition::Cancelled);
+    }
+
+    #[cfg(feature = "firmware-example")]
+    #[test]
+    fn operation_fixture_crosses_the_public_controller_path() {
+        let (cancelled, timed_out) =
+            operation_error_injection_fixture().expect("fixture must complete");
+
+        assert_eq!(
+            cancelled.code(),
+            hisi_rf_core::DiagnosticCode::OperationCancelled
+        );
+        assert_eq!(cancelled.stage(), DiagnosticStage::Operation);
+        assert_eq!(cancelled.backend_code(), Some(0));
+
+        assert_eq!(
+            timed_out.code(),
+            hisi_rf_core::DiagnosticCode::BackendTimeout
+        );
+        assert_eq!(timed_out.stage(), DiagnosticStage::Connect);
+        assert_eq!(timed_out.backend_code(), Some(ERROR_OPERATION_TIMEOUT));
     }
 }

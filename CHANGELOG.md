@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.36] - 2026-07-28
+
+### Changed
+
+- Reworked the credential-free cancellation and timeout fixture to traverse
+  the public `WifiController`, command/completion channels, incremental runner,
+  and WS63 backend instead of driving the private backend driver directly.
+- Classified the injected timeout at the real `connect` stage while preserving
+  the stable cancellation and backend error identities.
+
+### Added
+
+- Added a host regression proving both injected terminal errors return through
+  the public controller path. The same firmware image was verified on QEMU and
+  real WS63 silicon.
+
 ## [0.1.0-alpha.35] - 2026-07-28
 
 ### Fixed
