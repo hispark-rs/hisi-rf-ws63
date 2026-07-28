@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.34] - 2026-07-28
+
+### Changed
+
+- Deferred incremental scan, connect, disconnect, and cancellation driver calls
+  from `start`/`cancel` into individually budgeted `poll` turns.
+- Updated `hisi-rf-core` to `0.1.0-alpha.16` so incremental operations receive an
+  immediate bounded poll after start and cancellation notification.
+
 ## [0.1.0-alpha.33] - 2026-07-28
 
 ### Changed

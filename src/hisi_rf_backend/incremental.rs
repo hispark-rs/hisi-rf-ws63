@@ -52,6 +52,15 @@ enum OperationKind {
     Disconnect,
 }
 
+#[derive(Debug)]
+enum StartPhase {
+    Ready,
+    Scan,
+    ConnectConfigure(StationConfig),
+    ConnectSubmit,
+    Disconnect,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperationOutcome {
     Continue,
@@ -60,13 +69,15 @@ enum OperationOutcome {
     Failed(i32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct ActiveOperation {
     id: OperationId,
     kind: OperationKind,
+    start_phase: StartPhase,
     deadline_us: u64,
     backend_deadline_us: Option<u64>,
     cancellation_requested: bool,
+    cancellation_action_submitted: bool,
     first_eapol_reconnect_deadline_us: Option<u64>,
     first_eapol_reconnect_submitted: bool,
     external_auth_reconnect_deadline_us: Option<u64>,
@@ -102,9 +113,11 @@ impl ActiveOperation {
         Self {
             id,
             kind,
+            start_phase: StartPhase::Ready,
             deadline_us: now_us.saturating_add(u64::from(timeout_ms).saturating_mul(1_000)),
             backend_deadline_us: None,
             cancellation_requested: false,
+            cancellation_action_submitted: false,
             first_eapol_reconnect_deadline_us: None,
             first_eapol_reconnect_submitted: false,
             external_auth_reconnect_deadline_us: None,
@@ -117,6 +130,32 @@ impl ActiveOperation {
             scan_seen: 0,
             scan_written: 0,
             scan_truncated: false,
+        }
+    }
+
+    fn from_request(id: OperationId, request: IncrementalRequest, now_us: u64) -> Self {
+        match request {
+            IncrementalRequest::Initialize(_) => Self::initialize(id, now_us),
+            IncrementalRequest::Scan(config) => {
+                let mut active = Self::scan(id, config, now_us);
+                active.start_phase = StartPhase::Scan;
+                active
+            }
+            IncrementalRequest::Connect(config) => {
+                let info = ConnectionInfo {
+                    bssid: config.bssid,
+                    frequency_mhz: channel_to_frequency(config.channel),
+                };
+                let timeout_ms = config.timeout_ms();
+                let mut active = Self::connect(id, info, timeout_ms, now_us);
+                active.start_phase = StartPhase::ConnectConfigure(config);
+                active
+            }
+            IncrementalRequest::Disconnect(config) => {
+                let mut active = Self::disconnect(id, config.disconnect_timeout_ms, now_us);
+                active.start_phase = StartPhase::Disconnect;
+                active
+            }
         }
     }
 
@@ -418,7 +457,7 @@ pub(crate) fn reconnect_diagnostic_snapshot() -> [u32; 2] {
     ]
 }
 
-trait MonotonicClock {
+pub(crate) trait MonotonicClock {
     fn now_us(&self) -> u64;
 }
 
@@ -464,6 +503,35 @@ impl<P: SupplicantPort, C> IncrementalSupplicantBackend<P, C> {
         }
         self.active = None;
         Err(error)
+    }
+}
+
+impl<P: SupplicantPort, C: MonotonicClock> IncrementalSupplicantBackend<P, C> {
+    fn bounded_step_report(
+        &mut self,
+        id: OperationId,
+        budget: WorkBudget,
+        started_us: u64,
+        consumed_events: u16,
+        disposition: PollDisposition,
+    ) -> Result<WorkReport, BackendError> {
+        let finished_us = self.clock.now_us();
+        let elapsed = finished_us.wrapping_sub(started_us);
+        if elapsed > u64::from(u32::MAX) {
+            return self.clear_with_error(operation_error(ERROR_WORK_BUDGET));
+        }
+        let report = WorkReport::try_new(
+            id,
+            budget,
+            consumed_events,
+            elapsed as u32,
+            true,
+            disposition,
+        );
+        match report {
+            Some(report) => Ok(report),
+            None => self.clear_with_error(operation_error(ERROR_WORK_BUDGET)),
+        }
     }
 }
 
@@ -534,27 +602,7 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             ));
         }
         let now_us = self.clock.now_us();
-        let active = match request {
-            IncrementalRequest::Scan(config) => {
-                self.port.start_scan()?;
-                ActiveOperation::scan(id, config, now_us)
-            }
-            IncrementalRequest::Connect(config) => {
-                self.port.configure(&config)?;
-                self.port.connect()?;
-                let info = ConnectionInfo {
-                    bssid: config.bssid,
-                    frequency_mhz: channel_to_frequency(config.channel),
-                };
-                ActiveOperation::connect(id, info, config.timeout_ms(), now_us)
-            }
-            IncrementalRequest::Disconnect(config) => {
-                self.port.disconnect()?;
-                ActiveOperation::disconnect(id, config.disconnect_timeout_ms, now_us)
-            }
-            IncrementalRequest::Initialize(_) => ActiveOperation::initialize(id, now_us),
-        };
-        self.active = Some(active);
+        self.active = Some(ActiveOperation::from_request(id, request, now_us));
         Ok(())
     }
 
@@ -587,6 +635,90 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             )
             .ok_or_else(|| operation_error(ERROR_WORK_BUDGET));
         }
+
+        if self.active_mut(id)?.cancellation_requested {
+            let (kind, start_pending, action_submitted) = {
+                let active = self.active_mut(id)?;
+                (
+                    active.kind,
+                    !matches!(active.start_phase, StartPhase::Ready),
+                    active.cancellation_action_submitted,
+                )
+            };
+            if start_pending {
+                self.active = None;
+                return self.bounded_step_report(
+                    id,
+                    budget,
+                    started_us,
+                    0,
+                    PollDisposition::Cancelled,
+                );
+            }
+            if !action_submitted {
+                match kind {
+                    OperationKind::Scan => self.port.cancel_scan(),
+                    OperationKind::Connect(_) => self.port.disconnect()?,
+                    OperationKind::Initialize | OperationKind::Disconnect => {}
+                }
+                self.active_mut(id)?.cancellation_action_submitted = true;
+                if matches!(
+                    kind,
+                    OperationKind::Initialize | OperationKind::Scan | OperationKind::Disconnect
+                ) {
+                    self.active = None;
+                    return self.bounded_step_report(
+                        id,
+                        budget,
+                        started_us,
+                        1,
+                        PollDisposition::Cancelled,
+                    );
+                }
+                return self.bounded_step_report(
+                    id,
+                    budget,
+                    started_us,
+                    1,
+                    PollDisposition::Pending(WaitSet::BACKEND.union(WaitSet::TIMER)),
+                );
+            }
+        }
+
+        let start_phase = {
+            let active = self.active_mut(id)?;
+            core::mem::replace(&mut active.start_phase, StartPhase::Ready)
+        };
+        let start_wait = match start_phase {
+            StartPhase::Ready => None,
+            StartPhase::Scan => {
+                self.port.start_scan()?;
+                Some(WaitSet::BACKEND.union(WaitSet::TIMER))
+            }
+            StartPhase::ConnectConfigure(config) => {
+                self.port.configure(&config)?;
+                self.active_mut(id)?.start_phase = StartPhase::ConnectSubmit;
+                Some(WaitSet::empty())
+            }
+            StartPhase::ConnectSubmit => {
+                self.port.connect()?;
+                Some(WaitSet::BACKEND.union(WaitSet::TIMER))
+            }
+            StartPhase::Disconnect => {
+                self.port.disconnect()?;
+                Some(WaitSet::BACKEND.union(WaitSet::TIMER))
+            }
+        };
+        if let Some(wait) = start_wait {
+            return self.bounded_step_report(
+                id,
+                budget,
+                started_us,
+                1,
+                PollDisposition::Pending(wait),
+            );
+        }
+
         let event_budget = u32::from(budget.max_events().get());
         let result = match self
             .port
@@ -822,17 +954,6 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
     }
 
     fn cancel(&mut self, id: OperationId) -> Result<(), BackendError> {
-        let needs_disconnect = {
-            let active = self.active_mut(id)?;
-            if active.cancellation_requested {
-                return Ok(());
-            }
-            matches!(active.kind, OperationKind::Connect(_))
-        };
-        if needs_disconnect && let Err(error) = self.port.disconnect() {
-            self.active = None;
-            return Err(error);
-        }
         let active = self.active_mut(id)?;
         if active.cancellation_requested {
             return Ok(());
@@ -1323,6 +1444,22 @@ mod tests {
         OperationTracker::new().queue(0).unwrap()
     }
 
+    fn advance_start<P: SupplicantPort>(
+        backend: &mut IncrementalSupplicantBackend<P, FakeClock>,
+        id: OperationId,
+        budget: WorkBudget,
+    ) {
+        while backend
+            .active
+            .as_ref()
+            .is_some_and(|active| !matches!(active.start_phase, StartPhase::Ready))
+        {
+            backend
+                .poll(id, WakeReason::Command, budget, &mut [])
+                .unwrap();
+        }
+    }
+
     fn connection() -> ConnectionInfo {
         ConnectionInfo {
             bssid: [1, 2, 3, 4, 5, 6],
@@ -1409,6 +1546,7 @@ mod tests {
             .unwrap();
 
         let budget = WorkBudget::try_new(1, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         let first = backend
             .poll(id, WakeReason::Backend, budget, &mut [])
             .unwrap();
@@ -1467,13 +1605,10 @@ mod tests {
                     IncrementalRequest::Connect(transition_station_config(10_000)),
                 )
                 .unwrap();
+            let budget = WorkBudget::try_new(1, 100).unwrap();
+            advance_start(&mut backend, id, budget);
             backend
-                .poll(
-                    id,
-                    WakeReason::Timer,
-                    WorkBudget::try_new(1, 100).unwrap(),
-                    &mut [],
-                )
+                .poll(id, WakeReason::Timer, budget, &mut [])
                 .unwrap();
             assert_eq!(backend.port.connect_calls, 1);
             assert_eq!(backend.port.disconnect_calls, 0);
@@ -1493,6 +1628,7 @@ mod tests {
             )
             .unwrap();
         let budget = WorkBudget::try_new(1, 100).unwrap();
+        advance_start(&mut backend, id, budget);
 
         backend
             .poll(id, WakeReason::Backend, budget, &mut [])
@@ -1607,6 +1743,23 @@ mod tests {
         else {
             panic!("connect did not start");
         };
+        assert!(matches!(
+            driver.drive_once(WaitSet::empty(), &mut output).unwrap(),
+            IncrementalDriverEvent::Pending {
+                operation,
+                ..
+            } if operation == first
+        ));
+        assert!(matches!(
+            driver.drive_once(WaitSet::empty(), &mut output).unwrap(),
+            IncrementalDriverEvent::Pending {
+                operation,
+                wait_for,
+                ..
+            } if operation == first
+                && wait_for.contains(WaitSet::BACKEND)
+                && wait_for.contains(WaitSet::TIMER)
+        ));
         assert!(resources.key_installed.get());
         assert!(driver.next_deadline_us().is_some());
 
@@ -1624,6 +1777,19 @@ mod tests {
                 operation: first,
             }
         );
+        assert!(resources.key_installed.get());
+        assert_eq!(resources.disconnect_calls.get(), 0);
+
+        assert!(matches!(
+            driver.drive_once(WaitSet::empty(), &mut output).unwrap(),
+            IncrementalDriverEvent::Pending {
+                operation,
+                wait_for,
+                ..
+            } if operation == first
+                && wait_for.contains(WaitSet::BACKEND)
+                && wait_for.contains(WaitSet::TIMER)
+        ));
         assert!(!resources.key_installed.get());
         assert_eq!(resources.disconnect_calls.get(), 1);
 
@@ -1674,13 +1840,10 @@ mod tests {
         backend
             .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
             .unwrap();
+        let budget = WorkBudget::try_new(4, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         let report = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(4, 100).unwrap(),
-                &mut [],
-            )
+            .poll(id, WakeReason::Backend, budget, &mut [])
             .unwrap();
         assert_eq!(report.consumed_events(), 3);
         assert_eq!(
@@ -1706,13 +1869,10 @@ mod tests {
         backend
             .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         let report = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut [],
-            )
+            .poll(id, WakeReason::Backend, budget, &mut [])
             .unwrap();
         assert_eq!(report.consumed_events(), 2);
         assert!(matches!(
@@ -1731,20 +1891,17 @@ mod tests {
         backend
             .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         let error = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut [],
-            )
+            .poll(id, WakeReason::Backend, budget, &mut [])
             .unwrap_err();
         assert_eq!(error.code(), ERROR_WORK_BUDGET);
         assert!(backend.next_deadline_us(id).is_none());
     }
 
     #[test]
-    fn cancelling_disconnect_does_not_submit_a_duplicate_driver_request() {
+    fn cancelling_before_disconnect_start_submits_no_driver_request() {
         let id = operation_id();
         let mut port = FakePort::new(poll_result(0, false), [None, None]);
         let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
@@ -1752,8 +1909,17 @@ mod tests {
             .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
             .unwrap();
         backend.cancel(id).unwrap();
+        let report = backend
+            .poll(
+                id,
+                WakeReason::Command,
+                WorkBudget::try_new(1, 100).unwrap(),
+                &mut [],
+            )
+            .unwrap();
+        assert_eq!(report.disposition(), PollDisposition::Cancelled);
         drop(backend);
-        assert_eq!(port.disconnect_calls, 1);
+        assert_eq!(port.disconnect_calls, 0);
     }
 
     #[test]
@@ -1774,13 +1940,10 @@ mod tests {
             )
             .unwrap();
         let mut output = [ScanResult::empty(); 1];
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         let first = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut output,
-            )
+            .poll(id, WakeReason::Backend, budget, &mut output)
             .unwrap();
         assert_eq!(first.consumed_events(), 2);
         assert!(matches!(
@@ -1789,12 +1952,7 @@ mod tests {
         ));
 
         let second = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut output,
-            )
+            .poll(id, WakeReason::Backend, budget, &mut output)
             .unwrap();
         assert_eq!(second.consumed_events(), 1);
         assert_eq!(
@@ -1823,33 +1981,18 @@ mod tests {
                 IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1_000).unwrap()),
             )
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         backend.cancel(id).unwrap();
 
         let mut output = [ScanResult::empty(); 1];
-        let pending = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut output,
-            )
-            .unwrap();
-        assert!(matches!(pending.disposition(), PollDisposition::Pending(_)));
-        assert_eq!(output[0], ScanResult::empty());
-
-        backend.port.scan_cache_pending = false;
         let cancelled = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut output,
-            )
+            .poll(id, WakeReason::Backend, budget, &mut output)
             .unwrap();
         assert_eq!(cancelled.disposition(), PollDisposition::Cancelled);
         assert_eq!(output[0], ScanResult::empty());
         drop(backend);
-        assert_eq!(port.scan_cancel_calls, 0);
+        assert_eq!(port.scan_cancel_calls, 1);
     }
 
     #[test]
@@ -1864,15 +2007,12 @@ mod tests {
                 IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
             )
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         backend.clock.0 = 3_000;
 
         let error = backend
-            .poll(
-                id,
-                WakeReason::Timer,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut [],
-            )
+            .poll(id, WakeReason::Timer, budget, &mut [])
             .unwrap_err();
         assert_eq!(error.code(), ERROR_OPERATION_TIMEOUT);
         assert!(backend.next_deadline_us(id).is_none());
@@ -1894,16 +2034,13 @@ mod tests {
                 IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
             )
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         backend.clock.0 = 1_000;
         let mut output = [ScanResult::empty(); 1];
 
         let report = backend
-            .poll(
-                id,
-                WakeReason::Backend,
-                WorkBudget::try_new(2, 100).unwrap(),
-                &mut output,
-            )
+            .poll(id, WakeReason::Backend, budget, &mut output)
             .unwrap();
 
         assert_eq!(
@@ -1930,9 +2067,10 @@ mod tests {
                 IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
             )
             .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         backend.clock.0 = 1_000;
         let mut output = [ScanResult::empty(); 1];
-        let budget = WorkBudget::try_new(2, 100).unwrap();
 
         let retained = backend
             .poll(id, WakeReason::Timer, budget, &mut output)
@@ -1973,9 +2111,10 @@ mod tests {
                 IncrementalRequest::Scan(ScanConfig::try_from_timeout_ms(1).unwrap()),
             )
             .unwrap();
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+        advance_start(&mut backend, id, budget);
         backend.clock.0 = 1_000;
         let mut output = [ScanResult::empty(); 3];
-        let budget = WorkBudget::try_new(1, 100).unwrap();
 
         for now_us in [1_000, 1_001] {
             backend.clock.0 = now_us;
