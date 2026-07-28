@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.31] - 2026-07-28
+
+### Added
+
+- Added a credential-free target fixture that drives cancellation and scan
+  timeout through the production incremental driver and WS63 backend state
+  machines. It proves terminal cancellation, replacement-operation recovery,
+  timeout classification, and post-timeout slot reuse on host, QEMU, and real
+  WS63 silicon.
+
 ## [0.1.0-alpha.30] - 2026-07-28
 
 ### Added
@@ -433,7 +443,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.23...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.31...HEAD
+[0.1.0-alpha.31]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.30...v0.1.0-alpha.31
+[0.1.0-alpha.30]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
+[0.1.0-alpha.29]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.28...v0.1.0-alpha.29
+[0.1.0-alpha.28]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.27...v0.1.0-alpha.28
+[0.1.0-alpha.27]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.26...v0.1.0-alpha.27
+[0.1.0-alpha.26]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.25...v0.1.0-alpha.26
+[0.1.0-alpha.25]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.24...v0.1.0-alpha.25
+[0.1.0-alpha.24]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.23...v0.1.0-alpha.24
 [0.1.0-alpha.23]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.22...v0.1.0-alpha.23
 [0.1.0-alpha.22]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.21...v0.1.0-alpha.22
 [0.1.0-alpha.21]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.20...v0.1.0-alpha.21

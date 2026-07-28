@@ -291,6 +291,12 @@ pub mod firmware_diagnostic_fixtures {
     pub fn first_eapol_timeout() -> Diagnostic {
         crate::hisi_rf_backend::first_eapol_timeout_diagnostic_fixture()
     }
+
+    /// Run cancellation and timeout through the incremental driver/backend.
+    #[cfg(feature = "incremental-backend-experiment")]
+    pub fn operation_error_injection() -> Option<(Diagnostic, Diagnostic)> {
+        crate::hisi_rf_backend::operation_error_injection_fixture()
+    }
 }
 
 /// Copy the retained association-result timeline into `output`.

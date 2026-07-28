@@ -16,6 +16,12 @@ mod incremental;
 
 #[cfg(all(
     feature = "incremental-backend-experiment",
+    feature = "upstream-supplicant-port",
+    feature = "firmware-example"
+))]
+pub(crate) use incremental::operation_error_injection_fixture;
+#[cfg(all(
+    feature = "incremental-backend-experiment",
     feature = "upstream-supplicant-port"
 ))]
 pub(crate) use incremental::{OwnedIncrementalSupplicantBackend, reconnect_diagnostic_snapshot};

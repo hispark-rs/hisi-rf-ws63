@@ -86,6 +86,8 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example arena_admission_error --features wpa2-personal,smoltcp,firmware-example
       - name: Link the credential-free typed-error parity fixture
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example typed_error_parity --features wpa2-personal,smoltcp,firmware-example
+      - name: Link the credential-free operation-error injection fixture
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example operation_error_injection --features wpa2-personal,incremental-backend-experiment,firmware-example
       - name: Link the credential-free incremental scan profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,bootstrap-stage-diag,firmware-example
       - name: Link the redacted WPA3 incremental connect profiler with stock rust-lld

@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.30"
+version = "0.1.0-alpha.31"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -37,6 +37,15 @@ required-features = ["wpa2-personal", "firmware-example"]
 name = "typed_error_parity"
 path = "examples/typed_error_parity.rs"
 required-features = ["wpa2-personal", "firmware-example"]
+
+[[example]]
+name = "operation_error_injection"
+path = "examples/operation_error_injection.rs"
+required-features = [
+    "wpa2-personal",
+    "incremental-backend-experiment",
+    "firmware-example",
+]
 
 [dependencies]
 hisi-alloc = "0.1.0-alpha.2"
