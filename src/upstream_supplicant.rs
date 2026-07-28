@@ -2400,6 +2400,22 @@ unsafe extern "C" fn install_key(
     let Some(key) = (unsafe { key.as_ref() }) else {
         return -1;
     };
+    install_key_via(
+        driver.ifname(),
+        key,
+        material,
+        material_len,
+        crate::wal::ioctl,
+    )
+}
+
+fn install_key_via(
+    ifname: &[u8],
+    key: &Key,
+    material: *const u8,
+    material_len: usize,
+    mut ioctl: impl FnMut(&[u8], u32, *mut c_void) -> c_int,
+) -> c_int {
     if material.is_null() || !valid_key_material(key.cipher, material_len) {
         return -1;
     }
@@ -2407,22 +2423,22 @@ unsafe extern "C" fn install_key(
         return -1;
     };
     DIAG_KEY_INSTALLS.fetch_add(1, Ordering::Relaxed);
-    let install = crate::wal::ioctl(
-        driver.ifname(),
+    let install = ioctl(
+        ifname,
         IOCTL_NEW_KEY,
         (&mut request as *mut KeyExtension).cast(),
     );
     if install != 0 || key.flags & key_flag::TX == 0 {
         return install;
     }
-    let set_default = crate::wal::ioctl(
-        driver.ifname(),
+    let set_default = ioctl(
+        ifname,
         IOCTL_SET_KEY,
         (&mut request as *mut KeyExtension).cast(),
     );
     if set_default != 0 {
-        let _ = crate::wal::ioctl(
-            driver.ifname(),
+        let _ = ioctl(
+            ifname,
             IOCTL_DEL_KEY,
             (&mut request as *mut KeyExtension).cast(),
         );
@@ -2437,11 +2453,19 @@ unsafe extern "C" fn remove_key(driver: *mut c_void, key: *const Key) -> c_int {
     let Some(key) = (unsafe { key.as_ref() }) else {
         return -1;
     };
+    remove_key_via(driver.ifname(), key, crate::wal::ioctl)
+}
+
+fn remove_key_via(
+    ifname: &[u8],
+    key: &Key,
+    mut ioctl: impl FnMut(&[u8], u32, *mut c_void) -> c_int,
+) -> c_int {
     let Some(mut request) = key_request(key, core::ptr::null_mut(), 0) else {
         return -1;
     };
-    crate::wal::ioctl(
-        driver.ifname(),
+    ioctl(
+        ifname,
         IOCTL_DEL_KEY,
         (&mut request as *mut KeyExtension).cast(),
     )
@@ -3385,6 +3409,104 @@ mod tests {
         assert_eq!(request.default_data, 1);
         assert_eq!(request.default_management, 0);
         assert_eq!(request.default_types, KEY_DEFAULT_UNICAST);
+    }
+
+    #[test]
+    fn programs_and_removes_pairwise_key_through_real_wal_sequence() {
+        let key = Key {
+            abi_version: ABI_VERSION,
+            cipher: cipher::CCMP,
+            key_index: 0,
+            flags: key_flag::RX | key_flag::TX | key_flag::PAIRWISE,
+            peer: [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc],
+            peer_present: 1,
+            sequence_len: 6,
+            sequence: [0; ws63_radio_sys::supplicant::KEY_SEQUENCE_LEN],
+        };
+        let material = [0x5a; 16];
+        let mut commands = [u32::MAX; 3];
+        let mut count = 0;
+        let status = install_key_via(
+            b"wlan0\0",
+            &key,
+            material.as_ptr(),
+            material.len(),
+            |ifname, command, request| {
+                assert_eq!(ifname, b"wlan0\0");
+                assert!(!request.is_null());
+                // SAFETY: `install_key_via` keeps its typed request alive for
+                // the complete synchronous ioctl callback.
+                let request = unsafe { &*request.cast::<KeyExtension>() };
+                assert_eq!(request.key_type, KEY_TYPE_PAIRWISE);
+                assert_eq!(request.key_index, 0);
+                assert_eq!(request.key_len, material.len() as u32);
+                assert_eq!(request.material, material.as_ptr().cast_mut());
+                commands[count] = command;
+                count += 1;
+                0
+            },
+        );
+        assert_eq!(status, 0);
+        assert_eq!(&commands[..count], &[IOCTL_NEW_KEY, IOCTL_SET_KEY]);
+
+        let removal = Key {
+            cipher: cipher::NONE,
+            ..key
+        };
+        let status = remove_key_via(b"wlan0\0", &removal, |ifname, command, request| {
+            assert_eq!(ifname, b"wlan0\0");
+            assert!(!request.is_null());
+            // SAFETY: `remove_key_via` keeps its typed request alive for the
+            // complete synchronous ioctl callback.
+            let request = unsafe { &*request.cast::<KeyExtension>() };
+            assert_eq!(request.key_type, KEY_TYPE_PAIRWISE);
+            assert_eq!(request.key_index, 0);
+            assert_eq!(request.cipher, 0);
+            assert_eq!(request.key_len, 0);
+            assert!(request.material.is_null());
+            commands[count] = command;
+            count += 1;
+            0
+        });
+        assert_eq!(status, 0);
+        assert_eq!(
+            &commands[..count],
+            &[IOCTL_NEW_KEY, IOCTL_SET_KEY, IOCTL_DEL_KEY]
+        );
+    }
+
+    #[test]
+    fn rolls_back_installed_key_when_default_selection_fails() {
+        let key = Key {
+            abi_version: ABI_VERSION,
+            cipher: cipher::CCMP,
+            key_index: 1,
+            flags: key_flag::RX | key_flag::TX | key_flag::PAIRWISE,
+            peer: [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc],
+            peer_present: 1,
+            sequence_len: 0,
+            sequence: [0; ws63_radio_sys::supplicant::KEY_SEQUENCE_LEN],
+        };
+        let material = [0xa5; 16];
+        let mut commands = [u32::MAX; 3];
+        let mut count = 0;
+        let status = install_key_via(
+            b"wlan0\0",
+            &key,
+            material.as_ptr(),
+            material.len(),
+            |_, command, request| {
+                assert!(!request.is_null());
+                commands[count] = command;
+                count += 1;
+                if command == IOCTL_SET_KEY { -23 } else { 0 }
+            },
+        );
+        assert_eq!(status, -23);
+        assert_eq!(
+            &commands[..count],
+            &[IOCTL_NEW_KEY, IOCTL_SET_KEY, IOCTL_DEL_KEY]
+        );
     }
 
     #[test]

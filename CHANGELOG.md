@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.35] - 2026-07-28
+
+### Fixed
+
+- Bound the upstream hostap key lifecycle to the real WS63 WAL command
+  sequence: `NEW_KEY`, optional `SET_KEY`, and `DEL_KEY`.
+- Preserved fail-closed rollback by deleting a newly installed key when
+  default-key selection fails, with host tests covering normal removal and
+  rollback payloads.
+
 ## [0.1.0-alpha.34] - 2026-07-28
 
 ### Changed
