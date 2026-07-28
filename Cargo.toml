@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -27,6 +27,11 @@ required-features = [
     "bootstrap-stage-diag",
     "firmware-example",
 ]
+
+[[example]]
+name = "arena_admission_error"
+path = "examples/arena_admission_error.rs"
+required-features = ["wpa2-personal", "firmware-example"]
 
 [dependencies]
 hisi-alloc = "0.1.0-alpha.2"

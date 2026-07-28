@@ -4,7 +4,10 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
-use hisi_rf_core::{RadioRunner, RadioState};
+use hisi_rf_core::{
+    BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
+    RadioRunner, RadioState,
+};
 use hisi_rf_rtos_driver::TaskReservation;
 use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
@@ -194,12 +197,50 @@ pub enum ArenaAdmissionError {
     InvalidArena,
 }
 
+impl ArenaAdmissionError {
+    /// Convert admission failure into the shared, secret-free diagnostic schema.
+    pub fn diagnostic(self) -> Diagnostic {
+        match self {
+            Self::AlreadyClaimed => Error::AlreadyInitialized.diagnostic(),
+            Self::InsufficientBytes {
+                required,
+                available,
+            } => Error::Backend(
+                BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_b002)
+                    .with_stage(DiagnosticStage::Runtime)
+                    .with_profile_revision(PROFILE_REVISION)
+                    .with_trace(
+                        DiagnosticTraceKind::ResourceRequired,
+                        required.min(u32::MAX as usize) as u32,
+                    )
+                    .with_trace(
+                        DiagnosticTraceKind::ResourceAvailable,
+                        available.min(u32::MAX as usize) as u32,
+                    ),
+            )
+            .diagnostic(),
+            Self::InvalidArena => Error::Backend(
+                BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_b003)
+                    .with_stage(DiagnosticStage::Runtime)
+                    .with_profile_revision(PROFILE_REVISION),
+            )
+            .diagnostic(),
+        }
+    }
+}
+
+impl fmt::Display for ArenaAdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.diagnostic().fmt(formatter)
+    }
+}
+
 /// Caller-owned static storage for one WS63 radio instance.
 ///
 /// This currently owns the bounded control/event state, mandatory radio runner,
 /// and SPACC DMA scratch. Packet RAM remains linker-owned. Task stacks are
 /// atomically reserved through the runtime capability before hardware startup;
-/// the remaining shared supplicant arena is still linker-owned and uncalibrated.
+/// the shared RF arena is installed separately from caller-owned storage.
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
     runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
@@ -514,6 +555,33 @@ mod tests {
             SMALL.claim_for::<WifiWpa2Smoltcp>(),
             Err(error) if error == expected
         ));
+    }
+
+    #[test]
+    fn arena_shortage_uses_actionable_public_diagnostics() {
+        let diagnostic = ArenaAdmissionError::InsufficientBytes {
+            required: PROFILE_RF_ARENA_BYTES,
+            available: 1024,
+        }
+        .diagnostic();
+        assert_eq!(
+            diagnostic.code(),
+            hisi_rf_core::DiagnosticCode::ResourceUnavailable
+        );
+        assert_eq!(diagnostic.stage(), DiagnosticStage::Runtime);
+        assert_eq!(
+            diagnostic.action(),
+            hisi_rf_core::RecoveryAction::ProvideResources
+        );
+        assert_eq!(diagnostic.profile_revision(), Some(PROFILE_REVISION));
+        assert_eq!(
+            diagnostic.trace().get(0).map(|entry| entry.value()),
+            Some(PROFILE_RF_ARENA_BYTES as u32)
+        );
+        assert_eq!(
+            diagnostic.trace().get(1).map(|entry| entry.value()),
+            Some(1024)
+        );
     }
 
     #[test]

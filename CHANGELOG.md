@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.28] - 2026-07-28
+
+### Added
+
+- Added stable `hisi-rf-error/v2` diagnostics for caller-owned RF arena
+  admission failures, including exact required/available byte traces.
+- Added a credential-free target fixture that proves arena shortage
+  classification before RF power or blob startup.
+
 ## [0.1.0-alpha.27] - 2026-07-28
 
 ### Added
