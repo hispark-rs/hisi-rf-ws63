@@ -497,21 +497,16 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     }
 }
 
-/// Complete the existing blocking vendor bootstrap, then transfer ownership to
-/// the non-default bounded A5B runner.
+/// Complete the vendor bootstrap, then transfer ownership to the bounded
+/// incremental runner.
 ///
-/// This function is intentionally named after its blocking prerequisite. It
-/// does not claim that vendor initialization is incremental; only operations
-/// after the returned controller is split use
-/// [`hisi_rf_core::WorkBudget`]. A bootstrap failure consumes the one-shot
-/// storage and resources because vendor tasks may already own the installed
-/// task reservation; retry with fresh firmware state rather than reusing this
-/// storage.
+/// Vendor initialization remains synchronous; only operations after the
+/// returned controller is split use [`hisi_rf_core::WorkBudget`]. A bootstrap
+/// failure consumes the one-shot storage and resources because vendor tasks may
+/// already own the installed task reservation; retry with fresh firmware state
+/// rather than reusing this storage.
 #[cfg(feature = "incremental-backend-experiment")]
-pub fn init_incremental_after_blocking_bootstrap<
-    P: Profile + ActiveProfile + 'static,
-    const EVENTS: usize,
->(
+pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
     resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
@@ -546,6 +541,26 @@ pub fn init_incremental_after_blocking_bootstrap<
         }),
         Err(error) => Err(InitError::core(error)),
     }
+}
+
+/// Migration alias for [`init_incremental`].
+///
+/// The old name exposed an implementation prerequisite in application code.
+/// Use the selected composition root's `init` entry instead.
+#[cfg(feature = "incremental-backend-experiment")]
+#[deprecated(
+    since = "0.1.0-alpha.41",
+    note = "use hisi_rf::ws63::init, or hisi_rf_ws63::init_incremental in backend-specific code"
+)]
+pub fn init_incremental_after_blocking_bootstrap<
+    P: Profile + ActiveProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: RadioConfig,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
+    init_incremental(config, resources, storage)
 }
 
 fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(

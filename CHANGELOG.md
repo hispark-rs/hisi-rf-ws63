@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.41] - 2026-07-29
+
+### Added
+
+- Added `init_incremental` as the backend-specific bounded-runner composition
+  entry without encoding its synchronous vendor-bootstrap prerequisite in the
+  function name.
+
+### Deprecated
+
+- Deprecated `init_incremental_after_blocking_bootstrap` for one alpha
+  migration cycle. Applications should use the chip-selecting facade's
+  `hisi_rf::ws63::init` entry.
+
 ## [0.1.0-alpha.40] - 2026-07-29
 
 ### Changed

@@ -469,7 +469,10 @@ pub use composition::{
     feature = "incremental-backend-experiment",
     feature = "upstream-supplicant-port"
 ))]
-pub use composition::{IncrementalRadioController, init_incremental_after_blocking_bootstrap};
+#[allow(deprecated)]
+pub use composition::{
+    IncrementalRadioController, init_incremental, init_incremental_after_blocking_bootstrap,
+};
 #[cfg(all(
     feature = "net",
     feature = "incremental-embassy-wait",

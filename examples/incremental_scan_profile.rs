@@ -164,7 +164,7 @@ fn main() -> ! {
     #[cfg(feature = "wpa3-personal")]
     let resources = resources.pke(p.PKE).build();
     let parts = RADIO_PARTS.init_with(|| {
-        hisi_rf_ws63::init_incremental_after_blocking_bootstrap(
+        hisi_rf_ws63::init_incremental(
             hisi_rf_core::RadioConfig::default(),
             resources,
             &RADIO_STORAGE,
