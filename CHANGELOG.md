@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.43] - 2026-07-29
+
+### Fixed
+
+- Made host-generated resource reports describe the WS63 RV32 layout rather
+  than the build host's pointer-width-dependent Rust layout. RV32 compile-time
+  assertions now lock the calibrated 4/8-event control and radio-state sizes.
+- Accounted for the aligned arena backing object's claim metadata in
+  `arena_storage_bytes` and the total caller-owned RAM budget.
+
 ## [0.1.0-alpha.42] - 2026-07-29
 
 ### Added

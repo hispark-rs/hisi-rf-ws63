@@ -415,6 +415,7 @@ impl<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize, const ARENA_BYTES:
 pub fn hisi_rf_ws63::RadioStorage<P, EVENTS, ARENA_BYTES>::install(&'static self) -> core::result::Result<hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>, hisi_rf_ws63::ArenaAdmissionError>
 pub const fn hisi_rf_ws63::RadioStorage<P, EVENTS, ARENA_BYTES>::report(&self) -> hisi_rf_ws63::ResourceReport
 pub struct hisi_rf_ws63::ResourceReport
+pub hisi_rf_ws63::ResourceReport::arena_storage_bytes: usize
 pub hisi_rf_ws63::ResourceReport::caller_owned_bytes: usize
 pub hisi_rf_ws63::ResourceReport::chip: &'static str
 pub hisi_rf_ws63::ResourceReport::composition_handle_bytes: usize

@@ -19,6 +19,10 @@ pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
+const WS63_CONTROL_STORAGE_BASE_BYTES: usize = 0x1fe0;
+const WS63_EVENT_SLOT_BYTES: usize = 48;
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x6d8;
+const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
     pub trait Sealed {}
@@ -266,7 +270,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
 
     /// Return the compile-time resource contract for this storage instance.
     pub const fn report(&self) -> ResourceReport {
-        ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES, 0)
+        ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES)
     }
 
     pub(crate) fn claim(
@@ -346,7 +350,7 @@ impl<P: Profile + 'static, const EVENTS: usize, const ARENA_BYTES: usize>
 
     /// Return the deterministic resource contract for this composition.
     pub const fn report(&self) -> ResourceReport {
-        ResourceReport::for_profile::<P, EVENTS>(ARENA_BYTES, core::mem::size_of::<Self>())
+        ResourceReport::for_profile::<P, EVENTS>(ARENA_BYTES)
     }
 }
 
@@ -421,12 +425,17 @@ pub struct ResourceReport {
     pub caller_owned_bytes: usize,
     /// Bytes held in ordinary BSS by bounded control and crypto state.
     pub control_storage_bytes: usize,
-    /// Bytes used by the composition's reference handle.
+    /// Target RAM bytes used by the immutable composition handle.
+    ///
+    /// This is zero: the handle contains only link-time references and is kept
+    /// in code/rodata rather than caller-owned writable storage.
     pub composition_handle_bytes: usize,
     /// Bytes used by chip-neutral radio state within [`Storage`].
     pub radio_state_bytes: usize,
     /// Bytes used by caller-owned SPACC DMA scratch within [`Storage`].
     pub crypto_dma_bytes: usize,
+    /// Total target RAM reserved by the aligned arena backing object.
+    pub arena_storage_bytes: usize,
     /// Linker-owned `.wifi_pkt_ram` bytes.
     pub linker_packet_ram_bytes: usize,
     /// HIL-verified main-stack envelope required by synchronous radio bootstrap.
@@ -448,11 +457,11 @@ pub struct ResourceReport {
 }
 
 impl ResourceReport {
-    const fn for_profile<P: Profile, const EVENTS: usize>(
-        arena_bytes: usize,
-        composition_handle_bytes: usize,
-    ) -> Self {
-        let control_storage_bytes = core::mem::size_of::<Storage<P, EVENTS>>();
+    const fn for_profile<P: Profile, const EVENTS: usize>(arena_bytes: usize) -> Self {
+        let control_storage_bytes =
+            WS63_CONTROL_STORAGE_BASE_BYTES + EVENTS * WS63_EVENT_SLOT_BYTES;
+        let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
+        let arena_storage_bytes = align_up(arena_bytes + 1, 64);
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
             chip: "ws63",
@@ -466,11 +475,12 @@ impl ResourceReport {
             runtime_contract: "hisi-rf-rtos-driver/v1.4-ported-cooperative",
             task_admission: "owner-bound-slot-stack-reservation",
             event_capacity: EVENTS,
-            caller_owned_bytes: control_storage_bytes + arena_bytes + composition_handle_bytes,
+            caller_owned_bytes: control_storage_bytes + arena_storage_bytes,
             control_storage_bytes,
-            composition_handle_bytes,
-            radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
+            composition_handle_bytes: 0,
+            radio_state_bytes,
             crypto_dma_bytes: Ws63CryptoStorage::size_bytes(),
+            arena_storage_bytes,
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
             main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
@@ -496,7 +506,8 @@ impl ResourceReport {
                 "\"event_capacity\":{},",
                 "\"caller_owned_bytes\":{},\"control_storage_bytes\":{},",
                 "\"composition_handle_bytes\":{},\"radio_state_bytes\":{},",
-                "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
+                "\"crypto_dma_bytes\":{},\"arena_storage_bytes\":{},",
+                "\"linker_packet_ram_bytes\":{},",
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
                 "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
@@ -520,6 +531,7 @@ impl ResourceReport {
             self.composition_handle_bytes,
             self.radio_state_bytes,
             self.crypto_dma_bytes,
+            self.arena_storage_bytes,
             self.linker_packet_ram_bytes,
             self.main_stack_bytes_required,
             self.dynamic_tasks_required,
@@ -530,6 +542,34 @@ impl ResourceReport {
         )
     }
 }
+
+const fn align_up(value: usize, alignment: usize) -> usize {
+    (value + alignment - 1) & !(alignment - 1)
+}
+
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(
+        core::mem::size_of::<Storage<WifiWpa2Smoltcp, 4>>()
+            == WS63_CONTROL_STORAGE_BASE_BYTES + 4 * WS63_EVENT_SLOT_BYTES
+    );
+    assert!(
+        core::mem::size_of::<Storage<WifiWpa2Smoltcp, 8>>()
+            == WS63_CONTROL_STORAGE_BASE_BYTES + 8 * WS63_EVENT_SLOT_BYTES
+    );
+    assert!(
+        core::mem::size_of::<RadioState<4>>()
+            == WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES
+    );
+    assert!(
+        core::mem::size_of::<RadioState<8>>()
+            == WS63_RADIO_STATE_BASE_BYTES + 8 * WS63_RADIO_EVENT_SLOT_BYTES
+    );
+    assert!(
+        core::mem::size_of::<RadioArenaStorage<PROFILE_RF_ARENA_BYTES>>()
+            == align_up(PROFILE_RF_ARENA_BYTES + 1, 64)
+    );
+};
 
 #[cfg(test)]
 mod tests {
@@ -574,6 +614,7 @@ mod tests {
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
+        assert_eq!(report.arena_storage_bytes, PROFILE_RF_ARENA_BYTES + 64);
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.main_stack_bytes_required, 0x8000);
         assert_eq!(report.dynamic_tasks_required, 6);
@@ -586,9 +627,10 @@ mod tests {
         assert!(!report.runtime_resources_calibrated);
         assert_eq!(
             report.caller_owned_bytes,
-            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES
+            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
         assert_eq!(report.composition_handle_bytes, 0);
+        assert_eq!(report.radio_state_bytes, 0x7a8);
         assert!(report.control_storage_bytes >= report.radio_state_bytes + report.crypto_dma_bytes);
     }
 
@@ -635,12 +677,11 @@ mod tests {
         let report = RADIO.report();
         assert_eq!(
             report.caller_owned_bytes,
-            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + core::mem::size_of_val(&RADIO)
+            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
-        assert_eq!(
-            report.composition_handle_bytes,
-            core::mem::size_of_val(&RADIO)
-        );
+        assert_eq!(report.composition_handle_bytes, 0);
+        assert_eq!(report.control_storage_bytes, 0x20a0);
+        assert_eq!(report.radio_state_bytes, 0x7a8);
         assert_eq!(report.event_capacity, 4);
     }
 
