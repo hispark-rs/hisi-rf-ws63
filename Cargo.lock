@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.36"
+version = "0.1.0-alpha.37"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
@@ -719,9 +719,9 @@ checksum = "5fc2f9dded6797c89610a734aab74bdb96c9a44399fc38e40bb61ee337a8559d"
 
 [[package]]
 name = "hisi-rtos"
-version = "0.1.0-alpha.13"
+version = "0.1.0-alpha.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e78acc231858be7360385eb49236d0065af41bd7ef45e279d0149cbf048b226f"
+checksum = "29f9dbd8c764de9844b58e2d42abfc9cbf0c1c21e0adb8985452308a4ba08df6"
 dependencies = [
  "critical-section",
  "embassy-time-driver",

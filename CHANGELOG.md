@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.37] - 2026-07-28
+
 ### Added
 
 - Added a credential-free target fixture for the shared connectivity marker
   contract. Its explicit contract-only marker prevents QEMU parser parity from
   being misreported as real RF evidence.
 - Added the fixture to the cross-platform final-link CI matrix.
+- Added counter-only DHCP and receive-queue diagnostic snapshots to the safe
+  `WifiDevice`. Applications can now attribute connectivity loss without
+  reaching into the private WS63 netif implementation or exposing frame data.
 
 ## [0.1.0-alpha.36] - 2026-07-28
 
