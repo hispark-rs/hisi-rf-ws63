@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RadioArena<P>` claim. Capacity is checked before the claim is consumed, and
   target initialization now fails closed instead of deriving a heap from
   linker remainder.
-- Added resource-report schema v5 with the selected profile's explicit 300 KiB
+- Added resource-report schema v5 with the selected profile's explicit 296 KiB
   shared RF/supplicant/OSAL arena envelope, sized to coexist with the 32 KiB
   radio main stack in the WS63 544 KiB BGLE memory profile.
 
@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Kept caller-owned RF storage out of ordinary `.bss` through the runtime's
-  fixed-stack shared-arena contract. A 300 KiB arena now boots the ported RTOS
+  fixed-stack shared-arena contract. A 296 KiB arena now boots the ported RTOS
   and completes the incremental initialize/scan profile on WS63 silicon.
 - Restored the normalized-archive `rf-eloop-diag` link path by wrapping the
   five vendor MAC diagnostic entry points with stock linker `--wrap` semantics

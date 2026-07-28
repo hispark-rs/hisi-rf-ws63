@@ -15,7 +15,7 @@ const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v5";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
-const PROFILE_RF_ARENA_BYTES: usize = 300 * 1024;
+const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
 
 mod sealed {
     pub trait Sealed {}
