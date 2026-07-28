@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(report.task_stack_bytes, Some(6 * 24 * 1024));
         assert_eq!(report.supplicant_arena_bytes, None);
-        assert_eq!(report.shared_rf_arena_bytes, Some(300 * 1024));
+        assert_eq!(report.shared_rf_arena_bytes, Some(PROFILE_RF_ARENA_BYTES));
         assert_eq!(report.flash_bytes, None);
         assert!(!report.runtime_resources_calibrated);
         assert!(report.caller_owned_bytes >= report.radio_state_bytes + report.crypto_dma_bytes);
@@ -477,7 +477,7 @@ mod tests {
                 .as_str()
                 .contains("\"runtime_internal_tasks\":2,\"task_stack_bytes\":147456")
         );
-        assert!(output.as_str().contains("\"shared_rf_arena_bytes\":307200"));
+        assert!(output.as_str().contains("\"shared_rf_arena_bytes\":303104"));
         assert!(
             output
                 .as_str()
@@ -503,7 +503,7 @@ mod tests {
     fn arena_claim_checks_capacity_before_consuming_storage() {
         static SMALL: RadioArenaStorage<1024> = RadioArenaStorage::new();
         let expected = ArenaAdmissionError::InsufficientBytes {
-            required: 300 * 1024,
+            required: PROFILE_RF_ARENA_BYTES,
             available: 1024,
         };
         assert!(matches!(
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn arena_can_be_claimed_only_once() {
-        static ARENA: RadioArenaStorage<{ 300 * 1024 }> = RadioArenaStorage::new();
+        static ARENA: RadioArenaStorage<{ PROFILE_RF_ARENA_BYTES }> = RadioArenaStorage::new();
         assert!(ARENA.claim_for::<WifiWpa2Smoltcp>().is_ok());
         assert!(matches!(
             ARENA.claim_for::<WifiWpa2Smoltcp>(),
