@@ -7,11 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.27] - 2026-07-28
+
+### Added
+
+- Added profile-typed, caller-owned `RadioArenaStorage<N>` and a one-shot
+  `RadioArena<P>` claim. Capacity is checked before the claim is consumed, and
+  target initialization now fails closed instead of deriving a heap from
+  linker remainder.
+- Added resource-report schema v5 with the selected profile's explicit 300 KiB
+  shared RF/supplicant/OSAL arena envelope, sized to coexist with the 32 KiB
+  radio main stack in the WS63 544 KiB BGLE memory profile.
+
+### Changed
+
+- Made the selected profile part of `Resources<P>` so an arena admitted for one
+  profile cannot initialize another profile.
+- Updated all backend firmware fixtures to provide the named profile arena
+  explicitly.
+
 ### Fixed
 
+- Kept caller-owned RF storage out of ordinary `.bss` through the runtime's
+  fixed-stack shared-arena contract. A 300 KiB arena now boots the ported RTOS
+  and completes the incremental initialize/scan profile on WS63 silicon.
 - Restored the normalized-archive `rf-eloop-diag` link path by wrapping the
   five vendor MAC diagnostic entry points with stock linker `--wrap` semantics
   instead of relying on guarded-link archive symbol rewriting.
+
+## [0.1.0-alpha.26] - 2026-07-28
+
+### Added
+
+- Added owner-bound admission for six dynamic WS63 radio task slots and six
+  24-KiB task stacks before radio hardware initialization.
+- Added task-slot and task-stack requirements to resource-report schema v4.
 
 ## [0.1.0-alpha.25] - 2026-07-28
 

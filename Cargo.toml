@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -153,7 +153,7 @@ object = { version = "0.37", default-features = false, features = ["archive", "r
 # for the macOS/Linux host assembler.
 [target.'cfg(target_arch = "riscv32")'.dev-dependencies]
 embassy-executor = { version = "0.10", features = ["platform-riscv32", "executor-thread"] }
-hisi-riscv-rt = { version = "0.5.6", default-features = false, features = [
+hisi-riscv-rt = { version = "0.5.7", default-features = false, features = [
     "chip-ws63",
     "bundled-memory-x",
     "boot-header",

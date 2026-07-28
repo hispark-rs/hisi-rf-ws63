@@ -1,12 +1,18 @@
 //! WS63 RF C-allocation adapter backed by [`hisi_alloc::CHeap`].
 //!
-//! This module owns only the vendor `osal_kmalloc` ABI, linker-arena selection,
-//! and RF diagnostics. Allocation mechanics live in `hisi-alloc`.
+//! This module owns only the vendor `osal_kmalloc` ABI, explicit arena
+//! installation, and RF diagnostics. Allocation mechanics live in `hisi-alloc`.
 
 use core::ffi::c_void;
 
 use hisi_alloc::{CHeap, FreeError, HeapMetrics};
 use portable_atomic::{AtomicU32, AtomicUsize, Ordering};
+
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+use crate::profile::{ArenaAdmissionError, Profile, RadioArena};
 
 const DEFAULT_ALIGNMENT: usize = 16;
 
@@ -147,12 +153,6 @@ fn record_allocation(pointer: usize, size: usize, caller: usize) {
     slot.sequence.store(sequence, Ordering::Release);
 }
 
-#[cfg(target_arch = "riscv32")]
-unsafe extern "C" {
-    static mut __heap_start__: u8;
-    static mut __heap_end__: u8;
-}
-
 #[cfg(all(test, not(target_arch = "riscv32")))]
 #[repr(align(64))]
 struct HostArena([u8; 64 * 1024]);
@@ -161,27 +161,25 @@ struct HostArena([u8; 64 * 1024]);
 static mut HOST_ARENA: HostArena = HostArena([0; 64 * 1024]);
 
 fn ensure_heap() -> bool {
-    #[cfg(target_arch = "riscv32")]
-    let (start, len) = {
-        let start = &raw mut __heap_start__;
-        let end = &raw mut __heap_end__;
-        (start, end as usize - start as usize)
-    };
-
     #[cfg(all(test, not(target_arch = "riscv32")))]
-    let (start, len) = {
+    if !HEAP.is_initialized() {
         // SAFETY: this is the only address acquisition for the static host
         // arena; all subsequent access is serialized through `HEAP`.
         let start = unsafe { (&raw mut HOST_ARENA.0).cast::<u8>() };
-        (start, 64 * 1024)
-    };
+        // SAFETY: the host-test arena is static and accessed only by `HEAP`.
+        let _ = unsafe { HEAP.init(start, 64 * 1024) };
+    }
+    HEAP.is_initialized()
+}
 
-    #[cfg(all(not(test), not(target_arch = "riscv32")))]
-    let (start, len) = (core::ptr::null_mut(), 0);
-
-    // SAFETY: each selected region is static, exclusively owned by this heap,
-    // and remains valid for the entire firmware or host-test process.
-    unsafe { HEAP.init(start, len).is_ok() }
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub(crate) fn install_arena<P: Profile>(arena: RadioArena<P>) -> Result<(), ArenaAdmissionError> {
+    // SAFETY: `RadioArena` is produced by the one-shot claim on static storage,
+    // and consuming it transfers exclusive access to this process-wide heap.
+    unsafe { HEAP.init(arena.start, arena.len) }.map_err(|_| ArenaAdmissionError::InvalidArena)
 }
 
 pub(crate) fn heap_metrics() -> HeapMetrics {

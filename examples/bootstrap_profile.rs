@@ -19,11 +19,14 @@ use hisi_hal::timer::TimerAlarm0;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
-use hisi_rf_ws63::{BootstrapStage, SelectedProfile, Storage};
+use hisi_rf_ws63::{
+    BootstrapStage, InstalledRadioArena, SelectedProfile, Storage, declare_radio_arena,
+};
 use hisi_riscv_rt::entry;
 
 const RADIO_EVENT_DEPTH: usize = 8;
 static RADIO_STORAGE: Storage<SelectedProfile, RADIO_EVENT_DEPTH> = Storage::new();
+declare_radio_arena!(static RADIO_ARENA);
 
 #[entry]
 fn main() -> ! {
@@ -37,6 +40,14 @@ fn main() -> ! {
     );
     Watchdog::new(p.WDT).disable();
     uart.write(b"\r\nRFDBG_BOOTSTRAP_PROFILE_BEGIN\r\n");
+
+    let radio_arena = RADIO_ARENA
+        .claim_for::<SelectedProfile>()
+        .and_then(|arena| arena.install())
+        .expect("install shared RF arena");
+    uart.write(b"RFDBG_A5U_ARENA_OK bytes=0x");
+    uart.write(&hex8(hisi_rf_ws63::rf_heap_metrics().arena_bytes as u32));
+    uart.write(b"\r\n");
 
     let mut delay = Delay::new();
     let rf_ready = RfPower::new(p.CMU, p.CLDO_CRG).enable(p.EFUSE, &mut delay);
@@ -71,14 +82,16 @@ fn main() -> ! {
         },
     )
     .expect("start ported runtime");
+    uart.write(b"RFDBG_RTOS_START_OK\r\n");
 
     unsafe { interrupt::enable_global() };
+    uart.write(b"RFDBG_RTOS_IRQ_OK\r\n");
     hisi_rtos::request_reschedule();
     uart.write(b"RFDBG_RTOS_OK\r\n");
 
     let result = hisi_rf_ws63::init_incremental_after_blocking_bootstrap(
         hisi_rf_core::RadioConfig::default(),
-        hisi_rf_ws63::Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG),
+        hisi_rf_ws63::Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG, radio_arena),
         &RADIO_STORAGE,
     );
 
@@ -147,11 +160,13 @@ extern "C" fn SOFT_INT0() {
 }
 
 unsafe fn rtos_allocate(size: usize) -> *mut u8 {
-    hisi_rf_ws63::alloc::osal_kmalloc(size).cast()
+    // SAFETY: hisi-rtos releases this allocation through `rtos_deallocate`.
+    unsafe { InstalledRadioArena::<SelectedProfile>::allocate(size) }
 }
 
 unsafe fn rtos_deallocate(pointer: *mut u8) {
-    hisi_rf_ws63::alloc::osal_kfree(pointer.cast());
+    // SAFETY: hisi-rtos returns only pointers produced by `rtos_allocate`.
+    unsafe { InstalledRadioArena::<SelectedProfile>::deallocate(pointer) };
 }
 
 fn monotonic_ms() -> u64 {

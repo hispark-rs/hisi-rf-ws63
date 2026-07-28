@@ -448,7 +448,29 @@ pub use profile::SelectedProfile;
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
-pub use profile::{Profile, ResourceReport, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp};
+pub use profile::{
+    ArenaAdmissionError, InstalledRadioArena, Profile, RadioArena, RadioArenaStorage,
+    ResourceReport, SELECTED_RF_ARENA_BYTES, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
+};
+
+/// Declare caller-owned storage for the selected named radio profile.
+///
+/// On WS63 firmware this places the arena in the runtime's dedicated
+/// post-stack `NOLOAD` range. The runtime clears that range before `main`, and
+/// changing the arena capacity therefore cannot move the trap or task stacks.
+#[macro_export]
+macro_rules! declare_radio_arena {
+    ($(#[$meta:meta])* $vis:vis static $name:ident) => {
+        $(#[$meta])*
+        #[cfg_attr(
+            target_arch = "riscv32",
+            unsafe(link_section = ".hisi.shared-arena")
+        )]
+        $vis static $name: $crate::RadioArenaStorage<
+            { $crate::SELECTED_RF_ARENA_BYTES },
+        > = $crate::RadioArenaStorage::new();
+    };
+}
 
 /// Terminal target for a mask-ROM callback not supplied by the current port.
 ///

@@ -22,18 +22,19 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
-use crate::profile::{ActiveProfile, Profile, Storage};
+use crate::profile::{ActiveProfile, InstalledRadioArena, Profile, Storage};
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
-pub struct Resources {
+pub struct Resources<P: Profile> {
     efuse: Efuse<'static>,
     km: Km<'static>,
     spacc: Spacc<'static>,
     pke: Pke<'static>,
     trng: Trng<'static>,
+    _arena: InstalledRadioArena<P>,
 }
 
-impl Resources {
+impl<P: Profile> Resources<P> {
     /// Assemble the WS63 Wi-Fi backend and L2 device without touching hardware.
     pub fn new(
         efuse: Efuse<'static>,
@@ -41,6 +42,7 @@ impl Resources {
         spacc: Spacc<'static>,
         pke: Pke<'static>,
         trng: Trng<'static>,
+        arena: InstalledRadioArena<P>,
     ) -> Self {
         Self {
             efuse,
@@ -48,6 +50,7 @@ impl Resources {
             spacc,
             pke,
             trng,
+            _arena: arena,
         }
     }
 }
@@ -221,7 +224,7 @@ impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
 /// Claim one WS63 radio instance using caller-owned state and resources.
 pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
-    resources: Resources,
+    resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<RadioController<P, EVENTS>, InitError> {
     let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
@@ -261,7 +264,7 @@ pub fn init_incremental_after_blocking_bootstrap<
     const EVENTS: usize,
 >(
     config: RadioConfig,
-    resources: Resources,
+    resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
     let (state, crypto_storage, _reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
