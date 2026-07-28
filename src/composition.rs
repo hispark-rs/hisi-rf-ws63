@@ -5,7 +5,7 @@ use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioConfig, WifiParts,
+    RadioConfig,
 };
 
 #[cfg(feature = "incremental-embassy-wait")]
@@ -57,26 +57,61 @@ impl<P: Profile> Resources<P> {
 
 /// Failure before the WS63 radio backend starts executing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InitError {
+pub struct InitError {
+    kind: InitErrorKind,
+    diagnostic: Diagnostic,
+}
+
+/// Stable category of a WS63 radio initialization failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitErrorKind {
     /// The installed runtime cannot satisfy the profile contract.
-    Runtime(hisi_rf_rtos_driver::Error),
+    Runtime,
     /// The runtime could not atomically reserve the profile's task slots.
-    TaskAdmission(hisi_rf_rtos_driver::TaskAdmissionError),
+    TaskAdmission,
     /// The caller-owned storage was already consumed by an earlier init.
     StorageAlreadyClaimed,
     /// The chip-neutral controller rejected initialization.
-    Core(Error),
+    Core,
 }
 
 impl InitError {
-    /// Convert an initialization failure into the shared, secret-free schema.
-    pub fn diagnostic(self) -> Diagnostic {
-        match self {
-            Self::Runtime(error) => runtime_diagnostic(error),
-            Self::TaskAdmission(error) => task_admission_diagnostic(error),
-            Self::StorageAlreadyClaimed => Error::AlreadyInitialized.diagnostic(),
-            Self::Core(error) => error.diagnostic(),
+    fn runtime(error: hisi_rf_rtos_driver::Error) -> Self {
+        Self {
+            kind: InitErrorKind::Runtime,
+            diagnostic: runtime_diagnostic(error),
         }
+    }
+
+    fn task_admission(error: hisi_rf_rtos_driver::TaskAdmissionError) -> Self {
+        Self {
+            kind: InitErrorKind::TaskAdmission,
+            diagnostic: task_admission_diagnostic(error),
+        }
+    }
+
+    fn storage_already_claimed() -> Self {
+        Self {
+            kind: InitErrorKind::StorageAlreadyClaimed,
+            diagnostic: Error::AlreadyInitialized.diagnostic(),
+        }
+    }
+
+    fn core(error: Error) -> Self {
+        Self {
+            kind: InitErrorKind::Core,
+            diagnostic: error.diagnostic(),
+        }
+    }
+
+    /// Return the stable failure category without exposing the runtime backend.
+    pub const fn kind(self) -> InitErrorKind {
+        self.kind
+    }
+
+    /// Convert an initialization failure into the shared, secret-free schema.
+    pub const fn diagnostic(self) -> Diagnostic {
+        self.diagnostic
     }
 }
 
@@ -102,6 +137,70 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
     storage: &'static Storage<P, EVENTS>,
 }
 
+/// WS63 L2 device exposed only through the standard smoltcp device contract.
+pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
+
+/// Opaque receive token for [`WifiDevice`].
+pub struct WifiRxToken(
+    <hisi_rf_core::WifiDevice<Ws63Device> as smoltcp::phy::Device>::RxToken<'static>,
+);
+
+/// Opaque transmit token for [`WifiDevice`].
+pub struct WifiTxToken(
+    <hisi_rf_core::WifiDevice<Ws63Device> as smoltcp::phy::Device>::TxToken<'static>,
+);
+
+impl smoltcp::phy::RxToken for WifiRxToken {
+    fn consume<R, F: FnOnce(&[u8]) -> R>(self, consume: F) -> R {
+        smoltcp::phy::RxToken::consume(self.0, consume)
+    }
+}
+
+impl smoltcp::phy::TxToken for WifiTxToken {
+    fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, consume: F) -> R {
+        smoltcp::phy::TxToken::consume(self.0, len, consume)
+    }
+}
+
+impl smoltcp::phy::Device for WifiDevice {
+    type RxToken<'a> = WifiRxToken;
+    type TxToken<'a> = WifiTxToken;
+
+    fn receive(
+        &mut self,
+        timestamp: smoltcp::time::Instant,
+    ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        self.0
+            .receive(timestamp)
+            .map(|(rx, tx)| (WifiRxToken(rx), WifiTxToken(tx)))
+    }
+
+    fn transmit(&mut self, timestamp: smoltcp::time::Instant) -> Option<Self::TxToken<'_>> {
+        self.0.transmit(timestamp).map(WifiTxToken)
+    }
+
+    fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
+        self.0.capabilities()
+    }
+}
+
+/// WS63 Wi-Fi control and L2 handles without exposing backend implementation types.
+pub struct WifiParts<const EVENTS: usize> {
+    /// Chip-neutral async control plane.
+    pub controller: hisi_rf_core::WifiController<EVENTS>,
+    /// Opaque WS63 L2 device implementing [`smoltcp::phy::Device`].
+    pub device: WifiDevice,
+}
+
+fn wrap_wifi_parts<const EVENTS: usize>(
+    parts: hisi_rf_core::WifiParts<Ws63Device, EVENTS>,
+) -> WifiParts<EVENTS> {
+    WifiParts {
+        controller: parts.controller,
+        device: WifiDevice(parts.device),
+    }
+}
+
 /// WS63 controller whose vendor bootstrap has completed before construction.
 ///
 /// This type is available only through the non-default A5B experiment. Its
@@ -119,7 +218,7 @@ pub struct IncrementalRadioController<P: Profile + 'static, const EVENTS: usize>
 #[cfg(feature = "incremental-embassy-wait")]
 pub struct IncrementalRadioParts<const EVENTS: usize> {
     /// Existing async Wi-Fi controller and WS63 L2 device.
-    pub wifi: WifiParts<Ws63Device, EVENTS>,
+    pub wifi: WifiParts<EVENTS>,
     /// Runner that advances at most one budgeted backend action per call.
     pub runner: IncrementalRadioRunner<EVENTS>,
 }
@@ -138,7 +237,7 @@ impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EV
         let hisi_rf_core::IncrementalRadioParts { wifi, runner } =
             self.inner.split_incremental(budget);
         IncrementalRadioParts {
-            wifi,
+            wifi: wrap_wifi_parts(wifi),
             runner: IncrementalRadioRunner {
                 inner: runner,
                 platform: Ws63IncrementalWaitPlatform::new(),
@@ -198,16 +297,8 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
 }
 
 impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
-    /// Split the radio without starting its runner.
-    ///
-    /// Prefer [`Self::start_runner`] in applications. This escape hatch exists
-    /// for runtimes that provide their own task/executor integration.
-    pub fn split(self) -> hisi_rf_core::RadioParts<Ws63WifiBackend<'static>, Ws63Device, EVENTS> {
-        self.inner.split()
-    }
-
     /// Start the mandatory bounded-work runner and return Wi-Fi control/L2 handles.
-    pub fn start_runner(self) -> Result<WifiParts<Ws63Device, EVENTS>, InitError> {
+    pub fn start_runner(self) -> Result<WifiParts<EVENTS>, InitError> {
         let hisi_rf_core::RadioParts { wifi, runner } = self.inner.split();
         let runner = self.storage.store_runner(runner);
         crate::runtime::spawn_vendor_task(
@@ -216,8 +307,8 @@ impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
             RADIO_RUNNER_STACK_BYTES,
             RADIO_RUNNER_PRIORITY,
         )
-        .map_err(InitError::Runtime)?;
-        Ok(wifi)
+        .map_err(InitError::runtime)?;
+        Ok(wrap_wifi_parts(wifi))
     }
 }
 
@@ -243,7 +334,7 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
         }),
         Err(error) => {
             release_profile_reservation(reservation)?;
-            Err(InitError::Core(error))
+            Err(InitError::core(error))
         }
     }
 }
@@ -284,18 +375,18 @@ pub fn init_incremental_after_blocking_bootstrap<
         // reservation. It is installed in the process-wide compatibility
         // adapter and cannot be safely detached or reused after a partial
         // failure, so this one-shot storage remains claimed.
-        return Err(InitError::Core(Error::Backend(error)));
+        return Err(InitError::core(Error::Backend(error)));
     }
     let backend = match backend.into_incremental() {
         Ok(backend) => backend,
-        Err(error) => return Err(InitError::Core(Error::Backend(error))),
+        Err(error) => return Err(InitError::core(Error::Backend(error))),
     };
     match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
         Ok(controller) => Ok(IncrementalRadioController {
             inner: controller,
             _profile: core::marker::PhantomData,
         }),
-        Err(error) => Err(InitError::Core(error)),
+        Err(error) => Err(InitError::core(error)),
     }
 }
 
@@ -314,35 +405,37 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
     hisi_rf_rtos_driver::require_runtime(
         hisi_rf_rtos_driver::RuntimeRequirements::V1_4_PORTED_COOPERATIVE,
     )
-    .map_err(InitError::Runtime)?;
-    hisi_rf_rtos_driver::current_task().map_err(InitError::Runtime)?;
-    let required_slots =
-        NonZeroUsize::new(P::DYNAMIC_TASKS_REQUIRED).ok_or(InitError::TaskAdmission(
-            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(hisi_rf_rtos_driver::Error::Runtime),
-        ))?;
-    let stack_bytes =
-        NonZeroUsize::new(P::TASK_STACK_BYTES_PER_TASK).ok_or(InitError::TaskAdmission(
-            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(hisi_rf_rtos_driver::Error::Runtime),
-        ))?;
+    .map_err(InitError::runtime)?;
+    hisi_rf_rtos_driver::current_task().map_err(InitError::runtime)?;
+    let required_slots = NonZeroUsize::new(P::DYNAMIC_TASKS_REQUIRED).ok_or_else(|| {
+        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+            hisi_rf_rtos_driver::Error::Runtime,
+        ))
+    })?;
+    let stack_bytes = NonZeroUsize::new(P::TASK_STACK_BYTES_PER_TASK).ok_or_else(|| {
+        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+            hisi_rf_rtos_driver::Error::Runtime,
+        ))
+    })?;
     let required = hisi_rf_rtos_driver::TaskResourceRequirements::new(required_slots, stack_bytes)
-        .ok_or(InitError::TaskAdmission(
-            hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+        .ok_or_else(|| {
+            InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
                 hisi_rf_rtos_driver::Error::ResourceExhausted,
-            ),
-        ))?;
+            ))
+        })?;
     let reservation =
-        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::TaskAdmission)?;
+        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::task_admission)?;
     let (state, crypto_storage, reservation) = match storage.claim(reservation) {
         Ok(claimed) => claimed,
         Err(reservation) => {
             hisi_rf_rtos_driver::release_task_reservation(&reservation)
-                .map_err(InitError::Runtime)?;
-            return Err(InitError::StorageAlreadyClaimed);
+                .map_err(InitError::runtime)?;
+            return Err(InitError::storage_already_claimed());
         }
     };
     if let Err(error) = crate::runtime::install_task_reservation(reservation) {
-        hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::Runtime)?;
-        return Err(InitError::Runtime(error));
+        hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::runtime)?;
+        return Err(InitError::runtime(error));
     }
     Ok((state, crypto_storage, reservation))
 }
@@ -350,7 +443,7 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
 fn release_profile_reservation(
     reservation: &'static hisi_rf_rtos_driver::TaskReservation,
 ) -> Result<(), InitError> {
-    hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::Runtime)
+    hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::runtime)
 }
 
 /// Return the station MAC address installed by the initialized WS63 netif.
@@ -450,13 +543,14 @@ mod tests {
 
     #[test]
     fn task_admission_error_is_actionable_and_lossless() {
-        let diagnostic = InitError::TaskAdmission(
+        let error = InitError::task_admission(
             hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
                 required: 7,
                 available: 3,
             },
-        )
-        .diagnostic();
+        );
+        assert_eq!(error.kind(), InitErrorKind::TaskAdmission);
+        let diagnostic = error.diagnostic();
 
         assert_eq!(diagnostic.code(), DiagnosticCode::ResourceUnavailable);
         assert_eq!(diagnostic.stage(), DiagnosticStage::Runtime);
@@ -477,7 +571,7 @@ mod tests {
 
     #[test]
     fn task_stack_admission_error_reports_exact_bytes_without_secrets() {
-        let diagnostic = InitError::TaskAdmission(
+        let diagnostic = InitError::task_admission(
             hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
                 required: 144 * 1024,
                 available: 120 * 1024,
@@ -500,18 +594,18 @@ mod tests {
 
     #[test]
     fn runtime_and_storage_failures_share_the_public_schema() {
-        let timeout = InitError::Runtime(hisi_rf_rtos_driver::Error::TimedOut).diagnostic();
+        let timeout = InitError::runtime(hisi_rf_rtos_driver::Error::TimedOut).diagnostic();
         assert_eq!(timeout.code(), DiagnosticCode::BackendTimeout);
         assert_eq!(timeout.stage(), DiagnosticStage::Runtime);
 
-        let claimed = InitError::StorageAlreadyClaimed.diagnostic();
+        let claimed = InitError::storage_already_claimed().diagnostic();
         assert_eq!(claimed.code(), DiagnosticCode::AlreadyInitialized);
     }
 
     #[test]
     fn initialization_json_never_contains_configuration_secrets() {
         let mut json = String::new();
-        InitError::TaskAdmission(
+        InitError::task_admission(
             hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
                 required: 7,
                 available: 3,

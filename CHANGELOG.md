@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.33] - 2026-07-28
+
+### Changed
+
+- Replaced the public runtime-driver error variants with an opaque
+  `InitError` plus stable `InitErrorKind` and secret-free `Diagnostic`.
+- Replaced backend-typed Wi-Fi return values with facade-owned
+  `WifiParts`/`WifiDevice`/token types implementing the standard smoltcp
+  contracts, and removed the blocking controller's raw backend `split`
+  escape hatch.
+- Moved `hisi-rtos` to target-example dev dependencies. Enabling the
+  incremental Embassy wait bridge no longer selects a concrete runtime for
+  applications.
+
+### Added
+
+- Added a `cargo-public-api` CI gate that rejects runtime-driver,
+  `Ws63WifiBackend`, and internal `Ws63Device` types in the composition API.
+
 ## [0.1.0-alpha.32] - 2026-07-28
 
 ### Changed

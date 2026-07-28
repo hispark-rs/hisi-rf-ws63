@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  api-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-09
+      - uses: astral-sh/setup-uv@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api@0.52.0
+      - name: Reject hidden implementation types in facade-owned signatures
+        run: uv run --script .github/scripts/check-public-api.py --target x86_64-unknown-linux-gnu
+
   profile:
     runs-on: ubuntu-latest
     strategy:

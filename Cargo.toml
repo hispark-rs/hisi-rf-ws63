@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.32"
+version = "0.1.0-alpha.33"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -144,19 +144,16 @@ incremental-backend-experiment = [
     "upstream-supplicant-port",
     "hisi-rf-core/incremental-backend-experiment",
 ]
-# Firmware-example support without selecting an async executor or time driver.
-# Keeping this separate preserves the blocking bootstrap as a minimal HIL
-# baseline even when the crate also ships an Embassy-backed incremental fixture.
-firmware-example = ["dep:hisi-rtos"]
+# Firmware-only diagnostic fixtures. Runtime selection belongs to each example
+# or application and is therefore never part of this library feature.
+firmware-example = []
 # WS63 async wait bridge for the incremental runner. This is explicit so Cargo
 # feature unification cannot pull the process-wide Embassy time driver into
 # unrelated firmware examples.
 incremental-embassy-wait = [
     "incremental-backend-experiment",
-    "firmware-example",
     "dep:embassy-sync",
     "dep:embassy-time",
-    "hisi-rtos/embassy",
 ]
 # Extend the credential-free incremental scan fixture through one association
 # and disconnect. Credentials are accepted only through compile-time
@@ -180,9 +177,7 @@ hisi-riscv-rt = { version = "0.5.7", default-features = false, features = [
     "ws63-radio-main-stack-32k",
 ] }
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
-
-[target.'cfg(target_arch = "riscv32")'.dependencies]
-hisi-rtos = { version = "0.1.0-alpha.13", optional = true }
+hisi-rtos = { version = "0.1.0-alpha.13", features = ["embassy"] }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }
