@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.29] - 2026-07-28
+
+### Added
+
+- Added a credential-free target fixture for `operation.cancelled` and
+  `backend.timeout` JSON/UART parity on QEMU and real WS63 silicon.
+
 ## [0.1.0-alpha.28] - 2026-07-28
 
 ### Added
