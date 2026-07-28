@@ -1126,8 +1126,13 @@ pub(crate) fn operation_error_injection_fixture() -> Option<(Diagnostic, Diagnos
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
+
     use super::*;
-    use hisi_rf_core::{OperationTracker, Passphrase, SaePwe, WifiConfig};
+    use hisi_rf_core::{
+        CommandSequence, IncrementalBackendDriver, IncrementalDriverEvent, OperationTracker,
+        Passphrase, SaePwe, WifiConfig,
+    };
     use ws63_radio_sys::supplicant::{ABI_VERSION, EVENT_DATA_LEN};
 
     struct FakePort {
@@ -1226,6 +1231,83 @@ mod tests {
 
         fn external_auth_retry_stalled(&self) -> bool {
             self.external_auth_retry_stalled
+        }
+    }
+
+    struct ResourceFixture {
+        key_installed: Cell<bool>,
+        disconnect_calls: Cell<u8>,
+        next_event: Cell<u8>,
+    }
+
+    impl ResourceFixture {
+        const fn new() -> Self {
+            Self {
+                key_installed: Cell::new(false),
+                disconnect_calls: Cell::new(0),
+                next_event: Cell::new(0),
+            }
+        }
+    }
+
+    struct ResourcePort<'a>(&'a ResourceFixture);
+
+    impl SupplicantPort for ResourcePort<'_> {
+        fn start_scan(&mut self) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn poll_scan(&mut self) -> Result<Option<usize>, BackendError> {
+            Ok(Some(0))
+        }
+
+        fn scan_result(&self, _: usize) -> Option<ScanResult> {
+            None
+        }
+
+        fn scan_cache_pending(&self) -> bool {
+            false
+        }
+
+        fn cancel_scan(&mut self) {}
+
+        fn configure(&mut self, _: &StationConfig) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn connect(&mut self) -> Result<(), BackendError> {
+            self.0.key_installed.set(true);
+            Ok(())
+        }
+
+        fn disconnect(&mut self) -> Result<(), BackendError> {
+            self.0
+                .disconnect_calls
+                .set(self.0.disconnect_calls.get() + 1);
+            self.0.key_installed.set(false);
+            Ok(())
+        }
+
+        fn poll(&mut self, _: NonZeroU32) -> Result<PollResult, BackendError> {
+            Ok(poll_result(0, true))
+        }
+
+        fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
+            let index = self.0.next_event.get();
+            self.0.next_event.set(index + 1);
+            Ok(match index {
+                0 => Some(event(super::super::NATIVE_EVENT_AUTHORIZED, 0)),
+                1 => Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 0)),
+                _ => None,
+            })
+        }
+
+        fn recovery_diagnostic_word(&self) -> u32 {
+            0
+        }
+
+        fn external_auth_retry_stalled(&self) -> bool {
+            false
         }
     }
 
@@ -1501,6 +1583,81 @@ mod tests {
         let active = ActiveOperation::disconnect(second, 10, 0);
         assert!(active.ensure_id(first).is_err());
         assert!(active.ensure_id(second).is_ok());
+    }
+
+    #[test]
+    fn cancellation_conserves_operation_queue_timer_and_key_resources() {
+        let resources = ResourceFixture::new();
+        let backend = IncrementalSupplicantBackend::new(ResourcePort(&resources), FakeClock(1_000));
+        let mut driver =
+            IncrementalBackendDriver::new(backend, WorkBudget::try_new(1, 100).unwrap());
+        let first_sequence = CommandSequence::try_from_raw(1).unwrap();
+        let replacement_sequence = CommandSequence::try_from_raw(2).unwrap();
+        let mut output = [ScanResult::empty(); 1];
+
+        driver
+            .submit(
+                first_sequence,
+                IncrementalRequest::Connect(transition_station_config(1_000)),
+            )
+            .unwrap();
+        let IncrementalDriverEvent::Started {
+            operation: first, ..
+        } = driver.drive_once(WaitSet::empty(), &mut output).unwrap()
+        else {
+            panic!("connect did not start");
+        };
+        assert!(resources.key_installed.get());
+        assert!(driver.next_deadline_us().is_some());
+
+        driver
+            .submit(
+                replacement_sequence,
+                IncrementalRequest::Initialize(WifiConfig::default()),
+            )
+            .unwrap();
+        assert!(!driver.can_submit());
+        assert_eq!(
+            driver.drive_once(WaitSet::empty(), &mut output).unwrap(),
+            IncrementalDriverEvent::CancelRequested {
+                sequence: first_sequence,
+                operation: first,
+            }
+        );
+        assert!(!resources.key_installed.get());
+        assert_eq!(resources.disconnect_calls.get(), 1);
+
+        assert!(matches!(
+            driver.drive_once(WaitSet::BACKEND, &mut output).unwrap(),
+            IncrementalDriverEvent::BudgetExhausted {
+                sequence,
+                operation,
+                ..
+            } if sequence == first_sequence && operation == first
+        ));
+        assert_eq!(resources.disconnect_calls.get(), 1);
+
+        assert_eq!(
+            driver.drive_once(WaitSet::BACKEND, &mut output).unwrap(),
+            IncrementalDriverEvent::Cancelled {
+                sequence: first_sequence,
+                suppressed_completion: false,
+            }
+        );
+        assert!(driver.next_deadline_us().is_none());
+
+        let IncrementalDriverEvent::Started {
+            sequence,
+            operation: replacement,
+        } = driver.drive_once(WaitSet::empty(), &mut output).unwrap()
+        else {
+            panic!("replacement did not start");
+        };
+        assert_eq!(sequence, replacement_sequence);
+        assert_ne!(replacement.generation(), first.generation());
+        assert!(driver.can_submit());
+        assert!(!resources.key_installed.get());
+        assert_eq!(resources.disconnect_calls.get(), 1);
     }
 
     #[test]
