@@ -3,12 +3,27 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Reject hidden WS63 backend/runtime types in the facade-owned API."""
+"""Freeze the WS63 API and reject hidden backend/runtime types."""
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PROFILES = {
+    "wpa2": (
+        "wpa2-personal,smoltcp,incremental-backend-experiment,"
+        "incremental-embassy-wait"
+    ),
+    "wpa3": (
+        "wpa3-personal,smoltcp,incremental-backend-experiment,"
+        "incremental-embassy-wait"
+    ),
+}
 
 
 PUBLIC_COMPOSITION_TYPES = (
@@ -36,17 +51,14 @@ REQUIRED_SIGNATURES = (
 )
 
 
-def public_api(target: str) -> list[str]:
+def public_api(target: str, profile: str) -> list[str]:
     command = [
         "cargo",
         "public-api",
         "--target",
         target,
         "--features",
-        (
-            "wpa2-personal,smoltcp,incremental-backend-experiment,"
-            "incremental-embassy-wait"
-        ),
+        PROFILES[profile],
         "-sss",
         "--color",
         "never",
@@ -68,9 +80,27 @@ def public_api(target: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES), required=True)
     args = parser.parse_args()
 
-    lines = public_api(args.target)
+    lines = public_api(args.target, args.profile)
+    baseline = ROOT / ".github" / "public-api" / f"{args.profile}-incremental.txt"
+    expected = baseline.read_text(encoding="utf-8").splitlines()
+    if lines != expected:
+        diff = "\n".join(
+            difflib.unified_diff(
+                expected,
+                lines,
+                fromfile=str(baseline.relative_to(ROOT)),
+                tofile=f"actual-{args.profile}",
+                lineterm="",
+            )
+        )
+        raise RuntimeError(
+            "the hisi-rf-ws63 public API changed; review the diff and update "
+            f"the baseline only with an intentional API change:\n{diff}"
+        )
+
     exposed = [
         line
         for line in lines
@@ -102,7 +132,10 @@ def main() -> int:
             + "\n  ".join(missing)
         )
 
-    print("WS63 facade-owned public API contains no hidden backend/runtime types")
+    print(
+        f"WS63 {args.profile} public API matches its baseline and contains no "
+        "hidden backend/runtime types"
+    )
     return 0
 
 

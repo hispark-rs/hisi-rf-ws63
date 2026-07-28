@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added pinned WPA2 and WPA3 `cargo-public-api` snapshots for the complete
+  incremental WS63 composition surface. CI now reports an exact API diff in
+  addition to rejecting hidden sys/backend/runtime types.
+
 ## [0.1.0-alpha.38] - 2026-07-28
 
 ### Added
