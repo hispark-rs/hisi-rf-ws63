@@ -2711,6 +2711,26 @@ pub(crate) fn association_ioctl_diagnostic_snapshot() -> [u32; 12] {
     ]
 }
 
+pub(crate) fn association_timing_diagnostics()
+-> crate::blocking_diagnostics::AssociationTimingDiagnostics {
+    use crate::blocking_diagnostics::{AssociationIoctlMetrics, AssociationTimingDiagnostics};
+
+    fn metrics(values: [u32; 3]) -> AssociationIoctlMetrics {
+        AssociationIoctlMetrics {
+            calls: values[0],
+            last_elapsed_ms: values[1],
+            max_elapsed_ms: values[2],
+        }
+    }
+
+    AssociationTimingDiagnostics {
+        first: metrics(DIAG_ASSOCIATE_FIRST_IOCTL.snapshot()),
+        clear: metrics(DIAG_ASSOCIATE_CLEAR_IOCTL.snapshot()),
+        retry: metrics(DIAG_ASSOCIATE_RETRY_IOCTL.snapshot()),
+        deauthenticate: metrics(DIAG_DEAUTHENTICATE_IOCTL.snapshot()),
+    }
+}
+
 pub(crate) fn external_auth_retry_diagnostic_snapshot() -> [u32; 2] {
     [
         DIAG_EXTERNAL_AUTH_STATUS_RETRIES.load(Ordering::Acquire),

@@ -192,8 +192,8 @@ mod upstream_supplicant;
 #[cfg(any(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 #[doc(hidden)]
 pub use blocking_diagnostics::{
-    BlockingBackendMetrics, BlockingBootstrapMetrics, BlockingOperationMetrics, BootstrapStage,
-    BootstrapStageMetrics,
+    AssociationIoctlMetrics, AssociationTimingDiagnostics, BlockingBackendMetrics,
+    BlockingBootstrapMetrics, BlockingOperationMetrics, BootstrapStage, BootstrapStageMetrics,
 };
 
 /// Return a secret-free snapshot of the current blocking backend workload.
@@ -225,6 +225,12 @@ pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
 #[doc(hidden)]
 pub fn upstream_supplicant_association_ioctl_diagnostic_snapshot() -> [u32; 12] {
     upstream_supplicant::association_ioctl_diagnostic_snapshot()
+}
+
+/// Return counter-only timing evidence for native association-control calls.
+#[cfg(feature = "upstream-supplicant-port")]
+pub fn association_timing_diagnostics() -> AssociationTimingDiagnostics {
+    upstream_supplicant::association_timing_diagnostics()
 }
 
 /// Return bounded WS63 external-auth status retry diagnostics.

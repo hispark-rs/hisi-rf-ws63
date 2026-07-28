@@ -114,6 +114,43 @@ pub struct BlockingOperationMetrics {
     pub max_elapsed_ms: u32,
 }
 
+/// Timing for one bounded association-control ioctl.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AssociationIoctlMetrics {
+    /// Calls that entered the ioctl.
+    pub calls: u32,
+    /// Duration of the most recently measured call.
+    pub last_elapsed_ms: u32,
+    /// Longest measured call duration.
+    pub max_elapsed_ms: u32,
+}
+
+/// Counter-only timings for native supplicant association control.
+///
+/// The snapshot contains no SSID, BSSID, frame, or key material.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AssociationTimingDiagnostics {
+    /// Initial association request.
+    pub first: AssociationIoctlMetrics,
+    /// State-clear request before a retry.
+    pub clear: AssociationIoctlMetrics,
+    /// Replacement association request.
+    pub retry: AssociationIoctlMetrics,
+    /// Explicit deauthentication request.
+    pub deauthenticate: AssociationIoctlMetrics,
+}
+
+impl AssociationTimingDiagnostics {
+    /// Longest measured call across the association-control path.
+    pub fn max_elapsed_ms(self) -> u32 {
+        self.first
+            .max_elapsed_ms
+            .max(self.clear.max_elapsed_ms)
+            .max(self.retry.max_elapsed_ms)
+            .max(self.deauthenticate.max_elapsed_ms)
+    }
+}
+
 /// Snapshot of the current WS63 blocking backend workload.
 ///
 /// The snapshot contains no network configuration or key material. Counters
