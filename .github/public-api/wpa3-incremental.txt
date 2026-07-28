@@ -432,11 +432,15 @@ pub hisi_rf_ws63::ResourceReport::task_stack_bytes: core::option::Option<usize>
 impl hisi_rf_ws63::ResourceReport
 pub fn hisi_rf_ws63::ResourceReport::write_json(self, &mut impl core::fmt::Write) -> core::fmt::Result
 pub struct hisi_rf_ws63::Resources<P: hisi_rf_ws63::Profile>
+impl hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa2Smoltcp>
+pub fn hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa2Smoltcp>::builder(hisi_hal::peripherals::ws63_only::Efuse<'static>, hisi_rf_ws63::InstalledRadioArena<hisi_rf_ws63::WifiWpa2Smoltcp>) -> hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa2Smoltcp, MissingCrypto, PkeNotRequired>
 impl hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa3Smoltcp>
 pub fn hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa3Smoltcp>::builder(hisi_hal::peripherals::ws63_only::Efuse<'static>, hisi_rf_ws63::InstalledRadioArena<hisi_rf_ws63::WifiWpa3Smoltcp>) -> hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa3Smoltcp, MissingCrypto, MissingPke>
 impl<P: hisi_rf_ws63::Profile> hisi_rf_ws63::Resources<P>
 pub fn hisi_rf_ws63::Resources<P>::new(hisi_hal::peripherals::ws63_only::Efuse<'static>, hisi_hal::peripherals::ws63_only::Km<'static>, hisi_hal::peripherals::ws63_only::Spacc<'static>, hisi_hal::peripherals::ws63_only::Pke<'static>, hisi_hal::peripherals::Trng<'static>, hisi_rf_ws63::InstalledRadioArena<P>) -> Self
 pub struct hisi_rf_ws63::ResourcesBuilder<P: hisi_rf_ws63::Profile, C, E>
+impl hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa2Smoltcp, CryptoReady, PkeNotRequired>
+pub fn hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa2Smoltcp, CryptoReady, PkeNotRequired>::build(self) -> hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa2Smoltcp>
 impl hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa3Smoltcp, CryptoReady, PkeReady>
 pub fn hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa3Smoltcp, CryptoReady, PkeReady>::build(self) -> hisi_rf_ws63::Resources<hisi_rf_ws63::WifiWpa3Smoltcp>
 impl<C> hisi_rf_ws63::ResourcesBuilder<hisi_rf_ws63::WifiWpa3Smoltcp, C, MissingPke>

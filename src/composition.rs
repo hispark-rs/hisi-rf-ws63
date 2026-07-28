@@ -23,11 +23,9 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
 pub use crate::netif_smoltcp::{DhcpDiagnostics, RxQueueDiagnostics};
-#[cfg(feature = "wpa2-personal")]
-use crate::profile::WifiWpa2Smoltcp;
-#[cfg(feature = "wpa3-personal")]
-use crate::profile::WifiWpa3Smoltcp;
-use crate::profile::{ActiveProfile, InstalledRadioArena, Profile, Storage};
+use crate::profile::{
+    ActiveProfile, InstalledRadioArena, Profile, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
+};
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
 pub struct Resources<P: Profile> {
@@ -104,7 +102,6 @@ pub struct ResourcesBuilder<P: Profile, C, E> {
     arena: InstalledRadioArena<P>,
 }
 
-#[cfg(feature = "wpa2-personal")]
 impl Resources<WifiWpa2Smoltcp> {
     /// Start assembling the capabilities required by the WPA2 profile.
     pub fn builder(
@@ -120,7 +117,6 @@ impl Resources<WifiWpa2Smoltcp> {
     }
 }
 
-#[cfg(feature = "wpa3-personal")]
 impl Resources<WifiWpa3Smoltcp> {
     /// Start assembling the capabilities required by the WPA3 profile.
     pub fn builder(
@@ -153,7 +149,6 @@ impl<P: Profile, E> ResourcesBuilder<P, MissingCrypto, E> {
     }
 }
 
-#[cfg(feature = "wpa3-personal")]
 impl<C> ResourcesBuilder<WifiWpa3Smoltcp, C, MissingPke> {
     /// Supply the PKE capability required by SAE/P-256.
     pub fn pke(self, pke: Pke<'static>) -> ResourcesBuilder<WifiWpa3Smoltcp, C, PkeReady> {
@@ -166,7 +161,6 @@ impl<C> ResourcesBuilder<WifiWpa3Smoltcp, C, MissingPke> {
     }
 }
 
-#[cfg(feature = "wpa2-personal")]
 impl ResourcesBuilder<WifiWpa2Smoltcp, CryptoReady, PkeNotRequired> {
     /// Finish the WPA2 resources without consuming an unused PKE token.
     pub fn build(self) -> Resources<WifiWpa2Smoltcp> {
@@ -181,7 +175,6 @@ impl ResourcesBuilder<WifiWpa2Smoltcp, CryptoReady, PkeNotRequired> {
     }
 }
 
-#[cfg(feature = "wpa3-personal")]
 impl ResourcesBuilder<WifiWpa3Smoltcp, CryptoReady, PkeReady> {
     /// Finish the WPA3 resources after all required capabilities are present.
     pub fn build(self) -> Resources<WifiWpa3Smoltcp> {

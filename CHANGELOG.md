@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.40] - 2026-07-29
+
+### Changed
+
+- Kept both concrete Personal-profile builder definitions visible across
+  feature selections so changing the selected security profile does not alter
+  the facade's public name set. `SelectedProfile` still determines which
+  typestate chain application code can complete.
+
 ## [0.1.0-alpha.39] - 2026-07-29
 
 ### Added
