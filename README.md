@@ -40,12 +40,21 @@ Cargo feature exposes `SelectedProfile`, so firmware can make the RAM cost and
 one-time ownership explicit without repeating the security mode in source:
 
 ```rust,ignore
-static RADIO_STORAGE: hisi_rf_ws63::Storage<hisi_rf_ws63::SelectedProfile, 4> =
-    hisi_rf_ws63::Storage::new();
+hisi_rf_ws63::declare_radio_storage!(
+    static RADIO_STORAGE,
+    events = 4
+);
 ```
 
+`RADIO_STORAGE.install()` is the single pre-RTOS admission point. The macro
+keeps bounded state in ordinary BSS and places the large shared allocator arena
+in the runtime's dedicated `NOLOAD` section, so applications do not maintain
+two public statics or reproduce linker attributes. The installed capability
+supplies the RTOS allocation hooks and is split only at the later radio-init
+boundary.
+
 The selected profile atomically reserves its dynamic RTOS task slots before
-claiming storage or touching radio hardware. The opaque generation-bearing
+claiming control storage or touching radio hardware. The opaque generation-bearing
 reservation remains inside `Storage`; vendor worker creation consumes those
 slots through contract v1.3, while unrelated task creation cannot steal them.
 The reservation covers the one public `RadioRunner` task plus the five workers
@@ -53,11 +62,11 @@ observed in the pinned payload. Applications consume the controller with
 `start_runner()` and receive only the Wi-Fi control/L2 handles; they do not call
 the runtime-driver spawn API themselves.
 
-`Storage::report()` exposes deterministic `hisi-rf-resource-report/v3`
-metadata. The current report accounts for bounded radio state, the 4,384-byte
-caller-owned crypto DMA scratch, and the 48 KiB linker-owned packet RAM. Task
-stacks and the supplicant arena remain explicitly uncalibrated until their
-runtime ownership and HIL admission contracts are complete.
+`RadioStorage::report()` exposes deterministic
+`hisi-rf-resource-report/v6` metadata. The report separates ordinary control
+BSS, the composition handle, the shared RF arena, bounded event capacity, the
+4,384-byte caller-owned crypto DMA scratch, task stacks, and the 48 KiB
+linker-owned packet RAM. Final-image bytes remain a packaging concern.
 
 Backend failures use the chip-neutral `hisi-rf-error/v2` schema. The WS63
 adapter supplies the selected profile revision, protocol stage, raw IEEE or

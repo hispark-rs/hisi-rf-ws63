@@ -19,14 +19,11 @@ use hisi_hal::timer::TimerAlarm0;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
-use hisi_rf_ws63::{
-    BootstrapStage, InstalledRadioArena, SelectedProfile, Storage, declare_radio_arena,
-};
+use hisi_rf_ws63::{BootstrapStage, InstalledRadioStorage, SelectedProfile, declare_radio_storage};
 use hisi_riscv_rt::entry;
 
 const RADIO_EVENT_DEPTH: usize = 8;
-static RADIO_STORAGE: Storage<SelectedProfile, RADIO_EVENT_DEPTH> = Storage::new();
-declare_radio_arena!(static RADIO_ARENA);
+declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
 
 #[entry]
 fn main() -> ! {
@@ -41,10 +38,9 @@ fn main() -> ! {
     Watchdog::new(p.WDT).disable();
     uart.write(b"\r\nRFDBG_BOOTSTRAP_PROFILE_BEGIN\r\n");
 
-    let radio_arena = RADIO_ARENA
-        .claim_for::<SelectedProfile>()
-        .and_then(|arena| arena.install())
-        .expect("install shared RF arena");
+    let installed_storage = RADIO_STORAGE
+        .install()
+        .expect("install caller-owned radio storage");
     uart.write(b"RFDBG_A5U_ARENA_OK bytes=0x");
     uart.write(&hex8(hisi_rf_ws63::rf_heap_metrics().arena_bytes as u32));
     uart.write(b"\r\n");
@@ -89,6 +85,7 @@ fn main() -> ! {
     hisi_rtos::request_reschedule();
     uart.write(b"RFDBG_RTOS_OK\r\n");
 
+    let (control_storage, radio_arena) = installed_storage.into_init_parts();
     let resources =
         hisi_rf_ws63::Resources::<hisi_rf_ws63::SelectedProfile>::builder(efuse, radio_arena)
             .crypto(p.KM, p.SPACC, p.TRNG)
@@ -96,7 +93,7 @@ fn main() -> ! {
     let result = hisi_rf_ws63::init_incremental(
         hisi_rf_core::RadioConfig::default(),
         resources,
-        &RADIO_STORAGE,
+        control_storage,
     );
 
     let bootstrap = hisi_rf_ws63::blocking_backend_metrics().bootstrap;
@@ -165,12 +162,12 @@ extern "C" fn SOFT_INT0() {
 
 unsafe fn rtos_allocate(size: usize) -> *mut u8 {
     // SAFETY: hisi-rtos releases this allocation through `rtos_deallocate`.
-    unsafe { InstalledRadioArena::<SelectedProfile>::allocate(size) }
+    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::allocate(size) }
 }
 
 unsafe fn rtos_deallocate(pointer: *mut u8) {
     // SAFETY: hisi-rtos returns only pointers produced by `rtos_allocate`.
-    unsafe { InstalledRadioArena::<SelectedProfile>::deallocate(pointer) };
+    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::deallocate(pointer) };
 }
 
 fn monotonic_ms() -> u64 {

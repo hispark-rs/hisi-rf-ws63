@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.42] - 2026-07-29
+
+### Added
+
+- Added `RadioStorage` and `declare_radio_storage!` as the single
+  caller-owned composition and pre-RTOS admission entry. The macro preserves
+  the separate ordinary-BSS control store and dedicated `NOLOAD` shared arena
+  without exposing two application statics.
+- Added `InstalledRadioStorage` allocation hooks and an explicit
+  post-RTOS `into_init_parts` boundary.
+
+### Changed
+
+- Upgraded the deterministic resource report to
+  `hisi-rf-resource-report/v6`, accounting separately for control storage,
+  composition-handle bytes, shared arena bytes, and their caller-owned total.
+
 ## [0.1.0-alpha.41] - 2026-07-29
 
 ### Added

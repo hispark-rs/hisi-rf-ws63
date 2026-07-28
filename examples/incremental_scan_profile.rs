@@ -36,8 +36,8 @@ use hisi_rf_core::{
 #[cfg(feature = "incremental-connect-profile")]
 use hisi_rf_core::{Passphrase, Security, StationConfig};
 use hisi_rf_ws63::{
-    IncrementalRadioParts, IncrementalRadioRunner, InstalledRadioArena, SelectedProfile, Storage,
-    Ws63IncrementalWaitDiagnostics, declare_radio_arena,
+    IncrementalRadioParts, IncrementalRadioRunner, InstalledRadioStorage, SelectedProfile,
+    Ws63IncrementalWaitDiagnostics, declare_radio_storage,
 };
 use hisi_riscv_rt::entry;
 use static_cell::StaticCell;
@@ -78,8 +78,7 @@ const TEST_PASSPHRASE: &[u8] = match option_env!("WS63_WIFI_PASSPHRASE") {
     None => b"",
 };
 
-static RADIO_STORAGE: Storage<SelectedProfile, RADIO_EVENT_DEPTH> = Storage::new();
-declare_radio_arena!(static RADIO_ARENA);
+declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 static UART: StaticCell<Uart<'static, hisi_hal::peripherals::Uart0<'static>>> = StaticCell::new();
 static RADIO_PARTS: StaticCell<
@@ -103,10 +102,9 @@ fn main() -> ! {
     Watchdog::new(p.WDT).disable();
     uart.write(b"\r\nRFDBG_A5B_SCAN_BEGIN\r\n");
 
-    let radio_arena = RADIO_ARENA
-        .claim_for::<SelectedProfile>()
-        .and_then(|arena| arena.install())
-        .expect("install shared RF arena");
+    let installed_storage = RADIO_STORAGE
+        .install()
+        .expect("install caller-owned radio storage");
 
     let mut delay = Delay::new();
     let rf_ready = RfPower::new(p.CMU, p.CLDO_CRG).enable(p.EFUSE, &mut delay);
@@ -156,6 +154,7 @@ fn main() -> ! {
     uart.write(b"RFDBG_A5B_RTOS_OK\r\n");
 
     let bootstrap_started = monotonic_ms();
+    let (control_storage, radio_arena) = installed_storage.into_init_parts();
     let resources =
         hisi_rf_ws63::Resources::<hisi_rf_ws63::SelectedProfile>::builder(efuse, radio_arena)
             .crypto(p.KM, p.SPACC, p.TRNG);
@@ -167,7 +166,7 @@ fn main() -> ! {
         hisi_rf_ws63::init_incremental(
             hisi_rf_core::RadioConfig::default(),
             resources,
-            &RADIO_STORAGE,
+            control_storage,
         )
         .map(|controller| controller.split(RUNNER_BUDGET))
     });
@@ -717,12 +716,12 @@ extern "C" fn SOFT_INT0() {
 
 unsafe fn rtos_allocate(size: usize) -> *mut u8 {
     // SAFETY: hisi-rtos releases this allocation through `rtos_deallocate`.
-    unsafe { InstalledRadioArena::<SelectedProfile>::allocate(size) }
+    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::allocate(size) }
 }
 
 unsafe fn rtos_deallocate(pointer: *mut u8) {
     // SAFETY: hisi-rtos returns only pointers produced by `rtos_allocate`.
-    unsafe { InstalledRadioArena::<SelectedProfile>::deallocate(pointer) };
+    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::deallocate(pointer) };
 }
 
 fn monotonic_ms() -> u64 {

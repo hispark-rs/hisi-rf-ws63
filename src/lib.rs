@@ -489,9 +489,38 @@ pub use profile::SelectedProfile;
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use profile::{
-    ArenaAdmissionError, InstalledRadioArena, Profile, RadioArena, RadioArenaStorage,
-    ResourceReport, SELECTED_RF_ARENA_BYTES, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
+    ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
+    RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_RF_ARENA_BYTES, Storage,
+    WifiWpa2Smoltcp, WifiWpa3Smoltcp,
 };
+
+/// Declare all caller-owned storage for the selected named radio profile.
+///
+/// The application sees one composition object. Internally, bounded control
+/// state stays in ordinary BSS and the large allocator arena is placed in the
+/// runtime's dedicated post-stack `NOLOAD` range.
+#[macro_export]
+macro_rules! declare_radio_storage {
+    ($(#[$meta:meta])* $vis:vis static $name:ident, events = $events:expr) => {
+        $(#[$meta])*
+        $vis static $name: $crate::RadioStorage<
+            $crate::SelectedProfile,
+            { $events },
+            { $crate::SELECTED_RF_ARENA_BYTES },
+        > = {
+            static CONTROL: $crate::Storage<$crate::SelectedProfile, { $events }> =
+                $crate::Storage::new();
+            #[cfg_attr(
+                target_arch = "riscv32",
+                unsafe(link_section = ".hisi.shared-arena")
+            )]
+            static ARENA: $crate::RadioArenaStorage<
+                { $crate::SELECTED_RF_ARENA_BYTES },
+            > = $crate::RadioArenaStorage::new();
+            $crate::RadioStorage::from_parts(&CONTROL, &ARENA)
+        };
+    };
+}
 
 /// Declare caller-owned storage for the selected named radio profile.
 ///

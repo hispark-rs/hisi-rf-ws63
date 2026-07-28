@@ -14,7 +14,7 @@ use static_cell::StaticCell;
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v5";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v6";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
@@ -266,7 +266,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
 
     /// Return the compile-time resource contract for this storage instance.
     pub const fn report(&self) -> ResourceReport {
-        ResourceReport::for_profile::<P, EVENTS>()
+        ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES, 0)
     }
 
     pub(crate) fn claim(
@@ -309,6 +309,87 @@ impl<P: Profile, const EVENTS: usize> Default for Storage<P, EVENTS> {
     }
 }
 
+/// Caller-owned composition storage for one WS63 radio instance.
+///
+/// Use [`crate::declare_radio_storage`] to construct this type. The macro keeps
+/// bounded control state in ordinary BSS while placing the large shared arena
+/// in the runtime's dedicated `NOLOAD` section. Applications still own one
+/// named object and perform one admission step before starting the RTOS.
+pub struct RadioStorage<P: Profile + 'static, const EVENTS: usize, const ARENA_BYTES: usize> {
+    control: &'static Storage<P, EVENTS>,
+    arena: &'static RadioArenaStorage<ARENA_BYTES>,
+}
+
+impl<P: Profile + 'static, const EVENTS: usize, const ARENA_BYTES: usize>
+    RadioStorage<P, EVENTS, ARENA_BYTES>
+{
+    /// Construct a composition handle from its correctly placed backing stores.
+    ///
+    /// This is public only so [`crate::declare_radio_storage`] can expand in a
+    /// downstream crate. Applications should use that macro instead.
+    #[doc(hidden)]
+    pub const fn from_parts(
+        control: &'static Storage<P, EVENTS>,
+        arena: &'static RadioArenaStorage<ARENA_BYTES>,
+    ) -> Self {
+        Self { control, arena }
+    }
+
+    /// Admit and install all pre-RTOS radio storage exactly once.
+    pub fn install(&'static self) -> Result<InstalledRadioStorage<P, EVENTS>, ArenaAdmissionError> {
+        let arena = self.arena.claim_for::<P>()?.install()?;
+        Ok(InstalledRadioStorage {
+            control: self.control,
+            arena,
+        })
+    }
+
+    /// Return the deterministic resource contract for this composition.
+    pub const fn report(&self) -> ResourceReport {
+        ResourceReport::for_profile::<P, EVENTS>(ARENA_BYTES, core::mem::size_of::<Self>())
+    }
+}
+
+/// Installed pre-RTOS storage capability for one radio composition.
+///
+/// The allocation functions remain available while the token is held so the
+/// same arena can back `hisi-rtos`. After the RTOS starts, consume the token
+/// with [`Self::into_init_parts`] to build chip resources and initialize radio.
+pub struct InstalledRadioStorage<P: Profile + 'static, const EVENTS: usize> {
+    control: &'static Storage<P, EVENTS>,
+    arena: InstalledRadioArena<P>,
+}
+
+impl<P: Profile + 'static, const EVENTS: usize> InstalledRadioStorage<P, EVENTS> {
+    /// Allocate one zeroed RTOS block from this composition's installed arena.
+    ///
+    /// # Safety
+    ///
+    /// The returned pointer must be released only through [`Self::deallocate`].
+    pub unsafe fn allocate(size: usize) -> *mut u8 {
+        unsafe { InstalledRadioArena::<P>::allocate(size) }
+    }
+
+    /// Release one RTOS block returned by [`Self::allocate`].
+    ///
+    /// # Safety
+    ///
+    /// `pointer` must be null or a live allocation returned by
+    /// [`Self::allocate`] that has not already been released.
+    pub unsafe fn deallocate(pointer: *mut u8) {
+        unsafe { InstalledRadioArena::<P>::deallocate(pointer) }
+    }
+
+    /// Split the installed capability at the post-RTOS initialization boundary.
+    ///
+    /// The split is temporal rather than an ownership leak: the arena token is
+    /// consumed by the chip resource builder, while the bounded control store
+    /// remains borrowed for the firmware lifetime.
+    pub fn into_init_parts(self) -> (&'static Storage<P, EVENTS>, InstalledRadioArena<P>) {
+        (self.control, self.arena)
+    }
+}
+
 /// Versioned, allocation-free radio resource report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceReport {
@@ -336,8 +417,12 @@ pub struct ResourceReport {
     pub task_admission: &'static str,
     /// Number of bounded public radio events.
     pub event_capacity: usize,
-    /// Bytes held directly in [`Storage`].
+    /// Total caller-owned bytes, including control storage and shared arena.
     pub caller_owned_bytes: usize,
+    /// Bytes held in ordinary BSS by bounded control and crypto state.
+    pub control_storage_bytes: usize,
+    /// Bytes used by the composition's reference handle.
+    pub composition_handle_bytes: usize,
     /// Bytes used by chip-neutral radio state within [`Storage`].
     pub radio_state_bytes: usize,
     /// Bytes used by caller-owned SPACC DMA scratch within [`Storage`].
@@ -363,7 +448,11 @@ pub struct ResourceReport {
 }
 
 impl ResourceReport {
-    const fn for_profile<P: Profile, const EVENTS: usize>() -> Self {
+    const fn for_profile<P: Profile, const EVENTS: usize>(
+        arena_bytes: usize,
+        composition_handle_bytes: usize,
+    ) -> Self {
+        let control_storage_bytes = core::mem::size_of::<Storage<P, EVENTS>>();
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
             chip: "ws63",
@@ -377,7 +466,9 @@ impl ResourceReport {
             runtime_contract: "hisi-rf-rtos-driver/v1.4-ported-cooperative",
             task_admission: "owner-bound-slot-stack-reservation",
             event_capacity: EVENTS,
-            caller_owned_bytes: core::mem::size_of::<Storage<P, EVENTS>>(),
+            caller_owned_bytes: control_storage_bytes + arena_bytes + composition_handle_bytes,
+            control_storage_bytes,
+            composition_handle_bytes,
             radio_state_bytes: core::mem::size_of::<RadioState<EVENTS>>(),
             crypto_dma_bytes: Ws63CryptoStorage::size_bytes(),
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
@@ -386,7 +477,7 @@ impl ResourceReport {
             runtime_internal_tasks: Some(2),
             task_stack_bytes: Some(P::DYNAMIC_TASKS_REQUIRED * P::TASK_STACK_BYTES_PER_TASK),
             supplicant_arena_bytes: None,
-            shared_rf_arena_bytes: Some(P::RF_ARENA_BYTES),
+            shared_rf_arena_bytes: Some(arena_bytes),
             flash_bytes: None,
             runtime_resources_calibrated: false,
         }
@@ -403,7 +494,8 @@ impl ResourceReport {
                 "\"supplicant_backend\":\"{}\",\"crypto_backend\":\"{}\",",
                 "\"runtime_contract\":\"{}\",\"task_admission\":\"{}\",",
                 "\"event_capacity\":{},",
-                "\"caller_owned_bytes\":{},\"radio_state_bytes\":{},",
+                "\"caller_owned_bytes\":{},\"control_storage_bytes\":{},",
+                "\"composition_handle_bytes\":{},\"radio_state_bytes\":{},",
                 "\"crypto_dma_bytes\":{},\"linker_packet_ram_bytes\":{},",
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
@@ -424,6 +516,8 @@ impl ResourceReport {
             self.task_admission,
             self.event_capacity,
             self.caller_owned_bytes,
+            self.control_storage_bytes,
+            self.composition_handle_bytes,
             self.radio_state_bytes,
             self.crypto_dma_bytes,
             self.linker_packet_ram_bytes,
@@ -442,14 +536,14 @@ mod tests {
     use super::*;
 
     struct FixedBuffer {
-        bytes: [u8; 768],
+        bytes: [u8; 1024],
         len: usize,
     }
 
     impl FixedBuffer {
         fn new() -> Self {
             Self {
-                bytes: [0; 768],
+                bytes: [0; 1024],
                 len: 0,
             }
         }
@@ -475,7 +569,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v5");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v6");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -490,7 +584,12 @@ mod tests {
         assert_eq!(report.shared_rf_arena_bytes, Some(PROFILE_RF_ARENA_BYTES));
         assert_eq!(report.flash_bytes, None);
         assert!(!report.runtime_resources_calibrated);
-        assert!(report.caller_owned_bytes >= report.radio_state_bytes + report.crypto_dma_bytes);
+        assert_eq!(
+            report.caller_owned_bytes,
+            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES
+        );
+        assert_eq!(report.composition_handle_bytes, 0);
+        assert!(report.control_storage_bytes >= report.radio_state_bytes + report.crypto_dma_bytes);
     }
 
     #[test]
@@ -501,7 +600,7 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v5\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v6\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -524,6 +623,25 @@ mod tests {
                 .as_str()
                 .ends_with("\"runtime_resources_calibrated\":false}")
         );
+    }
+
+    #[test]
+    fn composition_report_accounts_for_control_arena_and_handle() {
+        static CONTROL: Storage<WifiWpa2Smoltcp, 4> = Storage::new();
+        static ARENA: RadioArenaStorage<{ PROFILE_RF_ARENA_BYTES }> = RadioArenaStorage::new();
+        static RADIO: RadioStorage<WifiWpa2Smoltcp, 4, { PROFILE_RF_ARENA_BYTES }> =
+            RadioStorage::from_parts(&CONTROL, &ARENA);
+
+        let report = RADIO.report();
+        assert_eq!(
+            report.caller_owned_bytes,
+            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + core::mem::size_of_val(&RADIO)
+        );
+        assert_eq!(
+            report.composition_handle_bytes,
+            core::mem::size_of_val(&RADIO)
+        );
+        assert_eq!(report.event_capacity, 4);
     }
 
     #[test]

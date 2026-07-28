@@ -338,6 +338,7 @@ pub fn hisi_rf_ws63::wifi::Wifi<'d>::interface_name(&self) -> &[u8]
 pub fn hisi_rf_ws63::wifi::Wifi<'d>::scan(&mut self, &mut [hisi_rf_ws63::wifi::ScanResult], u32) -> core::result::Result<usize, hisi_rf_ws63::wifi::Error>
 pub const hisi_rf_ws63::wifi::MAX_SCAN_RESULTS: usize
 pub macro hisi_rf_ws63::declare_radio_arena!
+pub macro hisi_rf_ws63::declare_radio_storage!
 pub enum hisi_rf_ws63::ArenaAdmissionError
 pub hisi_rf_ws63::ArenaAdmissionError::AlreadyClaimed
 pub hisi_rf_ws63::ArenaAdmissionError::InsufficientBytes
@@ -391,6 +392,11 @@ pub struct hisi_rf_ws63::InstalledRadioArena<P: hisi_rf_ws63::Profile>
 impl<P: hisi_rf_ws63::Profile> hisi_rf_ws63::InstalledRadioArena<P>
 pub unsafe fn hisi_rf_ws63::InstalledRadioArena<P>::allocate(usize) -> *mut u8
 pub unsafe fn hisi_rf_ws63::InstalledRadioArena<P>::deallocate(*mut u8)
+pub struct hisi_rf_ws63::InstalledRadioStorage<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize>
+impl<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize> hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>
+pub unsafe fn hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>::allocate(usize) -> *mut u8
+pub unsafe fn hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>::deallocate(*mut u8)
+pub fn hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>::into_init_parts(self) -> (&'static hisi_rf_ws63::Storage<P, EVENTS>, hisi_rf_ws63::InstalledRadioArena<P>)
 pub struct hisi_rf_ws63::RadioArena<P: hisi_rf_ws63::Profile>
 impl<P: hisi_rf_ws63::Profile> hisi_rf_ws63::RadioArena<P>
 pub fn hisi_rf_ws63::RadioArena<P>::install(self) -> core::result::Result<hisi_rf_ws63::InstalledRadioArena<P>, hisi_rf_ws63::ArenaAdmissionError>
@@ -404,9 +410,15 @@ impl<const N: usize> core::marker::Sync for hisi_rf_ws63::RadioArenaStorage<N>
 pub struct hisi_rf_ws63::RadioController<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize>
 impl<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize> hisi_rf_ws63::RadioController<P, EVENTS>
 pub fn hisi_rf_ws63::RadioController<P, EVENTS>::start_runner(self) -> core::result::Result<hisi_rf_ws63::WifiParts<EVENTS>, hisi_rf_ws63::InitError>
+pub struct hisi_rf_ws63::RadioStorage<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize, const ARENA_BYTES: usize>
+impl<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize, const ARENA_BYTES: usize> hisi_rf_ws63::RadioStorage<P, EVENTS, ARENA_BYTES>
+pub fn hisi_rf_ws63::RadioStorage<P, EVENTS, ARENA_BYTES>::install(&'static self) -> core::result::Result<hisi_rf_ws63::InstalledRadioStorage<P, EVENTS>, hisi_rf_ws63::ArenaAdmissionError>
+pub const fn hisi_rf_ws63::RadioStorage<P, EVENTS, ARENA_BYTES>::report(&self) -> hisi_rf_ws63::ResourceReport
 pub struct hisi_rf_ws63::ResourceReport
 pub hisi_rf_ws63::ResourceReport::caller_owned_bytes: usize
 pub hisi_rf_ws63::ResourceReport::chip: &'static str
+pub hisi_rf_ws63::ResourceReport::composition_handle_bytes: usize
+pub hisi_rf_ws63::ResourceReport::control_storage_bytes: usize
 pub hisi_rf_ws63::ResourceReport::crypto_backend: &'static str
 pub hisi_rf_ws63::ResourceReport::crypto_dma_bytes: usize
 pub hisi_rf_ws63::ResourceReport::dynamic_tasks_required: usize
