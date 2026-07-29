@@ -21,9 +21,14 @@ const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361;
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
-// Includes the 18 instance-owned incremental diagnostic counters published by
-// the runner for controller-side snapshots after executor task splitting.
-const WS63_RADIO_STATE_BASE_BYTES: usize = 0x750;
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
+    // The incremental profile adds 18 instance-owned counters published by the
+    // runner for controller-side snapshots after executor task splitting.
+    + if cfg!(feature = "incremental-backend-experiment") {
+        18 * core::mem::size_of::<u32>()
+    } else {
+        0
+    };
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
@@ -705,7 +710,14 @@ mod tests {
             report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
         assert_eq!(report.composition_handle_bytes, 0);
-        assert_eq!(report.control_storage_bytes, 0x2100);
+        assert_eq!(
+            report.control_storage_bytes,
+            if cfg!(feature = "incremental-backend-experiment") {
+                0x2100
+            } else {
+                0x20c0
+            }
+        );
         assert_eq!(
             report.radio_state_bytes,
             WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES
