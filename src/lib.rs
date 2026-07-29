@@ -255,6 +255,59 @@ pub fn upstream_supplicant_scan_diagnostic_snapshot() -> [u32; 10] {
     ]
 }
 
+/// Secret-free scan/callback state captured at an operation boundary.
+#[cfg(feature = "upstream-supplicant-port")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanDiagnostics {
+    /// Native supplicant scan requests started.
+    pub native_starts: u32,
+    /// Native supplicant scan-result events accepted.
+    pub native_results: u32,
+    /// Native supplicant scan-done events accepted.
+    pub native_done: u32,
+    /// Whether the native scan capture remains active.
+    pub native_active: bool,
+    /// Whether the native scan-event queue contains pending work.
+    pub queue_pending: bool,
+    /// Native scan events dropped because the bounded queue was full.
+    pub queue_dropped: u32,
+    /// Whether the vendor driver scan state remains active.
+    pub driver_active: bool,
+    /// Whether the vendor driver published scan completion.
+    pub driver_done: bool,
+    /// Results retained by the vendor driver callback.
+    pub driver_results: u32,
+    /// Raw vendor scan completion status.
+    pub driver_status: u32,
+}
+
+/// Return a typed, secret-free scan diagnostic snapshot.
+#[cfg(feature = "upstream-supplicant-port")]
+#[doc(hidden)]
+pub fn upstream_supplicant_scan_diagnostics() -> ScanDiagnostics {
+    #[cfg(target_arch = "riscv32")]
+    {
+        let values = upstream_supplicant_scan_diagnostic_snapshot();
+        ScanDiagnostics {
+            native_starts: values[0],
+            native_results: values[1],
+            native_done: values[2],
+            native_active: values[3] != 0,
+            queue_pending: values[4] != 0,
+            queue_dropped: values[5],
+            driver_active: values[6] != 0,
+            driver_done: values[7] != 0,
+            driver_results: values[8],
+            driver_status: values[9],
+        }
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        ScanDiagnostics::default()
+    }
+}
+
 /// Return public IEEE 802.11 Authentication header diagnostics.
 ///
 /// The snapshot intentionally excludes frame bodies and cryptographic payloads.
