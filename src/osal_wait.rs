@@ -60,6 +60,7 @@ static WAIT_DIAGNOSTICS: Mutex<RefCell<[WaitDiagnostic; WAIT_DIAGNOSTIC_SLOTS]>>
     Mutex::new(RefCell::new([WaitDiagnostic::EMPTY; WAIT_DIAGNOSTIC_SLOTS]));
 
 #[derive(Clone, Copy, Default)]
+#[cfg(any(target_arch = "riscv32", test))]
 pub(crate) struct WaitActivity {
     pub blocks: u32,
     pub wakeups: u32,
