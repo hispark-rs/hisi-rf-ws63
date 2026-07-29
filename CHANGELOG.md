@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.58] - 2026-07-30
+
+### Changed
+
+- Split the selected profile's caller-owned memory envelope into a dedicated
+  RTOS task-stack arena and an RF/supplicant arena without increasing the total
+  296 KiB NOLOAD budget.
+- Advance the machine-readable resource report to
+  `hisi-rf-resource-report/v7`, distinguishing stack payload bytes, allocator
+  arena bytes, and the remaining RF arena.
+
 ## [0.1.0-alpha.57] - 2026-07-30
 
 ### Added

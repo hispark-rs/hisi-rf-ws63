@@ -57,16 +57,17 @@ The selected profile atomically reserves its dynamic RTOS task slots before
 claiming control storage or touching radio hardware. The opaque generation-bearing
 reservation remains inside `Storage`; vendor worker creation consumes those
 slots through contract v1.3, while unrelated task creation cannot steal them.
-The reservation covers the one public `RadioRunner` task plus the five workers
+The reservation covers the one public `RadioRunner` task plus the six workers
 observed in the pinned payload. Applications consume the controller with
 `start_runner()` and receive only the Wi-Fi control/L2 handles; they do not call
 the runtime-driver spawn API themselves.
 
 `RadioStorage::report()` exposes deterministic
-`hisi-rf-resource-report/v6` metadata. The report separates ordinary control
-BSS, the composition handle, the shared RF arena, bounded event capacity, the
-4,384-byte caller-owned crypto DMA scratch, task stacks, and the 48 KiB
-linker-owned packet RAM. Final-image bytes remain a packaging concern.
+`hisi-rf-resource-report/v7` metadata. The report separates ordinary control
+BSS, the composition handle, the RF/supplicant arena, bounded event capacity,
+the 4,384-byte caller-owned crypto DMA scratch, task-stack payload and allocator
+arena bytes, and the 48 KiB linker-owned packet RAM. Final-image bytes remain a
+packaging concern.
 
 Backend failures use the chip-neutral `hisi-rf-error/v3` schema. The WS63
 adapter supplies the selected profile revision, protocol stage, raw IEEE or

@@ -15,7 +15,7 @@ use static_cell::StaticCell;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v7";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29-r3";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-30-r4";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = 296 * 1024;
