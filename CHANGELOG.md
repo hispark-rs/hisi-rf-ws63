@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Replace the blocking mask-ROM MAC statistics helper with the generated
+  `hisi-hal` WLMAC read-only snapshot. This avoids the ROM helper's fixed
+  LiteOS IRQ callback trampoline while preserving the six audited counters.
+- Advertise the MAC RX counter boundary in the bounded `data-path-diag`
+  capability mask.
+
 ## [0.1.0-alpha.50] - 2026-07-29
 
 ### Added

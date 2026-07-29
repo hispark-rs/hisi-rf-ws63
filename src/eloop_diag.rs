@@ -45,7 +45,6 @@ unsafe extern "C" {
         rx_status: *mut c_void,
         process_flag: *mut c_void,
     ) -> u32;
-    fn hh503_get_mac_rx_statistics_data(statistics: *mut MacRxStatistics);
     #[cfg(feature = "rf-auth-scan-filter")]
     fn hal_set_rx_filter_reg(command: u32);
 }
@@ -486,16 +485,15 @@ pub fn mac_filter(vap_id: usize) -> Option<MacFilterDiagnostic> {
 
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn mac_rx_statistics() -> MacRxStatistics {
-    let mut statistics = MacRxStatistics::default();
-    // SAFETY: the ROM helper writes exactly the six u32 fields declared by
-    // `hal_mac_rx_mpdu_statis_info_stru` and only reads MAC counter registers.
-    unsafe { hh503_get_mac_rx_statistics_data(&mut statistics) };
-    statistics
-}
-
-#[cfg(not(target_arch = "riscv32"))]
-pub(crate) fn mac_rx_statistics() -> MacRxStatistics {
-    MacRxStatistics::default()
+    let counters = crate::wlmac_diag::snapshot();
+    MacRxStatistics {
+        ampdu: u32::from(counters.rx_ampdu),
+        successful_mpdu_in_ampdu: counters.rx_success_mpdu_in_ampdu,
+        failed_mpdu_in_ampdu: counters.rx_failed_mpdu_in_ampdu,
+        successful_mpdu: counters.rx_success_mpdu,
+        failed_mpdu: counters.rx_failed_mpdu,
+        filtered_mpdu: u32::from(counters.rx_filtered_mpdu),
+    }
 }
 
 #[cfg(target_arch = "riscv32")]

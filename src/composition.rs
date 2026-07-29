@@ -279,7 +279,8 @@ pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 #[doc(hidden)]
 pub struct DataPathDiagnostics {
     /// Instrumented stages: bit 0 vendor TX submission, bit 1 vendor RX
-    /// boundary, bit 2 MAC RX counters, bit 3 DMAC TX completion.
+    /// boundary, bit 2 MAC RX counters, bit 3 DMAC TX completion, bit 4 DMAC
+    /// RX preparation.
     pub instrumented_capabilities: u32,
     /// Frames emitted by smoltcp into the vendor TX sink.
     pub tx_frames: u32,
@@ -312,21 +313,22 @@ pub struct DataPathDiagnostics {
     pub wlmac_irqs: u32,
 }
 
-#[cfg(feature = "data-path-diag")]
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_CAP_VENDOR_TX_SUBMISSION: u32 = 1 << 0;
-#[cfg(feature = "data-path-diag")]
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_CAP_VENDOR_RX_BOUNDARY: u32 = 1 << 1;
-#[cfg(feature = "data-path-diag")]
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
+const DATA_PATH_CAP_MAC_RX_COUNTERS: u32 = 1 << 2;
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_CAP_DMAC_TX_COMPLETION: u32 = 1 << 3;
-#[cfg(feature = "data-path-diag")]
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_CAP_DMAC_RX_PREPARE: u32 = 1 << 4;
-#[cfg(feature = "data-path-diag")]
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_DIAG_CAPABILITIES: u32 = DATA_PATH_CAP_VENDOR_TX_SUBMISSION
     | DATA_PATH_CAP_VENDOR_RX_BOUNDARY
+    | DATA_PATH_CAP_MAC_RX_COUNTERS
     | DATA_PATH_CAP_DMAC_TX_COMPLETION
     | DATA_PATH_CAP_DMAC_RX_PREPARE;
-#[cfg(feature = "rf-eloop-diag")]
-const FULL_DATA_PATH_DIAG_CAPABILITIES: u32 = 0x1f;
 
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
@@ -376,16 +378,16 @@ impl WifiDevice {
             mac_rx_filtered_mpdu,
         ) = {
             let vendor = crate::eloop_diag::auth();
-            let mac_rx = crate::eloop_diag::mac_rx_statistics();
+            let mac_rx = crate::wlmac_diag::snapshot();
             (
-                FULL_DATA_PATH_DIAG_CAPABILITIES,
+                DATA_PATH_DIAG_CAPABILITIES,
                 vendor.bridge_xmit_calls,
                 vendor.tx_complete_calls,
                 vendor.dmac_rx_calls,
                 vendor.netif_rx_calls,
-                mac_rx.successful_mpdu,
-                mac_rx.failed_mpdu,
-                mac_rx.filtered_mpdu,
+                mac_rx.rx_success_mpdu,
+                mac_rx.rx_failed_mpdu,
+                u32::from(mac_rx.rx_filtered_mpdu),
             )
         };
         #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
@@ -399,15 +401,16 @@ impl WifiDevice {
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
         ) = {
+            let mac_rx = crate::wlmac_diag::snapshot();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 crate::netif::tx_submitted(),
                 crate::data_path_diag::tx_completions(),
                 crate::data_path_diag::rx_prepares(),
                 crate::netif::rx_received(),
-                0,
-                0,
-                0,
+                mac_rx.rx_success_mpdu,
+                mac_rx.rx_failed_mpdu,
+                u32::from(mac_rx.rx_filtered_mpdu),
             )
         };
         #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
@@ -929,13 +932,13 @@ mod tests {
 
     #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
     #[test]
-    fn narrow_data_path_diagnostics_claim_only_bounded_boundaries() {
-        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1b);
+    fn data_path_diagnostics_claim_all_bounded_boundaries() {
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1f);
     }
 
     #[cfg(feature = "rf-eloop-diag")]
     #[test]
     fn full_data_path_diagnostics_claim_every_returned_boundary() {
-        assert_eq!(FULL_DATA_PATH_DIAG_CAPABILITIES, 0x1f);
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1f);
     }
 }

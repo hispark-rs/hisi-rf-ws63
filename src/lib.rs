@@ -428,6 +428,8 @@ pub fn rf_heap_metrics() -> RfHeapMetrics {
     )
 ))]
 pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize = 7;
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
+mod wlmac_diag;
 #[cfg(feature = "wifi-personal")]
 mod wpa_compat;
 mod ws63_runtime_compat;
