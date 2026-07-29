@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Moved upstream-hostap deauthentication requests from the bounded
+  `RadioRunner` turn into a lower-priority, bounded WS63 control worker. The
+  vendor disconnect ioctl uses a synchronous HMAC post with a 4000 ms window;
+  it can therefore no longer consume the runner's 100 ms response budget.
+- Increased named-profile task admission from six to seven dynamic tasks and
+  updated the machine-readable stack report for the added control worker.
+
 ## [0.1.0-alpha.47] - 2026-07-29
 
 ### Added

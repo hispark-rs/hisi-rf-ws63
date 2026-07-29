@@ -417,7 +417,8 @@ pub fn rf_heap_metrics() -> RfHeapMetrics {
 }
 
 /// Dynamic worker count required by the public composition root: one bounded
-/// radio runner plus five workers observed for the pinned WS63 Wi-Fi payload.
+/// radio runner, one asynchronous WAL control worker, and five workers observed
+/// for the pinned WS63 Wi-Fi payload.
 #[cfg(any(
     target_arch = "riscv32",
     all(
@@ -425,7 +426,7 @@ pub fn rf_heap_metrics() -> RfHeapMetrics {
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
     )
 ))]
-pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize = 6;
+pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize = 7;
 #[cfg(feature = "wifi-personal")]
 mod wpa_compat;
 mod ws63_runtime_compat;

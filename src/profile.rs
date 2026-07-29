@@ -15,7 +15,7 @@ use static_cell::StaticCell;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v6";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29-r2";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29-r3";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
@@ -644,10 +644,10 @@ mod tests {
         assert_eq!(report.arena_storage_bytes, PROFILE_RF_ARENA_BYTES + 64);
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.main_stack_bytes_required, 0x8000);
-        assert_eq!(report.dynamic_tasks_required, 6);
+        assert_eq!(report.dynamic_tasks_required, 7);
         assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
         assert_eq!(report.runtime_internal_tasks, Some(2));
-        assert_eq!(report.task_stack_bytes, Some(6 * 24 * 1024));
+        assert_eq!(report.task_stack_bytes, Some(7 * 24 * 1024));
         assert_eq!(report.supplicant_arena_bytes, None);
         assert_eq!(report.shared_rf_arena_bytes, Some(PROFILE_RF_ARENA_BYTES));
         assert_eq!(report.flash_bytes, None);
@@ -687,7 +687,7 @@ mod tests {
         assert!(
             output
                 .as_str()
-                .contains("\"runtime_internal_tasks\":2,\"task_stack_bytes\":147456")
+                .contains("\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032")
         );
         assert!(output.as_str().contains("\"shared_rf_arena_bytes\":303104"));
         assert!(

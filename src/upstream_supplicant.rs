@@ -5,11 +5,12 @@
 //! `hisi-rf-rtos-driver`, the RF heap, the WS63 monotonic clock and the explicit
 //! WS63 entropy backend.
 
-use core::cell::UnsafeCell;
+use core::cell::{RefCell, UnsafeCell};
 use core::ffi::{c_int, c_void};
 use core::num::NonZeroU32;
 use core::ptr::NonNull;
 
+use critical_section::Mutex;
 use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
 use portable_atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use ws63_radio_sys::supplicant::{
@@ -28,13 +29,70 @@ use ws63_radio_sys::supplicant::{
 };
 
 static RUNNER_WAKE: Semaphore = Semaphore::new(0);
+static DEAUTH_WAKE: Semaphore = Semaphore::new(0);
 static PORT_IDENTITY: u8 = 0;
 static DRIVER_CONTEXT: DriverContext = DriverContext::new();
 static PORT_STATE: AtomicU8 = AtomicU8::new(PORT_FREE);
+static DEAUTH_WORKER_STATE: AtomicU8 = AtomicU8::new(DEAUTH_WORKER_FREE);
 static EAPOL_PENDING: AtomicBool = AtomicBool::new(false);
 static MGMT_RX_QUEUE: MgmtRxQueue = MgmtRxQueue::new();
 static NATIVE_SCAN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SCAN_EVENT_QUEUE: ScanEventQueue = ScanEventQueue::new();
+
+const DEAUTH_QUEUE_CAPACITY: usize = 4;
+const DEAUTH_WORKER_FREE: u8 = 0;
+const DEAUTH_WORKER_STARTING: u8 = 1;
+const DEAUTH_WORKER_READY: u8 = 2;
+const DEAUTH_WORKER_POISONED: u8 = 3;
+const DEAUTH_WORKER_STACK_BYTES: usize = 4 * 1024;
+const DEAUTH_WORKER_PRIORITY: u8 = 11;
+
+#[derive(Clone, Copy)]
+struct DeauthRequest {
+    reason: u16,
+}
+
+struct DeauthQueue {
+    requests: [DeauthRequest; DEAUTH_QUEUE_CAPACITY],
+    head: usize,
+    len: usize,
+}
+
+impl DeauthQueue {
+    const fn new() -> Self {
+        Self {
+            requests: [DeauthRequest { reason: 0 }; DEAUTH_QUEUE_CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, request: DeauthRequest) -> bool {
+        if self.len == DEAUTH_QUEUE_CAPACITY {
+            return false;
+        }
+        let tail = (self.head + self.len) % DEAUTH_QUEUE_CAPACITY;
+        self.requests[tail] = request;
+        self.len += 1;
+        true
+    }
+
+    fn pop(&mut self) -> Option<DeauthRequest> {
+        if self.len == 0 {
+            return None;
+        }
+        let request = self.requests[self.head];
+        self.head = (self.head + 1) % DEAUTH_QUEUE_CAPACITY;
+        self.len -= 1;
+        Some(request)
+    }
+}
+
+static DEAUTH_QUEUE: Mutex<RefCell<DeauthQueue>> = Mutex::new(RefCell::new(DeauthQueue::new()));
+static DIAG_DEAUTH_QUEUED: AtomicU32 = AtomicU32::new(0);
+static DIAG_DEAUTH_COMPLETED: AtomicU32 = AtomicU32::new(0);
+static DIAG_DEAUTH_FAILED: AtomicU32 = AtomicU32::new(0);
+static DIAG_DEAUTH_DROPPED: AtomicU32 = AtomicU32::new(0);
 
 fn notify_runner() {
     let _ = RUNNER_WAKE.up();
@@ -2126,6 +2184,10 @@ pub fn prepare_upstream_supplicant_port(ifname: &[u8]) -> Result<(), UpstreamSup
         PORT_STATE.store(PORT_FREE, Ordering::Release);
         return Err(UpstreamSupplicantPortError::InvalidInterfaceName);
     }
+    if let Err(error) = start_deauth_worker() {
+        PORT_STATE.store(PORT_POISONED, Ordering::Release);
+        return Err(UpstreamSupplicantPortError::Runtime(error));
+    }
 
     let os_hooks = OsHooks {
         abi_version: ABI_VERSION,
@@ -2170,6 +2232,75 @@ pub fn prepare_upstream_supplicant_port(ifname: &[u8]) -> Result<(), UpstreamSup
             rollback,
         })
     }
+}
+
+fn start_deauth_worker() -> Result<(), hisi_rf_rtos_driver::Error> {
+    match DEAUTH_WORKER_STATE.compare_exchange(
+        DEAUTH_WORKER_FREE,
+        DEAUTH_WORKER_STARTING,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => {}
+        Err(DEAUTH_WORKER_READY) => return Ok(()),
+        Err(_) => return Err(hisi_rf_rtos_driver::Error::AlreadyInstalled),
+    }
+    if let Err(error) = DEAUTH_WAKE.try_init() {
+        DEAUTH_WORKER_STATE.store(DEAUTH_WORKER_POISONED, Ordering::Release);
+        return Err(error);
+    }
+    if let Err(error) = crate::runtime::spawn_vendor_task(
+        deauth_worker,
+        core::ptr::null_mut(),
+        DEAUTH_WORKER_STACK_BYTES,
+        DEAUTH_WORKER_PRIORITY,
+    ) {
+        DEAUTH_WORKER_STATE.store(DEAUTH_WORKER_POISONED, Ordering::Release);
+        return Err(error);
+    }
+    DEAUTH_WORKER_STATE.store(DEAUTH_WORKER_READY, Ordering::Release);
+    Ok(())
+}
+
+extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
+    loop {
+        let _ = DEAUTH_WAKE.down_timeout(WaitTimeout::Forever);
+        while let Some(mut request) =
+            critical_section::with(|cs| DEAUTH_QUEUE.borrow(cs).borrow_mut().pop())
+        {
+            let status = DIAG_DEAUTHENTICATE_IOCTL.call(|| {
+                crate::wal::ioctl(
+                    DRIVER_CONTEXT.ifname(),
+                    IOCTL_DISCONNECT,
+                    (&mut request.reason as *mut u16).cast(),
+                )
+            });
+            if status == 0 {
+                DIAG_DEAUTH_COMPLETED.fetch_add(1, Ordering::Relaxed);
+            } else {
+                DIAG_DEAUTH_FAILED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+fn queue_deauthentication(reason: u16) -> c_int {
+    if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
+        return -1;
+    }
+    let queued = critical_section::with(|cs| {
+        DEAUTH_QUEUE
+            .borrow(cs)
+            .borrow_mut()
+            .push(DeauthRequest { reason })
+    });
+    if !queued {
+        DIAG_DEAUTH_DROPPED.fetch_add(1, Ordering::Relaxed);
+        return -1;
+    }
+    DIAG_DEAUTH_QUEUED.fetch_add(1, Ordering::Relaxed);
+    let _ = DEAUTH_WAKE.up();
+    0
 }
 
 fn driver_hooks() -> DriverHooks {
@@ -2876,17 +3007,10 @@ pub(crate) fn diagnostic_word() -> u32 {
 }
 
 unsafe extern "C" fn deauthenticate(driver: *mut c_void, reason: u16) -> c_int {
-    let Some(driver) = driver_context(driver) else {
+    if driver_context(driver).is_none() {
         return -1;
-    };
-    let mut reason = reason;
-    DIAG_DEAUTHENTICATE_IOCTL.call(|| {
-        crate::wal::ioctl(
-            driver.ifname(),
-            IOCTL_DISCONNECT,
-            (&mut reason as *mut u16).cast(),
-        )
-    })
+    }
+    queue_deauthentication(reason)
 }
 
 fn key_request(key: &Key, material: *mut u8, material_len: usize) -> Option<KeyExtension> {
@@ -3060,6 +3184,26 @@ unsafe extern "C" fn wake_runner(_: *mut c_void) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deauthentication_queue_is_bounded_fifo_and_wraps() {
+        let mut queue = DeauthQueue::new();
+        for reason in 1..=DEAUTH_QUEUE_CAPACITY as u16 {
+            assert!(queue.push(DeauthRequest { reason }));
+        }
+        assert!(!queue.push(DeauthRequest { reason: 99 }));
+        assert_eq!(queue.pop().map(|request| request.reason), Some(1));
+        assert_eq!(queue.pop().map(|request| request.reason), Some(2));
+        assert!(queue.push(DeauthRequest { reason: 5 }));
+        assert!(queue.push(DeauthRequest { reason: 6 }));
+        assert_eq!(
+            core::array::from_fn::<_, DEAUTH_QUEUE_CAPACITY, _>(|_| {
+                queue.pop().map(|request| request.reason)
+            }),
+            [Some(3), Some(4), Some(5), Some(6)]
+        );
+        assert!(queue.pop().is_none());
+    }
 
     #[test]
     fn poll_accounting_combines_rust_queue_and_eloop_work() {
