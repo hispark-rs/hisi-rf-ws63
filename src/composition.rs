@@ -280,7 +280,7 @@ pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 pub struct DataPathDiagnostics {
     /// Instrumented stages: bit 0 vendor TX submission, bit 1 vendor RX
     /// boundary, bit 2 MAC RX counters, bit 3 DMAC TX completion, bit 4 DMAC
-    /// RX preparation.
+    /// RX preparation, bit 5 MAC receive-filter state.
     pub instrumented_capabilities: u32,
     /// Frames emitted by smoltcp into the vendor TX sink.
     pub tx_frames: u32,
@@ -305,6 +305,12 @@ pub struct DataPathDiagnostics {
     pub mac_rx_failed_mpdu: u32,
     /// MPDUs rejected by the MAC receive filter.
     pub mac_rx_filtered_mpdu: u32,
+    /// Vendor receive-filter command active when this snapshot was taken.
+    pub mac_rx_filter_command: u32,
+    /// Whether the VAP0 station address matches this L2 device's identity.
+    pub mac_station_address_matches_device: bool,
+    /// Whether the VAP0 BSSID register contains a non-zero address.
+    pub mac_bssid_programmed: bool,
     /// Coexistence WLAN interrupt dispatches.
     pub coex_wlan_irqs: u32,
     /// WLAN PHY interrupt dispatches.
@@ -324,11 +330,14 @@ const DATA_PATH_CAP_DMAC_TX_COMPLETION: u32 = 1 << 3;
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_CAP_DMAC_RX_PREPARE: u32 = 1 << 4;
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
+const DATA_PATH_CAP_MAC_FILTER_STATE: u32 = 1 << 5;
+#[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 const DATA_PATH_DIAG_CAPABILITIES: u32 = DATA_PATH_CAP_VENDOR_TX_SUBMISSION
     | DATA_PATH_CAP_VENDOR_RX_BOUNDARY
     | DATA_PATH_CAP_MAC_RX_COUNTERS
     | DATA_PATH_CAP_DMAC_TX_COMPLETION
-    | DATA_PATH_CAP_DMAC_RX_PREPARE;
+    | DATA_PATH_CAP_DMAC_RX_PREPARE
+    | DATA_PATH_CAP_MAC_FILTER_STATE;
 
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
@@ -376,18 +385,25 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
+            mac_rx_filter_command,
+            mac_station_address_matches_device,
+            mac_bssid_programmed,
         ) = {
             let vendor = crate::eloop_diag::auth();
-            let mac_rx = crate::wlmac_diag::snapshot();
+            let mac = crate::wlmac_diag::snapshot();
+            let station_address = self.station_mac_address();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 vendor.bridge_xmit_calls,
                 vendor.tx_complete_calls,
                 vendor.dmac_rx_calls,
                 vendor.netif_rx_calls,
-                mac_rx.rx_success_mpdu,
-                mac_rx.rx_failed_mpdu,
-                u32::from(mac_rx.rx_filtered_mpdu),
+                mac.rx.rx_success_mpdu,
+                mac.rx.rx_failed_mpdu,
+                u32::from(mac.rx.rx_filtered_mpdu),
+                mac.filter.rx_filter_command,
+                station_address == Some(mac.filter.station_address),
+                mac.filter.bssid != [0; 6],
             )
         };
         #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
@@ -400,17 +416,24 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
+            mac_rx_filter_command,
+            mac_station_address_matches_device,
+            mac_bssid_programmed,
         ) = {
-            let mac_rx = crate::wlmac_diag::snapshot();
+            let mac = crate::wlmac_diag::snapshot();
+            let station_address = self.station_mac_address();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 crate::netif::tx_submitted(),
                 crate::data_path_diag::tx_completions(),
                 crate::data_path_diag::rx_prepares(),
                 crate::netif::rx_received(),
-                mac_rx.rx_success_mpdu,
-                mac_rx.rx_failed_mpdu,
-                u32::from(mac_rx.rx_filtered_mpdu),
+                mac.rx.rx_success_mpdu,
+                mac.rx.rx_failed_mpdu,
+                u32::from(mac.rx.rx_filtered_mpdu),
+                mac.filter.rx_filter_command,
+                station_address == Some(mac.filter.station_address),
+                mac.filter.bssid != [0; 6],
             )
         };
         #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
@@ -423,7 +446,10 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-        ) = (0, 0, 0, 0, 0, 0, 0, 0);
+            mac_rx_filter_command,
+            mac_station_address_matches_device,
+            mac_bssid_programmed,
+        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
@@ -436,6 +462,9 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
+            mac_rx_filter_command,
+            mac_station_address_matches_device,
+            mac_bssid_programmed,
             coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
             wlphy_irqs: crate::osal::irq_dispatch_count(44),
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
@@ -933,12 +962,12 @@ mod tests {
     #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
     #[test]
     fn data_path_diagnostics_claim_all_bounded_boundaries() {
-        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1f);
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x3f);
     }
 
     #[cfg(feature = "rf-eloop-diag")]
     #[test]
     fn full_data_path_diagnostics_claim_every_returned_boundary() {
-        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1f);
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x3f);
     }
 }

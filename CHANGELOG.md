@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.53] - 2026-07-30
+
+### Added
+
+- Extend the opt-in data-path diagnostic snapshot with the active WLMAC receive
+  filter command, a station-address identity match flag, and a BSSID-programmed
+  flag. The snapshot remains read-only and does not expose either address.
+
+### Changed
+
+- Require `hisi-hal 0.7.0-alpha.5` for typed WLMAC filter-state snapshots.
+
 ## [0.1.0-alpha.52] - 2026-07-29
 
 ### Added
