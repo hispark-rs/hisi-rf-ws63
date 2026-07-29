@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.57] - 2026-07-30
+
+### Added
+
+- Add bounded Ethernet protocol diagnostics for ARP request/reply, IPv4, and
+  other frames in both RX and TX directions. Frame classification happens
+  before the short counter update critical section; the TX sink remains
+  outside that section.
+
 ## [0.1.0-alpha.56] - 2026-07-30
 
 ### Added
