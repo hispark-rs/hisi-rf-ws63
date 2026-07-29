@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.59] - 2026-07-30
+
+### Fixed
+
+- Reserve an explicit 16 KiB scheduler-object headroom in the caller-owned
+  runtime arena. The first split-arena HIL exhausted the stack-only arena while
+  creating runtime semaphore and mutex objects, even though the RF arena still
+  had ample capacity.
+
+### Changed
+
+- Advance the resource report to `hisi-rf-resource-report/v8`, naming the
+  scheduler arena and its object headroom separately. The total 296 KiB NOLOAD
+  envelope remains unchanged.
+
 ## [0.1.0-alpha.58] - 2026-07-30
 
 ### Changed

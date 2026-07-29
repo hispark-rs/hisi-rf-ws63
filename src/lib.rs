@@ -549,6 +549,8 @@ pub use composition::{
 ))]
 pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
 pub use hisi_rf_core::WifiL2Capabilities;
+#[allow(deprecated)]
+pub use profile::SELECTED_TASK_STACK_ARENA_BYTES;
 #[cfg(all(
     feature = "net",
     any(feature = "wpa2-personal", feature = "wpa3-personal")
@@ -561,7 +563,7 @@ pub use profile::SelectedProfile;
 pub use profile::{
     ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
     RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_RF_ARENA_BYTES,
-    SELECTED_TASK_STACK_ARENA_BYTES, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp, resource_report,
+    SELECTED_RUNTIME_ARENA_BYTES, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp, resource_report,
 };
 
 /// Declare all caller-owned storage for the selected named radio profile.

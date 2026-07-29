@@ -63,11 +63,11 @@ observed in the pinned payload. Applications consume the controller with
 the runtime-driver spawn API themselves.
 
 `RadioStorage::report()` exposes deterministic
-`hisi-rf-resource-report/v7` metadata. The report separates ordinary control
+`hisi-rf-resource-report/v8` metadata. The report separates ordinary control
 BSS, the composition handle, the RF/supplicant arena, bounded event capacity,
-the 4,384-byte caller-owned crypto DMA scratch, task-stack payload and allocator
-arena bytes, and the 48 KiB linker-owned packet RAM. Final-image bytes remain a
-packaging concern.
+the 4,384-byte caller-owned crypto DMA scratch, task-stack payload, explicit
+RTOS-object headroom and scheduler arena bytes, and the 48 KiB linker-owned
+packet RAM. Final-image bytes remain a packaging concern.
 
 Backend failures use the chip-neutral `hisi-rf-error/v3` schema. The WS63
 adapter supplies the selected profile revision, protocol stage, raw IEEE or
