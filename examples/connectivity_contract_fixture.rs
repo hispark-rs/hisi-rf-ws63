@@ -40,10 +40,13 @@ fn main() -> ! {
         b"RF5C_LOCAL_DATA_PATH_OK arp_reply=0x00000001 \
 arp_request=0x00000001 gateway=192.0.2.1\r\n",
     );
-    uart.write(b"RF5C_PUBLIC_DNS_BEGIN target=223.5.5.5 attempts=0x00000003\r\n");
+    uart.write(
+        b"RF5C_PUBLIC_DNS_BEGIN primary=223.5.5.5 secondary=180.76.76.76 \
+attempts=0x00000004\r\n",
+    );
     uart.write(
         b"RF5C_PUBLIC_DNS_SAMPLE attempt=0x00000001 txid=0x00005754 \
-status=ok answers=0x00000001\r\n",
+target=223.5.5.5 status=ok answers=0x00000001\r\n",
     );
     uart.write(
         b"RF5C_PUBLIC_DNS_OK target=223.5.5.5 attempts=0x00000001 \
