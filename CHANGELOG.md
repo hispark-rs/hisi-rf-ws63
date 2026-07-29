@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.52] - 2026-07-29
+
+### Added
+
+- Added the opt-in `station-pm-diag` A/B helper. It disables station power save
+  only after the caller has established the sole STA VAP, reports typed vendor
+  failures, and remains hidden from normal radio profiles.
+
 ## [0.1.0-alpha.51] - 2026-07-29
 
 ### Fixed

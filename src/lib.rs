@@ -184,6 +184,9 @@ mod pmp;
 #[cfg(feature = "rf-init-diag")]
 #[doc(hidden)]
 pub mod rf_init_diag;
+#[cfg(feature = "station-pm-diag")]
+#[doc(hidden)]
+mod station_pm_diag;
 pub mod timer;
 pub mod uapi;
 #[cfg(feature = "upstream-supplicant-port")]
@@ -416,6 +419,12 @@ pub use hisi_alloc::HeapMetrics as RfHeapMetrics;
 pub fn rf_heap_metrics() -> RfHeapMetrics {
     alloc::heap_metrics()
 }
+
+#[cfg(feature = "station-pm-diag")]
+#[doc(hidden)]
+pub use station_pm_diag::{
+    StationPowerSaveDiagnosticError, disable_station_power_save_for_diagnostics,
+};
 
 /// Dynamic worker count required by the public composition root: one bounded
 /// radio runner, one asynchronous WAL control worker, and five workers observed
