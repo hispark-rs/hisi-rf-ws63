@@ -307,8 +307,11 @@ pub struct DataPathDiagnostics {
     pub wlmac_irqs: u32,
 }
 
+#[cfg(feature = "data-path-diag")]
 const DATA_PATH_CAP_VENDOR_TX_SUBMISSION: u32 = 1 << 0;
+#[cfg(feature = "data-path-diag")]
 const DATA_PATH_CAP_VENDOR_RX_BOUNDARY: u32 = 1 << 1;
+#[cfg(feature = "data-path-diag")]
 const DATA_PATH_DIAG_CAPABILITIES: u32 =
     DATA_PATH_CAP_VENDOR_TX_SUBMISSION | DATA_PATH_CAP_VENDOR_RX_BOUNDARY;
 
