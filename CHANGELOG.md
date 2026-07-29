@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.46] - 2026-07-29
+
+### Added
+
+- Added `resource_report::<Profile, EVENTS>()` as the storage-independent
+  compile-time resource metadata entry used by the public facade's unified
+  diagnostic snapshot. It does not construct, claim, or borrow radio storage.
+
 ## [0.1.0-alpha.45] - 2026-07-29
 
 ### Changed

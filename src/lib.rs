@@ -492,7 +492,7 @@ pub use profile::SelectedProfile;
 pub use profile::{
     ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
     RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_RF_ARENA_BYTES, Storage,
-    WifiWpa2Smoltcp, WifiWpa3Smoltcp,
+    WifiWpa2Smoltcp, WifiWpa3Smoltcp, resource_report,
 };
 
 /// Declare all caller-owned storage for the selected named radio profile.

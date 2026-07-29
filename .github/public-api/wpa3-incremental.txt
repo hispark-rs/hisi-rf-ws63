@@ -519,6 +519,7 @@ pub fn hisi_rf_ws63::init<P: hisi_rf_ws63::Profile + ActiveProfile + 'static, co
 pub fn hisi_rf_ws63::init_incremental<P: hisi_rf_ws63::Profile + ActiveProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
 pub fn hisi_rf_ws63::init_incremental_after_blocking_bootstrap<P: hisi_rf_ws63::Profile + ActiveProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
 pub unsafe fn hisi_rf_ws63::prepare_vendor_memory()
+pub const fn hisi_rf_ws63::resource_report<P: hisi_rf_ws63::Profile, const EVENTS: usize>() -> hisi_rf_ws63::ResourceReport
 pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics
 pub fn hisi_rf_ws63::set_log_sink(hisi_rf_ws63::LogSink)
 pub fn hisi_rf_ws63::upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2]

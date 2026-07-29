@@ -549,6 +549,14 @@ const fn align_up(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 
+/// Return the deterministic report for one explicit profile and event capacity.
+///
+/// This reads compile-time profile metadata only; it does not construct, claim,
+/// or borrow radio storage.
+pub const fn resource_report<P: Profile, const EVENTS: usize>() -> ResourceReport {
+    ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES)
+}
+
 #[cfg(target_pointer_width = "32")]
 const _: () = {
     assert!(
