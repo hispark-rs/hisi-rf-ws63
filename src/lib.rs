@@ -194,6 +194,7 @@ mod upstream_supplicant;
 pub use blocking_diagnostics::{
     AssociationIoctlMetrics, AssociationTimingDiagnostics, BlockingBackendMetrics,
     BlockingBootstrapMetrics, BlockingOperationMetrics, BootstrapStage, BootstrapStageMetrics,
+    FrwSyncPostMetrics,
 };
 
 /// Return a secret-free snapshot of the current blocking backend workload.

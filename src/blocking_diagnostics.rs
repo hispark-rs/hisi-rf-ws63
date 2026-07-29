@@ -173,6 +173,30 @@ pub struct BlockingBackendMetrics {
     pub internal_sleep_calls: u32,
     /// Native supplicant poll calls made by all blocking operations.
     pub supplicant_poll_calls: u32,
+    /// Synchronous host-to-HMAC vendor message calls.
+    pub frw_sync_post: FrwSyncPostMetrics,
+}
+
+/// Counter-only timing evidence for synchronous host-to-HMAC vendor messages.
+///
+/// Message identifiers and return codes are public vendor ABI values. The
+/// snapshot contains no frame, network configuration, or key material.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrwSyncPostMetrics {
+    /// Calls forwarded to the vendor implementation.
+    pub calls: u32,
+    /// Message identifier of the most recent call.
+    pub last_msg_id: u32,
+    /// Timeout requested by the most recent call.
+    pub last_timeout_ms: u32,
+    /// Duration of the most recent measured call.
+    pub last_elapsed_ms: u32,
+    /// Return value of the most recent call, preserving its raw bit pattern.
+    pub last_result: u32,
+    /// Message identifier associated with the longest measured call.
+    pub max_msg_id: u32,
+    /// Longest measured call duration.
+    pub max_elapsed_ms: u32,
 }
 
 pub(crate) enum Operation {
@@ -235,6 +259,62 @@ static BOOTSTRAP_STAGES: [BootstrapStageMetric; BootstrapStage::COUNT] =
     [const { BootstrapStageMetric::new() }; BootstrapStage::COUNT];
 static INTERNAL_SLEEP_CALLS: AtomicU32 = AtomicU32::new(0);
 static SUPPLICANT_POLL_CALLS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_CALLS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_MSG_ID: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_TIMEOUT_MS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_RESULT: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_MAX_MSG_ID: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_MAX_ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(any(target_arch = "riscv32", test))]
+fn record_frw_sync_post(msg_id: u16, timeout_ms: u16, elapsed_ms: Option<u64>, result: i32) {
+    critical_section::with(|_| {
+        saturating_increment(&FRW_SYNC_POST_CALLS);
+        FRW_SYNC_POST_LAST_MSG_ID.store(u32::from(msg_id), Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_TIMEOUT_MS.store(u32::from(timeout_ms), Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_RESULT.store(result as u32, Ordering::Relaxed);
+
+        if let Some(elapsed_ms) = elapsed_ms {
+            let elapsed_ms = u32::try_from(elapsed_ms).unwrap_or(u32::MAX);
+            FRW_SYNC_POST_LAST_ELAPSED_MS.store(elapsed_ms, Ordering::Relaxed);
+            if elapsed_ms > FRW_SYNC_POST_MAX_ELAPSED_MS.load(Ordering::Relaxed) {
+                FRW_SYNC_POST_MAX_MSG_ID.store(u32::from(msg_id), Ordering::Relaxed);
+                FRW_SYNC_POST_MAX_ELAPSED_MS.store(elapsed_ms, Ordering::Relaxed);
+            }
+        }
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" {
+    fn __real_frw_sync_host_post_msg(
+        msg_id: u16,
+        vap_id: u8,
+        timeout_ms: u16,
+        msg: *mut core::ffi::c_void,
+    ) -> i32;
+}
+
+/// Observe one synchronous vendor message without changing its ABI or result.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __wrap_frw_sync_host_post_msg(
+    msg_id: u16,
+    vap_id: u8,
+    timeout_ms: u16,
+    msg: *mut core::ffi::c_void,
+) -> i32 {
+    let started_at_ms = crate::uapi::try_monotonic_ms();
+    // SAFETY: GNU-compatible linker wrapping resolves this declaration to the
+    // original vendor function with the exact same ABI.
+    let result = unsafe { __real_frw_sync_host_post_msg(msg_id, vap_id, timeout_ms, msg) };
+    let elapsed_ms = started_at_ms
+        .zip(crate::uapi::try_monotonic_ms())
+        .map(|(started_at_ms, finished_at_ms)| finished_at_ms.wrapping_sub(started_at_ms));
+    record_frw_sync_post(msg_id, timeout_ms, elapsed_ms, result);
+    result
+}
 
 struct BootstrapStageMetric {
     calls: AtomicU32,
@@ -456,6 +536,15 @@ pub(crate) fn snapshot() -> BlockingBackendMetrics {
         poll: POLL.snapshot(),
         internal_sleep_calls: INTERNAL_SLEEP_CALLS.load(Ordering::Relaxed),
         supplicant_poll_calls: SUPPLICANT_POLL_CALLS.load(Ordering::Relaxed),
+        frw_sync_post: FrwSyncPostMetrics {
+            calls: FRW_SYNC_POST_CALLS.load(Ordering::Relaxed),
+            last_msg_id: FRW_SYNC_POST_LAST_MSG_ID.load(Ordering::Relaxed),
+            last_timeout_ms: FRW_SYNC_POST_LAST_TIMEOUT_MS.load(Ordering::Relaxed),
+            last_elapsed_ms: FRW_SYNC_POST_LAST_ELAPSED_MS.load(Ordering::Relaxed),
+            last_result: FRW_SYNC_POST_LAST_RESULT.load(Ordering::Relaxed),
+            max_msg_id: FRW_SYNC_POST_MAX_MSG_ID.load(Ordering::Relaxed),
+            max_elapsed_ms: FRW_SYNC_POST_MAX_ELAPSED_MS.load(Ordering::Relaxed),
+        },
     }
 }
 
@@ -487,6 +576,13 @@ mod tests {
         }
         INTERNAL_SLEEP_CALLS.store(0, Ordering::Relaxed);
         SUPPLICANT_POLL_CALLS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_CALLS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_MSG_ID.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_TIMEOUT_MS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_ELAPSED_MS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_RESULT.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_MAX_MSG_ID.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_MAX_ELAPSED_MS.store(0, Ordering::Relaxed);
     }
 
     #[test]
@@ -518,6 +614,29 @@ mod tests {
                 internal_sleep_calls: 2,
                 supplicant_poll_calls: 1,
                 ..BlockingBackendMetrics::default()
+            }
+        );
+    }
+
+    #[test]
+    fn frw_sync_post_tracks_last_and_slowest_message() {
+        let _guard = lock_metrics();
+        reset();
+
+        record_frw_sync_post(0x1234, 4000, Some(9), -1);
+        record_frw_sync_post(0x5678, 100, Some(3), 0);
+        record_frw_sync_post(0x9abc, 200, None, 7);
+
+        assert_eq!(
+            snapshot().frw_sync_post,
+            FrwSyncPostMetrics {
+                calls: 3,
+                last_msg_id: 0x9abc,
+                last_timeout_ms: 200,
+                last_elapsed_ms: 3,
+                last_result: 7,
+                max_msg_id: 0x1234,
+                max_elapsed_ms: 9,
             }
         );
     }
