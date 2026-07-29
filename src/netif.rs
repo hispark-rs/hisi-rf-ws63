@@ -330,7 +330,7 @@ pub(crate) fn vendor_tx_sink(frame: &[u8]) {
 }
 
 /// MAC address installed on the sole vendor station netif.
-pub fn hardware_address() -> Option<[u8; 6]> {
+pub(crate) fn hardware_address() -> Option<[u8; 6]> {
     diagnostics().and_then(|snapshot| {
         (snapshot.hardware_address_len == 6).then_some(snapshot.hardware_address)
     })

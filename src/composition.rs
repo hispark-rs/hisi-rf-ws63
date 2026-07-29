@@ -275,6 +275,16 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
 pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 
 impl WifiDevice {
+    /// Snapshot immutable L2 identity owned by this initialized radio instance.
+    pub fn l2_capabilities(&self) -> Option<hisi_rf_core::WifiL2Capabilities> {
+        self.0.l2_capabilities()
+    }
+
+    /// Return this initialized radio instance's station MAC address.
+    pub fn station_mac_address(&self) -> Option<[u8; 6]> {
+        self.0.station_mac_address()
+    }
+
     /// Snapshot bounded L2 receive-queue occupancy and loss counters.
     ///
     /// The snapshot contains counters only; it never exposes received frame
@@ -617,15 +627,6 @@ fn release_profile_reservation(
     reservation: &'static hisi_rf_rtos_driver::TaskReservation,
 ) -> Result<(), InitError> {
     hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::runtime)
-}
-
-/// Return the station MAC address installed by the initialized WS63 netif.
-///
-/// The address becomes available after [`hisi_rf_core::WifiController::initialize`]
-/// completes. Applications use it to configure a standard L2/IP stack without
-/// reaching into the vendor netif or chip backend internals.
-pub fn station_mac_address() -> Option<[u8; 6]> {
-    crate::netif::hardware_address()
 }
 
 extern "C" fn radio_runner_task<const EVENTS: usize>(argument: *mut c_void) -> *mut c_void {

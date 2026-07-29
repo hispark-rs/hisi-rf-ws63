@@ -462,7 +462,7 @@ mod profile;
 pub use composition::{
     CryptoReady, DhcpDiagnostics, InitError, InitErrorKind, MissingCrypto, MissingPke,
     PkeNotRequired, PkeReady, RadioController, Resources, ResourcesBuilder, RxQueueDiagnostics,
-    WifiDevice, WifiParts, WifiRxToken, WifiTxToken, init, station_mac_address,
+    WifiDevice, WifiParts, WifiRxToken, WifiTxToken, init,
 };
 #[cfg(all(
     feature = "net",
@@ -479,6 +479,7 @@ pub use composition::{
     feature = "upstream-supplicant-port"
 ))]
 pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
+pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",
     any(feature = "wpa2-personal", feature = "wpa3-personal")

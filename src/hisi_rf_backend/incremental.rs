@@ -600,6 +600,10 @@ impl IncrementalWifiBackend for OwnedIncrementalSupplicantBackend {
     fn next_deadline_us(&self, id: OperationId) -> Option<u64> {
         self.inner.next_deadline_us(id)
     }
+
+    fn l2_capabilities(&self) -> Option<hisi_rf_core::WifiL2Capabilities> {
+        crate::netif::hardware_address().and_then(hisi_rf_core::WifiL2Capabilities::try_new)
+    }
 }
 
 impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend

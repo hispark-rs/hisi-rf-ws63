@@ -1,5 +1,6 @@
 pub mod hisi_rf_ws63
 pub use hisi_rf_ws63::RfHeapMetrics
+pub use hisi_rf_ws63::WifiL2Capabilities
 pub mod hisi_rf_ws63::alloc
 #[no_mangle] pub c fn hisi_rf_ws63::alloc::osal_kfree(*mut core::ffi::c_void)
 #[no_mangle] pub c fn hisi_rf_ws63::alloc::osal_kmalloc(usize) -> *mut core::ffi::c_void
@@ -69,7 +70,6 @@ pub hisi_rf_ws63::netif::NetifDiagnostics::hardware_address: [u8; 6]
 pub hisi_rf_ws63::netif::NetifDiagnostics::hardware_address_len: u8
 pub fn hisi_rf_ws63::netif::diagnostics() -> core::option::Option<hisi_rf_ws63::netif::NetifDiagnostics>
 #[no_mangle] pub c fn hisi_rf_ws63::netif::driverif_input(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
-pub fn hisi_rf_ws63::netif::hardware_address() -> core::option::Option<[u8; 6]>
 #[no_mangle] pub c fn hisi_rf_ws63::netif::netif_set_link_down_interface(*mut core::ffi::c_void)
 #[no_mangle] pub c fn hisi_rf_ws63::netif::netif_set_link_up_interface(*mut core::ffi::c_void)
 #[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_add(*mut core::ffi::c_void, *const u32, *const u32, *const u32) -> core::ffi::primitives::c_int
@@ -469,8 +469,10 @@ pub fn hisi_rf_ws63::Storage<P, EVENTS>::default() -> Self
 pub struct hisi_rf_ws63::WifiDevice(_)
 impl hisi_rf_ws63::WifiDevice
 pub fn hisi_rf_ws63::WifiDevice::dhcp_diagnostics(&self) -> DhcpDiagnostics
+pub fn hisi_rf_ws63::WifiDevice::l2_capabilities(&self) -> core::option::Option<hisi_rf_core::wifi::WifiL2Capabilities>
 pub fn hisi_rf_ws63::WifiDevice::reset_rx_queue_diagnostics(&self)
 pub fn hisi_rf_ws63::WifiDevice::rx_queue_diagnostics(&self) -> RxQueueDiagnostics
+pub fn hisi_rf_ws63::WifiDevice::station_mac_address(&self) -> core::option::Option<[u8; 6]>
 impl smoltcp::phy::Device for hisi_rf_ws63::WifiDevice
 pub type hisi_rf_ws63::WifiDevice::RxToken<'a> = hisi_rf_ws63::WifiRxToken
 pub type hisi_rf_ws63::WifiDevice::TxToken<'a> = hisi_rf_ws63::WifiTxToken
@@ -519,7 +521,6 @@ pub fn hisi_rf_ws63::init_incremental_after_blocking_bootstrap<P: hisi_rf_ws63::
 pub unsafe fn hisi_rf_ws63::prepare_vendor_memory()
 pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics
 pub fn hisi_rf_ws63::set_log_sink(hisi_rf_ws63::LogSink)
-pub fn hisi_rf_ws63::station_mac_address() -> core::option::Option<[u8; 6]>
 pub fn hisi_rf_ws63::upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2]
 pub type hisi_rf_ws63::LogSink = fn(&[u8])
 pub type hisi_rf_ws63::SelectedProfile = hisi_rf_ws63::WifiWpa3Smoltcp

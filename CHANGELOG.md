@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.45] - 2026-07-29
+
+### Changed
+
+- Adopted `hisi-rf-core 0.1.0-alpha.18` and publish the validated WS63 station
+  MAC into the owning radio instance after successful initialization.
+- Moved ordinary station MAC access to `WifiDevice`; the composition root no
+  longer exports a process-global accessor, and the raw netif accessor is now
+  crate-private.
+- Updated the RV32 resource report and compile-time layout assertions for the
+  instance-owned L2 capability snapshot, including 32-byte storage alignment.
+
 ## [0.1.0-alpha.44] - 2026-07-29
 
 ### Changed

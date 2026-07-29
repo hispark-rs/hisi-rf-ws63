@@ -15,13 +15,13 @@ use static_cell::StaticCell;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v6";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-26";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
-const WS63_CONTROL_STORAGE_BASE_BYTES: usize = 0x2000;
-const WS63_EVENT_SLOT_BYTES: usize = 48;
-const WS63_RADIO_STATE_BASE_BYTES: usize = 0x704;
+const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361;
+const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708;
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
@@ -458,9 +458,11 @@ pub struct ResourceReport {
 
 impl ResourceReport {
     const fn for_profile<P: Profile, const EVENTS: usize>(arena_bytes: usize) -> Self {
-        let control_storage_bytes =
-            WS63_CONTROL_STORAGE_BASE_BYTES + EVENTS * WS63_EVENT_SLOT_BYTES;
         let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
+        let control_storage_bytes = align_up(
+            WS63_CONTROL_STORAGE_FIXED_BYTES + radio_state_bytes,
+            WS63_CONTROL_STORAGE_ALIGNMENT,
+        );
         let arena_storage_bytes = align_up(arena_bytes + 1, 64);
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
@@ -551,11 +553,21 @@ const fn align_up(value: usize, alignment: usize) -> usize {
 const _: () = {
     assert!(
         core::mem::size_of::<Storage<WifiWpa2Smoltcp, 4>>()
-            == WS63_CONTROL_STORAGE_BASE_BYTES + 4 * WS63_EVENT_SLOT_BYTES
+            == align_up(
+                WS63_CONTROL_STORAGE_FIXED_BYTES
+                    + WS63_RADIO_STATE_BASE_BYTES
+                    + 4 * WS63_RADIO_EVENT_SLOT_BYTES,
+                WS63_CONTROL_STORAGE_ALIGNMENT,
+            )
     );
     assert!(
         core::mem::size_of::<Storage<WifiWpa2Smoltcp, 8>>()
-            == WS63_CONTROL_STORAGE_BASE_BYTES + 8 * WS63_EVENT_SLOT_BYTES
+            == align_up(
+                WS63_CONTROL_STORAGE_FIXED_BYTES
+                    + WS63_RADIO_STATE_BASE_BYTES
+                    + 8 * WS63_RADIO_EVENT_SLOT_BYTES,
+                WS63_CONTROL_STORAGE_ALIGNMENT,
+            )
     );
     assert!(
         core::mem::size_of::<RadioState<4>>()

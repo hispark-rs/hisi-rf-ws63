@@ -5,6 +5,7 @@ use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, ConnectionInfo, DiagnosticStage, DiagnosticTraceKind,
     ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig, WifiBackend,
+    WifiL2Capabilities,
 };
 
 #[cfg(all(
@@ -467,6 +468,10 @@ impl WifiBackend for Ws63WifiBackend<'static> {
                 .disconnect(config.disconnect_timeout.as_millis())
                 .map_err(map_error)
         }
+    }
+
+    fn l2_capabilities(&self) -> Option<WifiL2Capabilities> {
+        crate::netif::hardware_address().and_then(WifiL2Capabilities::try_new)
     }
 
     fn poll(&mut self) -> Result<bool, BackendError> {
