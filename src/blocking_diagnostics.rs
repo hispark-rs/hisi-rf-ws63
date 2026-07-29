@@ -197,6 +197,12 @@ pub struct FrwSyncPostMetrics {
     pub max_msg_id: u32,
     /// Longest measured call duration.
     pub max_elapsed_ms: u32,
+    /// Wait-object blocks observed during the most recent call.
+    pub last_wait_blocks: u32,
+    /// Wait-object wakeups observed during the most recent call.
+    pub last_wait_wakeups: u32,
+    /// Satisfied predicate checks observed during the most recent call.
+    pub last_wait_ready_checks: u32,
 }
 
 pub(crate) enum Operation {
@@ -266,14 +272,26 @@ static FRW_SYNC_POST_LAST_ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
 static FRW_SYNC_POST_LAST_RESULT: AtomicU32 = AtomicU32::new(0);
 static FRW_SYNC_POST_MAX_MSG_ID: AtomicU32 = AtomicU32::new(0);
 static FRW_SYNC_POST_MAX_ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_WAIT_BLOCKS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_WAIT_WAKEUPS: AtomicU32 = AtomicU32::new(0);
+static FRW_SYNC_POST_LAST_WAIT_READY_CHECKS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(any(target_arch = "riscv32", test))]
-fn record_frw_sync_post(msg_id: u16, timeout_ms: u16, elapsed_ms: Option<u64>, result: i32) {
+fn record_frw_sync_post(
+    msg_id: u16,
+    timeout_ms: u16,
+    elapsed_ms: Option<u64>,
+    result: i32,
+    wait_activity: crate::osal_wait::WaitActivity,
+) {
     critical_section::with(|_| {
         saturating_increment(&FRW_SYNC_POST_CALLS);
         FRW_SYNC_POST_LAST_MSG_ID.store(u32::from(msg_id), Ordering::Relaxed);
         FRW_SYNC_POST_LAST_TIMEOUT_MS.store(u32::from(timeout_ms), Ordering::Relaxed);
         FRW_SYNC_POST_LAST_RESULT.store(result as u32, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_BLOCKS.store(wait_activity.blocks, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_WAKEUPS.store(wait_activity.wakeups, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_READY_CHECKS.store(wait_activity.ready_checks, Ordering::Relaxed);
 
         if let Some(elapsed_ms) = elapsed_ms {
             let elapsed_ms = u32::try_from(elapsed_ms).unwrap_or(u32::MAX);
@@ -306,13 +324,27 @@ pub unsafe extern "C" fn __wrap_frw_sync_host_post_msg(
     msg: *mut core::ffi::c_void,
 ) -> i32 {
     let started_at_ms = crate::uapi::try_monotonic_ms();
+    let waits_before = crate::osal_wait::wait_activity();
     // SAFETY: GNU-compatible linker wrapping resolves this declaration to the
     // original vendor function with the exact same ABI.
     let result = unsafe { __real_frw_sync_host_post_msg(msg_id, vap_id, timeout_ms, msg) };
     let elapsed_ms = started_at_ms
         .zip(crate::uapi::try_monotonic_ms())
         .map(|(started_at_ms, finished_at_ms)| finished_at_ms.wrapping_sub(started_at_ms));
-    record_frw_sync_post(msg_id, timeout_ms, elapsed_ms, result);
+    let waits_after = crate::osal_wait::wait_activity();
+    record_frw_sync_post(
+        msg_id,
+        timeout_ms,
+        elapsed_ms,
+        result,
+        crate::osal_wait::WaitActivity {
+            blocks: waits_after.blocks.saturating_sub(waits_before.blocks),
+            wakeups: waits_after.wakeups.saturating_sub(waits_before.wakeups),
+            ready_checks: waits_after
+                .ready_checks
+                .saturating_sub(waits_before.ready_checks),
+        },
+    );
     result
 }
 
@@ -544,6 +576,9 @@ pub(crate) fn snapshot() -> BlockingBackendMetrics {
             last_result: FRW_SYNC_POST_LAST_RESULT.load(Ordering::Relaxed),
             max_msg_id: FRW_SYNC_POST_MAX_MSG_ID.load(Ordering::Relaxed),
             max_elapsed_ms: FRW_SYNC_POST_MAX_ELAPSED_MS.load(Ordering::Relaxed),
+            last_wait_blocks: FRW_SYNC_POST_LAST_WAIT_BLOCKS.load(Ordering::Relaxed),
+            last_wait_wakeups: FRW_SYNC_POST_LAST_WAIT_WAKEUPS.load(Ordering::Relaxed),
+            last_wait_ready_checks: FRW_SYNC_POST_LAST_WAIT_READY_CHECKS.load(Ordering::Relaxed),
         },
     }
 }
@@ -583,6 +618,9 @@ mod tests {
         FRW_SYNC_POST_LAST_RESULT.store(0, Ordering::Relaxed);
         FRW_SYNC_POST_MAX_MSG_ID.store(0, Ordering::Relaxed);
         FRW_SYNC_POST_MAX_ELAPSED_MS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_BLOCKS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_WAKEUPS.store(0, Ordering::Relaxed);
+        FRW_SYNC_POST_LAST_WAIT_READY_CHECKS.store(0, Ordering::Relaxed);
     }
 
     #[test]
@@ -623,9 +661,35 @@ mod tests {
         let _guard = lock_metrics();
         reset();
 
-        record_frw_sync_post(0x1234, 4000, Some(9), -1);
-        record_frw_sync_post(0x5678, 100, Some(3), 0);
-        record_frw_sync_post(0x9abc, 200, None, 7);
+        record_frw_sync_post(
+            0x1234,
+            4000,
+            Some(9),
+            -1,
+            crate::osal_wait::WaitActivity {
+                blocks: 2,
+                wakeups: 1,
+                ready_checks: 1,
+            },
+        );
+        record_frw_sync_post(
+            0x5678,
+            100,
+            Some(3),
+            0,
+            crate::osal_wait::WaitActivity {
+                blocks: 1,
+                wakeups: 1,
+                ready_checks: 1,
+            },
+        );
+        record_frw_sync_post(
+            0x9abc,
+            200,
+            None,
+            7,
+            crate::osal_wait::WaitActivity::default(),
+        );
 
         assert_eq!(
             snapshot().frw_sync_post,
@@ -637,6 +701,9 @@ mod tests {
                 last_result: 7,
                 max_msg_id: 0x1234,
                 max_elapsed_ms: 9,
+                last_wait_blocks: 0,
+                last_wait_wakeups: 0,
+                last_wait_ready_checks: 0,
             }
         );
     }

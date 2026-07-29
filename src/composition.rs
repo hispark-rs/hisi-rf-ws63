@@ -274,6 +274,24 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
 /// WS63 L2 device exposed only through the standard smoltcp device contract.
 pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 
+/// Secret-free counters spanning the Rust L2 bridge and vendor IRQ boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct DataPathDiagnostics {
+    /// Frames emitted by smoltcp into the vendor TX sink.
+    pub tx_frames: u32,
+    /// Frames rejected before the vendor TX callback could accept them.
+    pub tx_failed: u32,
+    /// Valid Ethernet frames delivered by the vendor RX callback.
+    pub rx_frames: u32,
+    /// Coexistence WLAN interrupt dispatches.
+    pub coex_wlan_irqs: u32,
+    /// WLAN PHY interrupt dispatches.
+    pub wlphy_irqs: u32,
+    /// WLAN MAC interrupt dispatches.
+    pub wlmac_irqs: u32,
+}
+
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
     pub fn l2_capabilities(&self) -> Option<hisi_rf_core::WifiL2Capabilities> {
@@ -305,6 +323,19 @@ impl WifiDevice {
     /// Snapshot DHCP client/server packets crossing the Rust-visible L2 seam.
     pub fn dhcp_diagnostics(&self) -> DhcpDiagnostics {
         crate::netif_smoltcp::dhcp_diagnostics()
+    }
+
+    /// Snapshot aggregate data-path and radio-interrupt counters.
+    #[doc(hidden)]
+    pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
+        DataPathDiagnostics {
+            tx_frames: crate::netif_smoltcp::tx_count(),
+            tx_failed: crate::netif::tx_failed(),
+            rx_frames: crate::netif::rx_received(),
+            coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
+            wlphy_irqs: crate::osal::irq_dispatch_count(44),
+            wlmac_irqs: crate::osal::irq_dispatch_count(45),
+        }
     }
 }
 

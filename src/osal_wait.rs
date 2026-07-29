@@ -59,6 +59,28 @@ impl WaitDiagnostic {
 static WAIT_DIAGNOSTICS: Mutex<RefCell<[WaitDiagnostic; WAIT_DIAGNOSTIC_SLOTS]>> =
     Mutex::new(RefCell::new([WaitDiagnostic::EMPTY; WAIT_DIAGNOSTIC_SLOTS]));
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WaitActivity {
+    pub blocks: u32,
+    pub wakeups: u32,
+    pub ready_checks: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn wait_activity() -> WaitActivity {
+    critical_section::with(|cs| {
+        WAIT_DIAGNOSTICS
+            .borrow_ref(cs)
+            .iter()
+            .fold(WaitActivity::default(), |mut total, slot| {
+                total.blocks = total.blocks.saturating_add(slot.blocks);
+                total.wakeups = total.wakeups.saturating_add(slot.wakeups);
+                total.ready_checks = total.ready_checks.saturating_add(slot.ready_checks);
+                total
+            })
+    })
+}
+
 macro_rules! caller_address {
     () => {{
         #[cfg(target_arch = "riscv32")]
