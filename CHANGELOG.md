@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Extended the secret-free data-path snapshot with vendor bridge TX, DMAC TX
+  completion, final vendor RX, and MAC receive-engine counters. These counters
+  distinguish Rust queue progress from vendor, hardware, and IRQ stalls without
+  changing packet handling.
+
 ### Fixed
 
 - Moved upstream-hostap deauthentication requests from the bounded

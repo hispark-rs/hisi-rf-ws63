@@ -485,12 +485,17 @@ pub fn mac_filter(vap_id: usize) -> Option<MacFilterDiagnostic> {
 }
 
 #[cfg(target_arch = "riscv32")]
-fn mac_rx_statistics() -> MacRxStatistics {
+pub(crate) fn mac_rx_statistics() -> MacRxStatistics {
     let mut statistics = MacRxStatistics::default();
     // SAFETY: the ROM helper writes exactly the six u32 fields declared by
     // `hal_mac_rx_mpdu_statis_info_stru` and only reads MAC counter registers.
     unsafe { hh503_get_mac_rx_statistics_data(&mut statistics) };
     statistics
+}
+
+#[cfg(not(target_arch = "riscv32"))]
+pub(crate) fn mac_rx_statistics() -> MacRxStatistics {
+    MacRxStatistics::default()
 }
 
 #[cfg(target_arch = "riscv32")]

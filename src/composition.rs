@@ -282,8 +282,20 @@ pub struct DataPathDiagnostics {
     pub tx_frames: u32,
     /// Frames rejected before the vendor TX callback could accept them.
     pub tx_failed: u32,
+    /// Frames converted by the vendor host bridge for MAC transmission.
+    pub vendor_tx_frames: u32,
+    /// DMAC transmit completions observed after vendor submission.
+    pub tx_completions: u32,
+    /// Frames reaching the final vendor host-RX boundary.
+    pub vendor_rx_frames: u32,
     /// Valid Ethernet frames delivered by the vendor RX callback.
     pub rx_frames: u32,
+    /// Successful MPDUs counted by the MAC receive engine.
+    pub mac_rx_successful_mpdu: u32,
+    /// Failed MPDUs counted by the MAC receive engine.
+    pub mac_rx_failed_mpdu: u32,
+    /// MPDUs rejected by the MAC receive filter.
+    pub mac_rx_filtered_mpdu: u32,
     /// Coexistence WLAN interrupt dispatches.
     pub coex_wlan_irqs: u32,
     /// WLAN PHY interrupt dispatches.
@@ -328,10 +340,37 @@ impl WifiDevice {
     /// Snapshot aggregate data-path and radio-interrupt counters.
     #[doc(hidden)]
     pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
+        #[cfg(feature = "rf-eloop-diag")]
+        let (vendor_tx_frames, tx_completions, vendor_rx_frames, mac_rx) = {
+            let vendor = crate::eloop_diag::auth();
+            (
+                vendor.bridge_xmit_calls,
+                vendor.tx_complete_calls,
+                vendor.netif_rx_calls,
+                crate::eloop_diag::mac_rx_statistics(),
+            )
+        };
+        #[cfg(not(feature = "rf-eloop-diag"))]
+        let (vendor_tx_frames, tx_completions, vendor_rx_frames, mac_rx) = (0, 0, 0, (0, 0, 0));
         DataPathDiagnostics {
             tx_frames: crate::netif_smoltcp::tx_count(),
             tx_failed: crate::netif::tx_failed(),
+            vendor_tx_frames,
+            tx_completions,
+            vendor_rx_frames,
             rx_frames: crate::netif::rx_received(),
+            #[cfg(feature = "rf-eloop-diag")]
+            mac_rx_successful_mpdu: mac_rx.successful_mpdu,
+            #[cfg(not(feature = "rf-eloop-diag"))]
+            mac_rx_successful_mpdu: mac_rx.0,
+            #[cfg(feature = "rf-eloop-diag")]
+            mac_rx_failed_mpdu: mac_rx.failed_mpdu,
+            #[cfg(not(feature = "rf-eloop-diag"))]
+            mac_rx_failed_mpdu: mac_rx.1,
+            #[cfg(feature = "rf-eloop-diag")]
+            mac_rx_filtered_mpdu: mac_rx.filtered_mpdu,
+            #[cfg(not(feature = "rf-eloop-diag"))]
+            mac_rx_filtered_mpdu: mac_rx.2,
             coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
             wlphy_irqs: crate::osal::irq_dispatch_count(44),
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
