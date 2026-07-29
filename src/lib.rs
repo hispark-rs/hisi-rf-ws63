@@ -442,6 +442,8 @@ pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supp
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 mod composition;
+#[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
+mod data_path_diag;
 #[cfg(all(
     feature = "net",
     feature = "incremental-backend-experiment",
@@ -679,6 +681,28 @@ pub fn force_link_contract() {
         );
         keep!(
             eloop_diag::dmac_rx_prepare_data_patch
+                as unsafe extern "C" fn(
+                    *mut c_void,
+                    *mut c_void,
+                    u32,
+                    *mut c_void,
+                    *mut c_void,
+                ) -> u32
+        );
+    }
+
+    #[cfg(all(
+        feature = "data-path-diag",
+        not(feature = "rf-eloop-diag"),
+        target_arch = "riscv32"
+    ))]
+    {
+        keep!(
+            data_path_diag::dmac_tx_complete_event_handler
+                as unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32
+        );
+        keep!(
+            data_path_diag::dmac_rx_prepare_data_patch
                 as unsafe extern "C" fn(
                     *mut c_void,
                     *mut c_void,

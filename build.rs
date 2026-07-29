@@ -446,6 +446,14 @@ fn main() {
             "hmac_rx_mgmt_event_adapt",
             "hmac_tx_mgmt_send_event_etc",
             "dmac_rx_prepare_data_patch",
+            "dmac_tx_complete_event_handler",
+        ] {
+            println!("cargo:rustc-link-arg=--wrap={symbol}");
+        }
+    } else if env::var_os("CARGO_FEATURE_DATA_PATH_DIAG").is_some() {
+        for symbol in [
+            "dmac_rx_prepare_data_patch",
+            "dmac_tx_complete_event_handler",
         ] {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }

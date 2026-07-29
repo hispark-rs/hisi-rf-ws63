@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Extended the opt-in `data-path-diag` snapshot with bounded wrappers around
+  the DMAC TX-completion callback and RX-preparation path. The wrappers only
+  update atomic call counters before forwarding to the original implementation;
+  they do not parse frames, call ROM statistics helpers, allocate, or invoke
+  user code.
+
+### Fixed
+
+- Corrected the full `rf-eloop-diag` capability mask to declare its existing
+  DMAC RX-preparation counter.
+
 ## [0.1.0-alpha.49] - 2026-07-29
 
 ### Fixed

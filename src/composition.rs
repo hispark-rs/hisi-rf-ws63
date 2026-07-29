@@ -289,6 +289,11 @@ pub struct DataPathDiagnostics {
     pub vendor_tx_frames: u32,
     /// DMAC transmit completions observed after vendor submission.
     pub tx_completions: u32,
+    /// Calls entering the DMAC receive preparation path.
+    ///
+    /// This includes management and internal driver traffic; it is not a count
+    /// of Ethernet frames delivered to the Rust L2 device.
+    pub dmac_rx_prepares: u32,
     /// Frames reaching the final vendor host-RX boundary.
     pub vendor_rx_frames: u32,
     /// Valid Ethernet frames delivered by the vendor RX callback.
@@ -312,8 +317,16 @@ const DATA_PATH_CAP_VENDOR_TX_SUBMISSION: u32 = 1 << 0;
 #[cfg(feature = "data-path-diag")]
 const DATA_PATH_CAP_VENDOR_RX_BOUNDARY: u32 = 1 << 1;
 #[cfg(feature = "data-path-diag")]
-const DATA_PATH_DIAG_CAPABILITIES: u32 =
-    DATA_PATH_CAP_VENDOR_TX_SUBMISSION | DATA_PATH_CAP_VENDOR_RX_BOUNDARY;
+const DATA_PATH_CAP_DMAC_TX_COMPLETION: u32 = 1 << 3;
+#[cfg(feature = "data-path-diag")]
+const DATA_PATH_CAP_DMAC_RX_PREPARE: u32 = 1 << 4;
+#[cfg(feature = "data-path-diag")]
+const DATA_PATH_DIAG_CAPABILITIES: u32 = DATA_PATH_CAP_VENDOR_TX_SUBMISSION
+    | DATA_PATH_CAP_VENDOR_RX_BOUNDARY
+    | DATA_PATH_CAP_DMAC_TX_COMPLETION
+    | DATA_PATH_CAP_DMAC_RX_PREPARE;
+#[cfg(feature = "rf-eloop-diag")]
+const FULL_DATA_PATH_DIAG_CAPABILITIES: u32 = 0x1f;
 
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
@@ -356,6 +369,7 @@ impl WifiDevice {
             instrumented_capabilities,
             vendor_tx_frames,
             tx_completions,
+            dmac_rx_prepares,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -364,9 +378,10 @@ impl WifiDevice {
             let vendor = crate::eloop_diag::auth();
             let mac_rx = crate::eloop_diag::mac_rx_statistics();
             (
-                0x0f,
+                FULL_DATA_PATH_DIAG_CAPABILITIES,
                 vendor.bridge_xmit_calls,
                 vendor.tx_complete_calls,
+                vendor.dmac_rx_calls,
                 vendor.netif_rx_calls,
                 mac_rx.successful_mpdu,
                 mac_rx.failed_mpdu,
@@ -378,6 +393,7 @@ impl WifiDevice {
             instrumented_capabilities,
             vendor_tx_frames,
             tx_completions,
+            dmac_rx_prepares,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -386,7 +402,8 @@ impl WifiDevice {
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 crate::netif::tx_submitted(),
-                0,
+                crate::data_path_diag::tx_completions(),
+                crate::data_path_diag::rx_prepares(),
                 crate::netif::rx_received(),
                 0,
                 0,
@@ -398,17 +415,19 @@ impl WifiDevice {
             instrumented_capabilities,
             vendor_tx_frames,
             tx_completions,
+            dmac_rx_prepares,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-        ) = (0, 0, 0, 0, 0, 0, 0);
+        ) = (0, 0, 0, 0, 0, 0, 0, 0);
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
             tx_failed: crate::netif::tx_failed(),
             vendor_tx_frames,
             tx_completions,
+            dmac_rx_prepares,
             vendor_rx_frames,
             rx_frames: crate::netif::rx_received(),
             mac_rx_successful_mpdu,
@@ -910,7 +929,13 @@ mod tests {
 
     #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
     #[test]
-    fn narrow_data_path_diagnostics_claim_only_nonblocking_boundaries() {
-        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x03);
+    fn narrow_data_path_diagnostics_claim_only_bounded_boundaries() {
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x1b);
+    }
+
+    #[cfg(feature = "rf-eloop-diag")]
+    #[test]
+    fn full_data_path_diagnostics_claim_every_returned_boundary() {
+        assert_eq!(FULL_DATA_PATH_DIAG_CAPABILITIES, 0x1f);
     }
 }

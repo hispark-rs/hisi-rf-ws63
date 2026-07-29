@@ -820,7 +820,7 @@ pub unsafe extern "C" fn hmac_tx_mgmt_send_event_etc(
 /// mask-ROM function at `0x0012_435a`; its ABI is
 /// `fn(dmac_vap_stru *, frw_msg *) -> osal_s32` in the vendor 5.10 sources.
 #[cfg(target_arch = "riscv32")]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "__wrap_dmac_tx_complete_event_handler")]
 #[inline(never)]
 pub unsafe extern "C" fn __ws63_diag_dmac_tx_complete_event_handler(
     vap: *mut c_void,
