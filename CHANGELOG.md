@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.48] - 2026-07-29
+
 ### Added
 
 - Extended the secret-free data-path snapshot with vendor bridge TX, DMAC TX
