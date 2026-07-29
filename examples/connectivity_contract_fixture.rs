@@ -35,20 +35,24 @@ fn main() -> ! {
     uart.write(b"W2D_WPA2_CONNECT_OK\r\n");
     uart.write(b"A4_RADIO_EVENT kind=connected\r\n");
     uart.write(b"RF5A_DHCP_OK addr=192.0.2.2\r\n");
-    uart.write(b"RF5A_ARP_OK mode=smoltcp-neighbor-cache\r\n");
+    uart.write(b"RF5A_ARP_OK evidence=l2-arp-reply\r\n");
     uart.write(
-        b"RF5C_PING_OK target=223.5.5.5 tx=0x00000005 rx=0x00000000 \
-drop=0x00000000 tx_error=0x00000000 rx_queue_drop=0x00000000\r\n",
+        b"RF5C_LOCAL_DATA_PATH_OK arp_reply=0x00000001 \
+arp_request=0x00000001 gateway=192.0.2.1\r\n",
     );
-    uart.write(b"RF5C_LOCAL_DATA_PATH_OK gateway_rx=0x00000001 gateway_tx=0x00000005\r\n");
+    uart.write(b"RF5C_PUBLIC_DNS_BEGIN target=223.5.5.5 attempts=0x00000003\r\n");
     uart.write(
-        b"RF5C_PUBLIC_ICMP_OBSERVED target=223.5.5.5 tx=0x00000005 \
-rx=0x00000000 loss=0x00000005\r\n",
+        b"RF5C_PUBLIC_DNS_SAMPLE attempt=0x00000001 txid=0x00005754 \
+status=ok answers=0x00000001\r\n",
     );
     uart.write(
-        b"RF5C_CONNECTIVITY_SUMMARY gateway_tx=0x00000005 \
-gateway_rx=0x00000001 public_tx=0x00000005 public_rx=0x00000000 \
-rx_queue_drop=0x00000000\r\n",
+        b"RF5C_PUBLIC_DNS_OK target=223.5.5.5 attempts=0x00000001 \
+responses=0x00000001 invalid=0x00000000 tx_error=0x00000000\r\n",
+    );
+    uart.write(
+        b"RF5C_CONNECTIVITY_SUMMARY arp_request=0x00000001 \
+arp_reply=0x00000001 dns_attempts=0x00000001 dns_responses=0x00000001 \
+dns_invalid=0x00000000 dns_tx_error=0x00000000 rx_queue_drop=0x00000000\r\n",
     );
     uart.write(b"A4_NET_RUNNER_STEADY lease=managed neighbor_cache=managed\r\n");
     uart.write(b"A4_DHCP_RENEW_OK client=0x00000001 server=0x00000001\r\n");
