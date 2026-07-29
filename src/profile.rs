@@ -14,11 +14,12 @@ use static_cell::StaticCell;
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v6";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v7";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29-r3";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
-const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
+const PROFILE_SHARED_ARENA_BYTES: usize = 296 * 1024;
+const TASK_STACK_ALLOCATOR_OVERHEAD_BYTES: usize = 512;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361;
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
@@ -45,6 +46,10 @@ pub trait Profile: sealed::Sealed {
     const DYNAMIC_TASKS_REQUIRED: usize;
     /// Stack bytes reserved for every dynamic task in this profile.
     const TASK_STACK_BYTES_PER_TASK: usize;
+    /// Caller-owned allocator arena needed for all reserved task stacks.
+    const TASK_STACK_ARENA_BYTES: usize = Self::DYNAMIC_TASKS_REQUIRED
+        * Self::TASK_STACK_BYTES_PER_TASK
+        + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
     const RF_ARENA_BYTES: usize;
 }
@@ -58,7 +63,7 @@ impl Profile for WifiWpa2Smoltcp {
     const SECURITY: &'static str = "wpa2-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
-    const RF_ARENA_BYTES: usize = PROFILE_RF_ARENA_BYTES;
+    const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::TASK_STACK_ARENA_BYTES;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -70,7 +75,7 @@ impl Profile for WifiWpa3Smoltcp {
     const SECURITY: &'static str = "wpa3-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
-    const RF_ARENA_BYTES: usize = PROFILE_RF_ARENA_BYTES;
+    const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::TASK_STACK_ARENA_BYTES;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
@@ -93,6 +98,9 @@ pub type SelectedProfile = WifiWpa3Smoltcp;
 
 /// Byte capacity selected by the active named radio profile.
 pub const SELECTED_RF_ARENA_BYTES: usize = SelectedProfile::RF_ARENA_BYTES;
+
+/// Task-stack allocator arena bytes required by the active named profile.
+pub const SELECTED_TASK_STACK_ARENA_BYTES: usize = SelectedProfile::TASK_STACK_ARENA_BYTES;
 
 /// Caller-owned, statically allocated backing storage for the shared RF heap.
 ///
@@ -453,6 +461,8 @@ pub struct ResourceReport {
     pub runtime_internal_tasks: Option<usize>,
     /// Total task-stack bytes, once stacks become profile-owned.
     pub task_stack_bytes: Option<usize>,
+    /// Allocator arena bytes backing the task-stack payload.
+    pub task_stack_arena_bytes: Option<usize>,
     /// Supplicant arena bytes, once its allocator storage becomes profile-owned.
     pub supplicant_arena_bytes: Option<usize>,
     /// Bytes in the caller-owned heap shared by RTOS, RF, supplicant and OSAL.
@@ -484,7 +494,9 @@ impl ResourceReport {
             runtime_contract: "hisi-rf-rtos-driver/v1.4-ported-cooperative",
             task_admission: "owner-bound-slot-stack-reservation",
             event_capacity: EVENTS,
-            caller_owned_bytes: control_storage_bytes + arena_storage_bytes,
+            caller_owned_bytes: control_storage_bytes
+                + arena_storage_bytes
+                + P::TASK_STACK_ARENA_BYTES,
             control_storage_bytes,
             composition_handle_bytes: 0,
             radio_state_bytes,
@@ -495,6 +507,7 @@ impl ResourceReport {
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
             runtime_internal_tasks: Some(2),
             task_stack_bytes: Some(P::DYNAMIC_TASKS_REQUIRED * P::TASK_STACK_BYTES_PER_TASK),
+            task_stack_arena_bytes: Some(P::TASK_STACK_ARENA_BYTES),
             supplicant_arena_bytes: None,
             shared_rf_arena_bytes: Some(arena_bytes),
             flash_bytes: None,
@@ -520,6 +533,7 @@ impl ResourceReport {
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
                 "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
+                "\"task_stack_arena_bytes\":{},",
                 "\"supplicant_arena_bytes\":null,\"shared_rf_arena_bytes\":{},\"flash_bytes\":null,",
                 "\"runtime_resources_calibrated\":{}}}"
             ),
@@ -546,6 +560,7 @@ impl ResourceReport {
             self.dynamic_tasks_required,
             self.runtime_internal_tasks.unwrap_or(0),
             self.task_stack_bytes.unwrap_or(0),
+            self.task_stack_arena_bytes.unwrap_or(0),
             self.shared_rf_arena_bytes.unwrap_or(0),
             self.runtime_resources_calibrated,
         )
@@ -593,8 +608,8 @@ const _: () = {
             == WS63_RADIO_STATE_BASE_BYTES + 8 * WS63_RADIO_EVENT_SLOT_BYTES
     );
     assert!(
-        core::mem::size_of::<RadioArenaStorage<PROFILE_RF_ARENA_BYTES>>()
-            == align_up(PROFILE_RF_ARENA_BYTES + 1, 64)
+        core::mem::size_of::<RadioArenaStorage<{ WifiWpa2Smoltcp::RF_ARENA_BYTES }>>()
+            == align_up(WifiWpa2Smoltcp::RF_ARENA_BYTES + 1, 64)
     );
 };
 
@@ -636,25 +651,38 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v6");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v7");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
         assert_eq!(report.crypto_dma_bytes, 4_384);
-        assert_eq!(report.arena_storage_bytes, PROFILE_RF_ARENA_BYTES + 64);
+        assert_eq!(
+            report.arena_storage_bytes,
+            WifiWpa2Smoltcp::RF_ARENA_BYTES + 64
+        );
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.main_stack_bytes_required, 0x8000);
         assert_eq!(report.dynamic_tasks_required, 7);
         assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(report.task_stack_bytes, Some(7 * 24 * 1024));
+        assert_eq!(
+            report.task_stack_arena_bytes,
+            Some(7 * 24 * 1024 + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES)
+        );
         assert_eq!(report.supplicant_arena_bytes, None);
-        assert_eq!(report.shared_rf_arena_bytes, Some(PROFILE_RF_ARENA_BYTES));
+        assert_eq!(
+            report.shared_rf_arena_bytes,
+            Some(WifiWpa2Smoltcp::RF_ARENA_BYTES)
+        );
         assert_eq!(report.flash_bytes, None);
         assert!(!report.runtime_resources_calibrated);
         assert_eq!(
             report.caller_owned_bytes,
-            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
+            report.control_storage_bytes
+                + WifiWpa2Smoltcp::RF_ARENA_BYTES
+                + 64
+                + WifiWpa2Smoltcp::TASK_STACK_ARENA_BYTES
         );
         assert_eq!(report.composition_handle_bytes, 0);
         assert_eq!(
@@ -672,7 +700,7 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v6\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v7\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -684,12 +712,11 @@ mod tests {
                 .as_str()
                 .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.4-ported-cooperative\"")
         );
-        assert!(
-            output
-                .as_str()
-                .contains("\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032")
-        );
-        assert!(output.as_str().contains("\"shared_rf_arena_bytes\":303104"));
+        assert!(output.as_str().contains(concat!(
+            "\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032,",
+            "\"task_stack_arena_bytes\":172544"
+        )));
+        assert!(output.as_str().contains("\"shared_rf_arena_bytes\":130560"));
         assert!(
             output
                 .as_str()
@@ -700,14 +727,18 @@ mod tests {
     #[test]
     fn composition_report_accounts_for_control_arena_and_handle() {
         static CONTROL: Storage<WifiWpa2Smoltcp, 4> = Storage::new();
-        static ARENA: RadioArenaStorage<{ PROFILE_RF_ARENA_BYTES }> = RadioArenaStorage::new();
-        static RADIO: RadioStorage<WifiWpa2Smoltcp, 4, { PROFILE_RF_ARENA_BYTES }> =
+        static ARENA: RadioArenaStorage<{ WifiWpa2Smoltcp::RF_ARENA_BYTES }> =
+            RadioArenaStorage::new();
+        static RADIO: RadioStorage<WifiWpa2Smoltcp, 4, { WifiWpa2Smoltcp::RF_ARENA_BYTES }> =
             RadioStorage::from_parts(&CONTROL, &ARENA);
 
         let report = RADIO.report();
         assert_eq!(
             report.caller_owned_bytes,
-            report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
+            report.control_storage_bytes
+                + WifiWpa2Smoltcp::RF_ARENA_BYTES
+                + 64
+                + WifiWpa2Smoltcp::TASK_STACK_ARENA_BYTES
         );
         assert_eq!(report.composition_handle_bytes, 0);
         assert_eq!(
@@ -743,7 +774,7 @@ mod tests {
     fn arena_claim_checks_capacity_before_consuming_storage() {
         static SMALL: RadioArenaStorage<1024> = RadioArenaStorage::new();
         let expected = ArenaAdmissionError::InsufficientBytes {
-            required: PROFILE_RF_ARENA_BYTES,
+            required: WifiWpa2Smoltcp::RF_ARENA_BYTES,
             available: 1024,
         };
         assert!(matches!(
@@ -759,7 +790,7 @@ mod tests {
     #[test]
     fn arena_shortage_uses_actionable_public_diagnostics() {
         let diagnostic = ArenaAdmissionError::InsufficientBytes {
-            required: PROFILE_RF_ARENA_BYTES,
+            required: WifiWpa2Smoltcp::RF_ARENA_BYTES,
             available: 1024,
         }
         .diagnostic();
@@ -775,7 +806,7 @@ mod tests {
         assert_eq!(diagnostic.profile_revision(), Some(PROFILE_REVISION));
         assert_eq!(
             diagnostic.trace().get(0).map(|entry| entry.value()),
-            Some(PROFILE_RF_ARENA_BYTES as u32)
+            Some(WifiWpa2Smoltcp::RF_ARENA_BYTES as u32)
         );
         assert_eq!(
             diagnostic.trace().get(1).map(|entry| entry.value()),
@@ -785,7 +816,8 @@ mod tests {
 
     #[test]
     fn arena_can_be_claimed_only_once() {
-        static ARENA: RadioArenaStorage<{ PROFILE_RF_ARENA_BYTES }> = RadioArenaStorage::new();
+        static ARENA: RadioArenaStorage<{ WifiWpa2Smoltcp::RF_ARENA_BYTES }> =
+            RadioArenaStorage::new();
         assert!(ARENA.claim_for::<WifiWpa2Smoltcp>().is_ok());
         assert!(matches!(
             ARENA.claim_for::<WifiWpa2Smoltcp>(),
