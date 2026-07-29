@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.54] - 2026-07-30
+
+### Changed
+
+- Rename the aggregate diagnostic field from `mac_rx_filter_command` to
+  `mac_rx_filter_control`, matching the packed WLMAC register semantics.
+- Require `hisi-hal 0.7.0-alpha.6` for network-order VAP0 address decoding.
+
+### Fixed
+
+- Compare the L2 station identity against the corrected HAL snapshot. The
+  secret-free `station-address-matches-device` result was verified true on
+  WS63 silicon.
+
 ## [0.1.0-alpha.53] - 2026-07-30
 
 ### Added

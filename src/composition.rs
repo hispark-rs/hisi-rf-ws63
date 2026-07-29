@@ -305,8 +305,8 @@ pub struct DataPathDiagnostics {
     pub mac_rx_failed_mpdu: u32,
     /// MPDUs rejected by the MAC receive filter.
     pub mac_rx_filtered_mpdu: u32,
-    /// Vendor receive-filter command active when this snapshot was taken.
-    pub mac_rx_filter_command: u32,
+    /// Packed receive-filter control state active when this snapshot was taken.
+    pub mac_rx_filter_control: u32,
     /// Whether the VAP0 station address matches this L2 device's identity.
     pub mac_station_address_matches_device: bool,
     /// Whether the VAP0 BSSID register contains a non-zero address.
@@ -385,7 +385,7 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-            mac_rx_filter_command,
+            mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
         ) = {
@@ -401,7 +401,7 @@ impl WifiDevice {
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
                 u32::from(mac.rx.rx_filtered_mpdu),
-                mac.filter.rx_filter_command,
+                mac.filter.rx_filter_control,
                 station_address == Some(mac.filter.station_address),
                 mac.filter.bssid != [0; 6],
             )
@@ -416,7 +416,7 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-            mac_rx_filter_command,
+            mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
         ) = {
@@ -431,7 +431,7 @@ impl WifiDevice {
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
                 u32::from(mac.rx.rx_filtered_mpdu),
-                mac.filter.rx_filter_command,
+                mac.filter.rx_filter_control,
                 station_address == Some(mac.filter.station_address),
                 mac.filter.bssid != [0; 6],
             )
@@ -446,7 +446,7 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-            mac_rx_filter_command,
+            mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
         ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
@@ -462,7 +462,7 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-            mac_rx_filter_command,
+            mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
             coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
