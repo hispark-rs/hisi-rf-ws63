@@ -36,6 +36,7 @@ struct Bridge {
     rx_icmp_echo_replies: u32,
     rx_icmp_sequence_mask: u32,
     rx_dhcp_server_packets: u32,
+    l2_protocol: L2ProtocolDiagnostics,
     last_rx_prefix: [u8; FRAME_PREFIX],
     last_rx_len: usize,
     tx_buf: [u8; MTU],
@@ -59,6 +60,7 @@ static BRIDGE: BridgeCell = BridgeCell(UnsafeCell::new(Bridge {
     rx_icmp_echo_replies: 0,
     rx_icmp_sequence_mask: 0,
     rx_dhcp_server_packets: 0,
+    l2_protocol: L2ProtocolDiagnostics::new(),
     last_rx_prefix: [0; FRAME_PREFIX],
     last_rx_len: 0,
     tx_buf: [0; MTU],
@@ -91,7 +93,9 @@ pub fn rx_push(frame: &[u8]) {
     if frame.len() > MTU {
         return;
     }
+    let frame_class = classify_l2_frame(frame);
     let queued = with_bridge(|b| {
+        b.l2_protocol.record_rx(frame_class);
         let prefix_len = frame.len().min(FRAME_PREFIX);
         b.last_rx_prefix[..prefix_len].copy_from_slice(&frame[..prefix_len]);
         b.last_rx_len = frame.len();
@@ -174,6 +178,105 @@ fn diagnostic_echo_reply_sequence(frame: &[u8]) -> Option<u16> {
     }
 
     Some(u16::from_be_bytes([frame[icmp + 6], frame[icmp + 7]]))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum L2FrameClass {
+    ArpRequest,
+    ArpReply,
+    Ipv4,
+    Other,
+}
+
+fn classify_l2_frame(frame: &[u8]) -> L2FrameClass {
+    const ETHERNET_HEADER_LEN: usize = 14;
+    const ARP_OPERATION_OFFSET: usize = ETHERNET_HEADER_LEN + 6;
+    const ARP_OPERATION_END: usize = ARP_OPERATION_OFFSET + 2;
+
+    if frame.len() < ETHERNET_HEADER_LEN {
+        return L2FrameClass::Other;
+    }
+    match &frame[12..14] {
+        [0x08, 0x00] => L2FrameClass::Ipv4,
+        [0x08, 0x06] if frame.len() >= ARP_OPERATION_END => {
+            match u16::from_be_bytes([frame[ARP_OPERATION_OFFSET], frame[ARP_OPERATION_OFFSET + 1]])
+            {
+                1 => L2FrameClass::ArpRequest,
+                2 => L2FrameClass::ArpReply,
+                _ => L2FrameClass::Other,
+            }
+        }
+        _ => L2FrameClass::Other,
+    }
+}
+
+/// Ethernet protocol counters observed at the Rust-visible L2 seam.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct L2ProtocolDiagnostics {
+    /// ARP requests received from the vendor data path.
+    pub rx_arp_requests: u32,
+    /// ARP replies received from the vendor data path.
+    pub rx_arp_replies: u32,
+    /// IPv4 frames received from the vendor data path.
+    pub rx_ipv4: u32,
+    /// Other or malformed Ethernet frames received from the vendor data path.
+    pub rx_other: u32,
+    /// ARP requests submitted by smoltcp.
+    pub tx_arp_requests: u32,
+    /// ARP replies submitted by smoltcp.
+    pub tx_arp_replies: u32,
+    /// IPv4 frames submitted by smoltcp.
+    pub tx_ipv4: u32,
+    /// Other or malformed Ethernet frames submitted by smoltcp.
+    pub tx_other: u32,
+}
+
+impl L2ProtocolDiagnostics {
+    const fn new() -> Self {
+        Self {
+            rx_arp_requests: 0,
+            rx_arp_replies: 0,
+            rx_ipv4: 0,
+            rx_other: 0,
+            tx_arp_requests: 0,
+            tx_arp_replies: 0,
+            tx_ipv4: 0,
+            tx_other: 0,
+        }
+    }
+
+    fn record_rx(&mut self, frame_class: L2FrameClass) {
+        let counter = match frame_class {
+            L2FrameClass::ArpRequest => &mut self.rx_arp_requests,
+            L2FrameClass::ArpReply => &mut self.rx_arp_replies,
+            L2FrameClass::Ipv4 => &mut self.rx_ipv4,
+            L2FrameClass::Other => &mut self.rx_other,
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    fn record_tx(&mut self, frame_class: L2FrameClass) {
+        let counter = match frame_class {
+            L2FrameClass::ArpRequest => &mut self.tx_arp_requests,
+            L2FrameClass::ArpReply => &mut self.tx_arp_replies,
+            L2FrameClass::Ipv4 => &mut self.tx_ipv4,
+            L2FrameClass::Other => &mut self.tx_other,
+        };
+        *counter = counter.saturating_add(1);
+    }
+}
+
+/// Snapshot Ethernet protocol counters without changing them.
+#[doc(hidden)]
+pub fn l2_protocol_diagnostics() -> L2ProtocolDiagnostics {
+    with_bridge(|bridge| bridge.l2_protocol)
+}
+
+/// Start a new Ethernet protocol diagnostic window.
+#[doc(hidden)]
+pub fn reset_l2_protocol_diagnostics() {
+    with_bridge(|bridge| bridge.l2_protocol = L2ProtocolDiagnostics::new());
 }
 
 /// Snapshot of the bounded RX queue used by the bring-up network path.
@@ -333,7 +436,9 @@ pub fn dhcp_probe(mac: [u8; 6], timeout_ms: u32) -> Option<DhcpConfig> {
 }
 
 fn tx_emit(frame: &[u8]) {
+    let frame_class = classify_l2_frame(frame);
     let sink = with_bridge(|b| {
+        b.l2_protocol.record_tx(frame_class);
         let n = frame.len().min(MTU);
         b.tx_buf[..n].copy_from_slice(&frame[..n]);
         b.tx_len = n;
@@ -564,7 +669,10 @@ pub fn netif_smoltcp_selftest() -> [u32; 3] {
 
 #[cfg(test)]
 mod stack_tests {
-    use super::{MTU, RX_DEPTH, RxFrame, TxBuf, rx_push, rx_queue_diagnostics};
+    use super::{
+        L2FrameClass, L2ProtocolDiagnostics, MTU, RX_DEPTH, RxFrame, TxBuf, classify_l2_frame,
+        rx_push, rx_queue_diagnostics,
+    };
 
     #[test]
     fn device_tokens_do_not_embed_mtu_sized_stack_buffers() {
@@ -586,6 +694,33 @@ mod stack_tests {
         frame[23] = 1;
         assert!(!super::has_udp_ports(&frame, 68, 67));
         assert!(!super::has_udp_ports(&frame[..20], 68, 67));
+    }
+
+    #[test]
+    fn l2_protocol_diagnostics_distinguish_arp_operations_and_ipv4() {
+        let mut arp = [0_u8; 42];
+        arp[12..14].copy_from_slice(&[0x08, 0x06]);
+        arp[20..22].copy_from_slice(&1_u16.to_be_bytes());
+        assert_eq!(classify_l2_frame(&arp), L2FrameClass::ArpRequest);
+        arp[20..22].copy_from_slice(&2_u16.to_be_bytes());
+        assert_eq!(classify_l2_frame(&arp), L2FrameClass::ArpReply);
+        arp[20..22].copy_from_slice(&3_u16.to_be_bytes());
+        assert_eq!(classify_l2_frame(&arp), L2FrameClass::Other);
+
+        let mut ipv4 = [0_u8; 14];
+        ipv4[12..14].copy_from_slice(&[0x08, 0x00]);
+        assert_eq!(classify_l2_frame(&ipv4), L2FrameClass::Ipv4);
+        assert_eq!(classify_l2_frame(&ipv4[..13]), L2FrameClass::Other);
+
+        let mut diagnostics = L2ProtocolDiagnostics::new();
+        diagnostics.record_rx(L2FrameClass::ArpReply);
+        diagnostics.record_tx(L2FrameClass::ArpRequest);
+        diagnostics.record_rx(L2FrameClass::Ipv4);
+        diagnostics.record_tx(L2FrameClass::Other);
+        assert_eq!(diagnostics.rx_arp_replies, 1);
+        assert_eq!(diagnostics.tx_arp_requests, 1);
+        assert_eq!(diagnostics.rx_ipv4, 1);
+        assert_eq!(diagnostics.tx_other, 1);
     }
 
     #[test]

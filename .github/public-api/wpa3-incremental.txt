@@ -470,6 +470,8 @@ pub struct hisi_rf_ws63::WifiDevice(_)
 impl hisi_rf_ws63::WifiDevice
 pub fn hisi_rf_ws63::WifiDevice::dhcp_diagnostics(&self) -> DhcpDiagnostics
 pub fn hisi_rf_ws63::WifiDevice::l2_capabilities(&self) -> core::option::Option<hisi_rf_core::wifi::WifiL2Capabilities>
+pub fn hisi_rf_ws63::WifiDevice::l2_protocol_diagnostics(&self) -> L2ProtocolDiagnostics
+pub fn hisi_rf_ws63::WifiDevice::reset_l2_protocol_diagnostics(&self)
 pub fn hisi_rf_ws63::WifiDevice::reset_rx_queue_diagnostics(&self)
 pub fn hisi_rf_ws63::WifiDevice::rx_queue_diagnostics(&self) -> RxQueueDiagnostics
 pub fn hisi_rf_ws63::WifiDevice::station_mac_address(&self) -> core::option::Option<[u8; 6]>

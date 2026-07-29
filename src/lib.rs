@@ -528,9 +528,10 @@ mod profile;
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{
-    CryptoReady, DataPathDiagnostics, DhcpDiagnostics, InitError, InitErrorKind, MissingCrypto,
-    MissingPke, PkeNotRequired, PkeReady, RadioController, Resources, ResourcesBuilder,
-    RxQueueDiagnostics, WifiDevice, WifiParts, WifiRxToken, WifiTxToken, init,
+    CryptoReady, DataPathDiagnostics, DhcpDiagnostics, InitError, InitErrorKind,
+    L2ProtocolDiagnostics, MissingCrypto, MissingPke, PkeNotRequired, PkeReady, RadioController,
+    Resources, ResourcesBuilder, RxQueueDiagnostics, WifiDevice, WifiParts, WifiRxToken,
+    WifiTxToken, init,
 };
 #[cfg(all(
     feature = "net",

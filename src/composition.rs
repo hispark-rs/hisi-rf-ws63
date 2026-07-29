@@ -22,7 +22,7 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 use crate::netif_smoltcp::Ws63Device;
-pub use crate::netif_smoltcp::{DhcpDiagnostics, RxQueueDiagnostics};
+pub use crate::netif_smoltcp::{DhcpDiagnostics, L2ProtocolDiagnostics, RxQueueDiagnostics};
 use crate::profile::{
     ActiveProfile, InstalledRadioArena, Profile, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
 };
@@ -365,6 +365,16 @@ impl WifiDevice {
     /// observation counters are reset.
     pub fn reset_rx_queue_diagnostics(&self) {
         crate::netif_smoltcp::reset_rx_queue_diagnostics();
+    }
+
+    /// Snapshot Ethernet protocol counters at the Rust-visible L2 seam.
+    pub fn l2_protocol_diagnostics(&self) -> L2ProtocolDiagnostics {
+        crate::netif_smoltcp::l2_protocol_diagnostics()
+    }
+
+    /// Start a new Ethernet protocol diagnostic window.
+    pub fn reset_l2_protocol_diagnostics(&self) {
+        crate::netif_smoltcp::reset_l2_protocol_diagnostics();
     }
 
     /// Snapshot DHCP client/server packets crossing the Rust-visible L2 seam.
