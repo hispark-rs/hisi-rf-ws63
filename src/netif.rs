@@ -43,6 +43,7 @@ const ETH_PAD_SIZE: usize = 2;
 static RX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RX_RECEIVED: AtomicU32 = AtomicU32::new(0);
 static TX_FAILED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "data-path-diag")]
 static TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 /// Single STA netif registered by the vendor WAL. Scan bring-up has no TCP/IP
 /// stack yet, but WAL still expects lwIP to preserve this opaque identity.
@@ -64,6 +65,7 @@ pub fn tx_failed() -> u32 {
 }
 
 /// Frames submitted to the vendor-installed TX callback.
+#[cfg(feature = "data-path-diag")]
 pub(crate) fn tx_submitted() -> u32 {
     TX_SUBMITTED.load(Ordering::Relaxed)
 }
@@ -319,6 +321,7 @@ pub fn transmit(frame: &[u8]) -> Result<(), TxError> {
     // SAFETY: pbuf_alloc created a writable payload of exactly frame.len().
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), (*pbuf).payload.cast(), frame.len());
+        #[cfg(feature = "data-path-diag")]
         TX_SUBMITTED.fetch_add(1, Ordering::Relaxed);
         send(netif.cast(), pbuf.cast());
     }
