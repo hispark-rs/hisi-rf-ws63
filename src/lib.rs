@@ -549,6 +549,10 @@ pub use composition::{
 ))]
 pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
 pub use hisi_rf_core::WifiL2Capabilities;
+#[cfg(all(
+    feature = "net",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
 #[allow(deprecated)]
 pub use profile::SELECTED_TASK_STACK_ARENA_BYTES;
 #[cfg(all(

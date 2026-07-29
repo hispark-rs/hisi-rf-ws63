@@ -359,6 +359,8 @@ impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub enum hisi_rf_ws63::WifiWpa3Smoltcp
@@ -366,6 +368,8 @@ impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub struct hisi_rf_ws63::IncrementalRadioController<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize>
@@ -432,8 +436,10 @@ pub hisi_rf_ws63::ResourceReport::profile: &'static str
 pub hisi_rf_ws63::ResourceReport::profile_revision: &'static str
 pub hisi_rf_ws63::ResourceReport::radio_backend: &'static str
 pub hisi_rf_ws63::ResourceReport::radio_state_bytes: usize
+pub hisi_rf_ws63::ResourceReport::runtime_arena_bytes: core::option::Option<usize>
 pub hisi_rf_ws63::ResourceReport::runtime_contract: &'static str
 pub hisi_rf_ws63::ResourceReport::runtime_internal_tasks: core::option::Option<usize>
+pub hisi_rf_ws63::ResourceReport::runtime_object_headroom_bytes: core::option::Option<usize>
 pub hisi_rf_ws63::ResourceReport::runtime_resources_calibrated: bool
 pub hisi_rf_ws63::ResourceReport::schema: &'static str
 pub hisi_rf_ws63::ResourceReport::security: &'static str
@@ -494,22 +500,30 @@ pub const hisi_rf_ws63::OSAL_NOK: i32
 pub const hisi_rf_ws63::OSAL_OK: i32
 pub const hisi_rf_ws63::OSAL_SYS_WAIT_FOREVER: u32
 pub const hisi_rf_ws63::SELECTED_RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::SELECTED_TASK_STACK_ARENA_BYTES: usize
 pub trait hisi_rf_ws63::Profile: hisi_rf_ws63::profile::sealed::Sealed
 pub const hisi_rf_ws63::Profile::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::ID: &'static str
 pub const hisi_rf_ws63::Profile::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::Profile::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::Profile::RUNTIME_OBJECT_HEADROOM_BYTES: usize
 pub const hisi_rf_ws63::Profile::SECURITY: &'static str
 pub const hisi_rf_ws63::Profile::TASK_STACK_BYTES_PER_TASK: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub fn hisi_rf_ws63::association_timing_diagnostics() -> hisi_rf_ws63::blocking_diagnostics::AssociationTimingDiagnostics
