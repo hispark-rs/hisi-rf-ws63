@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.55] - 2026-07-30
+
+### Fixed
+
+- Keep the minimal `chip-ws63` composition warning-free when no Wi-Fi
+  profile consumes the internal station-address helper. Full Wi-Fi profiles
+  retain the same hardware-address behavior.
+
 ## [0.1.0-alpha.54] - 2026-07-30
 
 ### Changed
@@ -734,7 +742,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.44...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.55...HEAD
+[0.1.0-alpha.55]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.54...v0.1.0-alpha.55
 [0.1.0-alpha.44]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.43...v0.1.0-alpha.44
 [0.1.0-alpha.43]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.42...v0.1.0-alpha.43
 [0.1.0-alpha.42]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.41...v0.1.0-alpha.42
