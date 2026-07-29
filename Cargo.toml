@@ -132,6 +132,9 @@ bootstrap-stage-diag = []
 # Low-disturbance in-memory WPA event-loop counters. Unlike `rf-init-diag`,
 # this does not emit synchronous UART traces from hot paths.
 rf-eloop-diag = ["hisi-crypto-ws63?/diagnostics"]
+# Packet progress only: no authentication-frame capture, crypto diagnostics,
+# or auth-state linker wrapping.
+data-path-diag = []
 # Spawn two native RTOS tasks that contend for the one CryptoService mutex.
 # Diagnostic-only: normal radio images do not deliberately yield while holding
 # crypto and do not reserve the two temporary task stacks/semaphores.

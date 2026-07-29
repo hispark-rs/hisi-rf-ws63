@@ -278,6 +278,9 @@ pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct DataPathDiagnostics {
+    /// Instrumented stages: bit 0 vendor TX submission, bit 1 vendor RX
+    /// boundary, bit 2 MAC RX counters, bit 3 DMAC TX completion.
+    pub instrumented_capabilities: u32,
     /// Frames emitted by smoltcp into the vendor TX sink.
     pub tx_frames: u32,
     /// Frames rejected before the vendor TX callback could accept them.
@@ -303,6 +306,11 @@ pub struct DataPathDiagnostics {
     /// WLAN MAC interrupt dispatches.
     pub wlmac_irqs: u32,
 }
+
+const DATA_PATH_CAP_VENDOR_TX_SUBMISSION: u32 = 1 << 0;
+const DATA_PATH_CAP_VENDOR_RX_BOUNDARY: u32 = 1 << 1;
+const DATA_PATH_DIAG_CAPABILITIES: u32 =
+    DATA_PATH_CAP_VENDOR_TX_SUBMISSION | DATA_PATH_CAP_VENDOR_RX_BOUNDARY;
 
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
@@ -341,36 +349,68 @@ impl WifiDevice {
     #[doc(hidden)]
     pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
         #[cfg(feature = "rf-eloop-diag")]
-        let (vendor_tx_frames, tx_completions, vendor_rx_frames, mac_rx) = {
+        let (
+            instrumented_capabilities,
+            vendor_tx_frames,
+            tx_completions,
+            vendor_rx_frames,
+            mac_rx_successful_mpdu,
+            mac_rx_failed_mpdu,
+            mac_rx_filtered_mpdu,
+        ) = {
             let vendor = crate::eloop_diag::auth();
+            let mac_rx = crate::eloop_diag::mac_rx_statistics();
             (
+                0x0f,
                 vendor.bridge_xmit_calls,
                 vendor.tx_complete_calls,
                 vendor.netif_rx_calls,
-                crate::eloop_diag::mac_rx_statistics(),
+                mac_rx.successful_mpdu,
+                mac_rx.failed_mpdu,
+                mac_rx.filtered_mpdu,
             )
         };
-        #[cfg(not(feature = "rf-eloop-diag"))]
-        let (vendor_tx_frames, tx_completions, vendor_rx_frames, mac_rx) = (0, 0, 0, (0, 0, 0));
+        #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
+        let (
+            instrumented_capabilities,
+            vendor_tx_frames,
+            tx_completions,
+            vendor_rx_frames,
+            mac_rx_successful_mpdu,
+            mac_rx_failed_mpdu,
+            mac_rx_filtered_mpdu,
+        ) = {
+            (
+                DATA_PATH_DIAG_CAPABILITIES,
+                crate::netif::tx_submitted(),
+                0,
+                crate::netif::rx_received(),
+                0,
+                0,
+                0,
+            )
+        };
+        #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
+        let (
+            instrumented_capabilities,
+            vendor_tx_frames,
+            tx_completions,
+            vendor_rx_frames,
+            mac_rx_successful_mpdu,
+            mac_rx_failed_mpdu,
+            mac_rx_filtered_mpdu,
+        ) = (0, 0, 0, 0, 0, 0, 0);
         DataPathDiagnostics {
+            instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
             tx_failed: crate::netif::tx_failed(),
             vendor_tx_frames,
             tx_completions,
             vendor_rx_frames,
             rx_frames: crate::netif::rx_received(),
-            #[cfg(feature = "rf-eloop-diag")]
-            mac_rx_successful_mpdu: mac_rx.successful_mpdu,
-            #[cfg(not(feature = "rf-eloop-diag"))]
-            mac_rx_successful_mpdu: mac_rx.0,
-            #[cfg(feature = "rf-eloop-diag")]
-            mac_rx_failed_mpdu: mac_rx.failed_mpdu,
-            #[cfg(not(feature = "rf-eloop-diag"))]
-            mac_rx_failed_mpdu: mac_rx.1,
-            #[cfg(feature = "rf-eloop-diag")]
-            mac_rx_filtered_mpdu: mac_rx.filtered_mpdu,
-            #[cfg(not(feature = "rf-eloop-diag"))]
-            mac_rx_filtered_mpdu: mac_rx.2,
+            mac_rx_successful_mpdu,
+            mac_rx_failed_mpdu,
+            mac_rx_filtered_mpdu,
             coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
             wlphy_irqs: crate::osal::irq_dispatch_count(44),
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
@@ -863,5 +903,11 @@ mod tests {
         assert!(!json.contains("ssid"));
         assert!(!json.contains("passphrase"));
         assert!(!json.contains("secret"));
+    }
+
+    #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
+    #[test]
+    fn narrow_data_path_diagnostics_claim_only_nonblocking_boundaries() {
+        assert_eq!(DATA_PATH_DIAG_CAPABILITIES, 0x03);
     }
 }

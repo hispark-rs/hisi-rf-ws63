@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Split packet-path progress counters from the full authentication event-loop
+  diagnostic profile. The new `data-path-diag` feature counts the existing
+  Rust TX/RX seams without linker wrapping, ROM calls, or large trace storage;
+  its capability mask leaves MAC statistics and DMAC completion explicitly
+  unavailable.
+
 ## [0.1.0-alpha.48] - 2026-07-29
 
 ### Added

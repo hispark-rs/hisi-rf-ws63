@@ -43,6 +43,7 @@ const ETH_PAD_SIZE: usize = 2;
 static RX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RX_RECEIVED: AtomicU32 = AtomicU32::new(0);
 static TX_FAILED: AtomicU32 = AtomicU32::new(0);
+static TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 /// Single STA netif registered by the vendor WAL. Scan bring-up has no TCP/IP
 /// stack yet, but WAL still expects lwIP to preserve this opaque identity.
 static REGISTERED_NETIF: AtomicUsize = AtomicUsize::new(0);
@@ -60,6 +61,11 @@ pub fn rx_received() -> u32 {
 /// Frames that could not be handed to the vendor TX callback.
 pub fn tx_failed() -> u32 {
     TX_FAILED.load(Ordering::Relaxed)
+}
+
+/// Frames submitted to the vendor-installed TX callback.
+pub(crate) fn tx_submitted() -> u32 {
+    TX_SUBMITTED.load(Ordering::Relaxed)
 }
 
 /// Read-only snapshot of the vendor-created lwIP interface.
@@ -313,6 +319,7 @@ pub fn transmit(frame: &[u8]) -> Result<(), TxError> {
     // SAFETY: pbuf_alloc created a writable payload of exactly frame.len().
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), (*pbuf).payload.cast(), frame.len());
+        TX_SUBMITTED.fetch_add(1, Ordering::Relaxed);
         send(netif.cast(), pbuf.cast());
     }
     // `drv_send` takes its own asynchronous reference. Match lwIP's caller
