@@ -110,6 +110,14 @@ pub(crate) fn signal_l2_rx() {
     SIGNALS.signal(WaitSet::L2_RX);
 }
 
+/// Snapshot the singleton WS63 callback/L2/timer wait bridge.
+///
+/// This exposes counters only. It does not consume readiness, register a
+/// waker, or disclose frame and credential contents.
+pub fn incremental_wait_diagnostics() -> Ws63IncrementalWaitDiagnostics {
+    SIGNALS.diagnostics()
+}
+
 /// WS63 callback/L2/deadline bridge owned by one incremental runner.
 ///
 /// The radio singleton guarantees that only one instance exists. Callback and

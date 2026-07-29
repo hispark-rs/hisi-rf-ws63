@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.47] - 2026-07-29
+
+### Added
+
+- Added a secret-free, non-consuming snapshot of the singleton incremental
+  wait bridge for facade-owned aggregate diagnostics.
+
+### Changed
+
+- Updated to `hisi-rf-core 0.1.0-alpha.19`, whose runner diagnostics are
+  readable through the owning radio instance without borrowing the runner.
+- Updated the WS63 profile revision and caller-owned RAM report to include the
+  72-byte instance-owned incremental diagnostic snapshot. The JSON shape
+  remains `hisi-rf-resource-report/v6`; only the reported layout changed.
+
 ## [0.1.0-alpha.46] - 2026-07-29
 
 ### Added

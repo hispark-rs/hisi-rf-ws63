@@ -15,13 +15,15 @@ use static_cell::StaticCell;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v6";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-29-r2";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_RF_ARENA_BYTES: usize = 296 * 1024;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361;
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
-const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708;
+// Includes the 18 instance-owned incremental diagnostic counters published by
+// the runner for controller-side snapshots after executor task splitting.
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x750;
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
@@ -703,7 +705,7 @@ mod tests {
             report.control_storage_bytes + PROFILE_RF_ARENA_BYTES + 64
         );
         assert_eq!(report.composition_handle_bytes, 0);
-        assert_eq!(report.control_storage_bytes, 0x20c0);
+        assert_eq!(report.control_storage_bytes, 0x2100);
         assert_eq!(
             report.radio_state_bytes,
             WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES

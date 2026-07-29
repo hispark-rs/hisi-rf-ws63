@@ -449,7 +449,7 @@ mod composition;
 mod incremental_wait;
 #[cfg(feature = "incremental-embassy-wait")]
 #[doc(hidden)]
-pub use incremental_wait::Ws63IncrementalWaitDiagnostics;
+pub use incremental_wait::{Ws63IncrementalWaitDiagnostics, incremental_wait_diagnostics};
 #[cfg(all(
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
