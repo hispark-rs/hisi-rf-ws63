@@ -37,12 +37,17 @@ fn main() -> ! {
     uart.write(b"RF5A_DHCP_OK addr=192.0.2.2\r\n");
     uart.write(b"RF5A_ARP_OK mode=smoltcp-neighbor-cache\r\n");
     uart.write(
-        b"RF5C_PING_OK target=1.1.1.1 tx=0x00000005 rx=0x00000005 \
+        b"RF5C_PING_OK target=223.5.5.5 tx=0x00000005 rx=0x00000000 \
 drop=0x00000000 tx_error=0x00000000 rx_queue_drop=0x00000000\r\n",
+    );
+    uart.write(b"RF5C_LOCAL_DATA_PATH_OK gateway_rx=0x00000001 gateway_tx=0x00000005\r\n");
+    uart.write(
+        b"RF5C_PUBLIC_ICMP_OBSERVED target=223.5.5.5 tx=0x00000005 \
+rx=0x00000000 loss=0x00000005\r\n",
     );
     uart.write(
         b"RF5C_CONNECTIVITY_SUMMARY gateway_tx=0x00000005 \
-gateway_rx=0x00000000 public_tx=0x00000005 public_rx=0x00000005 \
+gateway_rx=0x00000001 public_tx=0x00000005 public_rx=0x00000000 \
 rx_queue_drop=0x00000000\r\n",
     );
     uart.write(b"A4_NET_RUNNER_STEADY lease=managed neighbor_cache=managed\r\n");
