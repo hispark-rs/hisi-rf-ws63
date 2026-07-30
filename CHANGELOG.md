@@ -794,7 +794,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.56...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.60...HEAD
+[0.1.0-alpha.60]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.59...v0.1.0-alpha.60
+[0.1.0-alpha.59]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.58...v0.1.0-alpha.59
+[0.1.0-alpha.58]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.57...v0.1.0-alpha.58
+[0.1.0-alpha.57]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.56...v0.1.0-alpha.57
 [0.1.0-alpha.56]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.55...v0.1.0-alpha.56
 [0.1.0-alpha.55]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.54...v0.1.0-alpha.55
 [0.1.0-alpha.44]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.43...v0.1.0-alpha.44
