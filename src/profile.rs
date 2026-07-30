@@ -35,13 +35,10 @@ const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 
 mod sealed {
     pub trait Sealed {}
-    pub trait RuntimeCalibration {
-        const RESOURCES_CALIBRATED: bool;
-    }
 }
 
 /// A named WS63 radio composition with a fixed security and network contract.
-pub trait Profile: sealed::Sealed + sealed::RuntimeCalibration {
+pub trait Profile: sealed::Sealed {
     /// Stable profile identifier used by build reports and diagnostics.
     const ID: &'static str;
     /// Security implementation selected by this profile.
@@ -59,36 +56,34 @@ pub trait Profile: sealed::Sealed + sealed::RuntimeCalibration {
         + Self::RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
     const RF_ARENA_BYTES: usize;
+    /// Whether this profile's runtime arena completed repeated-silicon calibration.
+    const RUNTIME_RESOURCES_CALIBRATED: bool;
 }
 
 /// Upstream-hostap WPA2-Personal with the smoltcp L2 adapter.
 pub enum WifiWpa2Smoltcp {}
 
 impl sealed::Sealed for WifiWpa2Smoltcp {}
-impl sealed::RuntimeCalibration for WifiWpa2Smoltcp {
-    const RESOURCES_CALIBRATED: bool = true;
-}
 impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = true;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
 pub enum WifiWpa3Smoltcp {}
 
 impl sealed::Sealed for WifiWpa3Smoltcp {}
-impl sealed::RuntimeCalibration for WifiWpa3Smoltcp {
-    const RESOURCES_CALIBRATED: bool = false;
-}
 impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = false;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
@@ -534,7 +529,7 @@ impl ResourceReport {
             supplicant_arena_bytes: None,
             shared_rf_arena_bytes: Some(arena_bytes),
             flash_bytes: None,
-            runtime_resources_calibrated: <P as sealed::RuntimeCalibration>::RESOURCES_CALIBRATED,
+            runtime_resources_calibrated: P::RUNTIME_RESOURCES_CALIBRATED,
         }
     }
 

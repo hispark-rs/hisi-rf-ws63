@@ -361,6 +361,7 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_RESOURCES_CALIBRATED: bool
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub enum hisi_rf_ws63::WifiWpa3Smoltcp
@@ -370,6 +371,7 @@ pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_RESOURCES_CALIBRATED: bool
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub struct hisi_rf_ws63::IncrementalRadioController<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize>
@@ -508,6 +510,7 @@ pub const hisi_rf_ws63::Profile::ID: &'static str
 pub const hisi_rf_ws63::Profile::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::Profile::RUNTIME_RESOURCES_CALIBRATED: bool
 pub const hisi_rf_ws63::Profile::SECURITY: &'static str
 pub const hisi_rf_ws63::Profile::TASK_STACK_BYTES_PER_TASK: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
@@ -516,6 +519,7 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_RESOURCES_CALIBRATED: bool
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
@@ -524,6 +528,7 @@ pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_RESOURCES_CALIBRATED: bool
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub fn hisi_rf_ws63::association_timing_diagnostics() -> hisi_rf_ws63::blocking_diagnostics::AssociationTimingDiagnostics
