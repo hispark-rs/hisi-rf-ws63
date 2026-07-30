@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.60] - 2026-07-30
+
+### Changed
+
+- Mark the WPA2-smoltcp runtime resource profile calibrated after a same-image
+  20-reset WS63 matrix observed zero RTOS/RF allocation failures, while keeping
+  the WPA3 profile uncalibrated until its separate silicon gate is available.
+- Advance the profile revision to `ws63-wifi-2026-07-30-r6`.
+
 ## [0.1.0-alpha.59] - 2026-07-30
 
 ### Fixed

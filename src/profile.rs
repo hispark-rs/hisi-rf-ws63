@@ -15,7 +15,7 @@ use static_cell::StaticCell;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v8";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-30-r5";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-30-r6";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = 296 * 1024;
@@ -56,6 +56,8 @@ pub trait Profile: sealed::Sealed {
         + Self::RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
     const RF_ARENA_BYTES: usize;
+    /// Whether this profile's runtime arena has completed repeated-silicon calibration.
+    const RUNTIME_RESOURCES_CALIBRATED: bool;
 }
 
 /// Upstream-hostap WPA2-Personal with the smoltcp L2 adapter.
@@ -68,6 +70,7 @@ impl Profile for WifiWpa2Smoltcp {
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = true;
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -80,6 +83,7 @@ impl Profile for WifiWpa3Smoltcp {
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = false;
 }
 
 /// Marker implemented only for the profile selected by Cargo features.
@@ -525,7 +529,7 @@ impl ResourceReport {
             supplicant_arena_bytes: None,
             shared_rf_arena_bytes: Some(arena_bytes),
             flash_bytes: None,
-            runtime_resources_calibrated: false,
+            runtime_resources_calibrated: P::RUNTIME_RESOURCES_CALIBRATED,
         }
     }
 
@@ -697,7 +701,7 @@ mod tests {
             Some(WifiWpa2Smoltcp::RF_ARENA_BYTES)
         );
         assert_eq!(report.flash_bytes, None);
-        assert!(!report.runtime_resources_calibrated);
+        assert!(report.runtime_resources_calibrated);
         assert_eq!(
             report.caller_owned_bytes,
             report.control_storage_bytes
