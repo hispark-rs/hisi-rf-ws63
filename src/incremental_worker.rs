@@ -15,7 +15,7 @@ use hisi_rf_rtos_driver::{
 
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 
-const WORKER_STACK_BYTES: usize = 8 * 1024;
+pub(crate) const WORKER_STACK_BYTES: usize = 8 * 1024;
 const WORKER_PRIORITY: u8 = 9;
 const WORKER_CAPACITY_MS: u32 = 100;
 const WORKER_PERIOD_MS: u32 = 200;

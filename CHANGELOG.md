@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.63] - 2026-08-03
+
+### Fixed
+
+- Account for the worker's bounded control state in the complete WS63 SRAM
+  envelope so the facade-selected `wifi_connectivity` firmware links without
+  overlapping the fixed stack region.
+- Reserve the seven 24 KiB vendor task stacks and the 8 KiB Rust worker stack
+  as two exact owner-bound requests. This preserves eight admitted dynamic
+  tasks without charging the worker as another 24 KiB vendor task.
+
 ## [0.1.0-alpha.62] - 2026-08-03
 
 ### Added

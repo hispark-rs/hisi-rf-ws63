@@ -713,6 +713,14 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     hisi_rf_rtos_driver::require_runtime(hisi_rf_rtos_driver::RuntimeRequirements::V1_5_BUDGETED)
         .map_err(InitError::runtime)?;
     let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
+    #[cfg(feature = "incremental-embassy-wait")]
+    let worker_reservation = match reserve_incremental_worker(storage) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            release_profile_reservation(reservation)?;
+            return Err(error);
+        }
+    };
     let RadioResources {
         mut backend,
         device,
@@ -729,18 +737,30 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
         // reservation. It is installed in the process-wide compatibility
         // adapter and cannot be safely detached or reused after a partial
         // failure, so this one-shot storage remains claimed.
+        #[cfg(feature = "incremental-embassy-wait")]
+        release_profile_reservation(worker_reservation)?;
         return Err(InitError::core(Error::Backend(error)));
     }
     let backend = match backend.into_incremental() {
         Ok(backend) => backend,
-        Err(error) => return Err(InitError::core(Error::Backend(error))),
+        Err(error) => {
+            #[cfg(feature = "incremental-embassy-wait")]
+            release_profile_reservation(worker_reservation)?;
+            return Err(InitError::core(Error::Backend(error)));
+        }
     };
     #[cfg(not(feature = "incremental-embassy-wait"))]
     let _ = reservation;
     #[cfg(feature = "incremental-embassy-wait")]
     let backend = {
         let worker = storage.store_incremental_worker(IncrementalWorkerState::new(backend));
-        worker.start(reservation).map_err(InitError::runtime)?
+        match worker.start(worker_reservation) {
+            Ok(backend) => backend,
+            Err(error) => {
+                release_profile_reservation(worker_reservation)?;
+                return Err(InitError::runtime(error));
+            }
+        }
     };
     match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
         Ok(controller) => Ok(IncrementalRadioController {
@@ -788,7 +808,7 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
     )
     .map_err(InitError::runtime)?;
     hisi_rf_rtos_driver::current_task().map_err(InitError::runtime)?;
-    let required_slots = NonZeroUsize::new(P::DYNAMIC_TASKS_REQUIRED).ok_or_else(|| {
+    let required_slots = NonZeroUsize::new(P::VENDOR_DYNAMIC_TASKS_REQUIRED).ok_or_else(|| {
         InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
             hisi_rf_rtos_driver::Error::Runtime,
         ))
@@ -819,6 +839,21 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
         return Err(InitError::runtime(error));
     }
     Ok((state, crypto_storage, reservation))
+}
+
+#[cfg(feature = "incremental-embassy-wait")]
+fn reserve_incremental_worker<P: Profile, const EVENTS: usize>(
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<&'static hisi_rf_rtos_driver::TaskReservation, InitError> {
+    let required = hisi_rf_rtos_driver::TaskResourceRequirements::new(
+        NonZeroUsize::new(1).expect("worker reserves one task"),
+        NonZeroUsize::new(crate::incremental_worker::WORKER_STACK_BYTES)
+            .expect("worker stack is non-zero"),
+    )
+    .expect("worker resource requirement is representable");
+    let reservation =
+        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::task_admission)?;
+    Ok(storage.store_worker_task_reservation(reservation))
 }
 
 fn release_profile_reservation(

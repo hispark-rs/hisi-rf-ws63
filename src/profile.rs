@@ -16,17 +16,32 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_worker::IncrementalWorkerState;
 
+#[cfg(feature = "incremental-embassy-wait")]
+const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STACK_BYTES;
+#[cfg(not(feature = "incremental-embassy-wait"))]
+const PROFILE_WORKER_STACK_BYTES: usize = 0;
+
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v8";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r7";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r8";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
-const PROFILE_SHARED_ARENA_BYTES: usize = 296 * 1024;
+const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
+    // The worker adds just under 4 KiB of bounded control state in ordinary
+    // BSS. Keep the firmware's total SRAM envelope honest by returning one
+    // 4 KiB page from the large shared arenas.
+    292 * 1024
+} else {
+    296 * 1024
+};
 const TASK_STACK_ALLOCATOR_OVERHEAD_BYTES: usize = 512;
 const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361
     + if cfg!(feature = "incremental-embassy-wait") {
         // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
         // and alignment. The 32-bit layout assertion below keeps this honest.
+        // The adjacent worker reservation occupies padding that was already
+        // present in the 32-byte-aligned target layout, so the measured total
+        // remains unchanged.
         3_856
     } else {
         0
@@ -54,13 +69,25 @@ pub trait Profile: sealed::Sealed {
     const SECURITY: &'static str;
     /// Dynamic task slots observed for this profile's pinned payload.
     const DYNAMIC_TASKS_REQUIRED: usize;
+    /// Dynamic task slots reserved for vendor tasks before the Rust worker.
+    const VENDOR_DYNAMIC_TASKS_REQUIRED: usize = if cfg!(feature = "incremental-embassy-wait") {
+        Self::DYNAMIC_TASKS_REQUIRED - 1
+    } else {
+        Self::DYNAMIC_TASKS_REQUIRED
+    };
     /// Stack bytes reserved for every dynamic task in this profile.
     const TASK_STACK_BYTES_PER_TASK: usize;
+    /// Exact total stack bytes reserved across heterogeneous profile tasks.
+    const TASK_STACK_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
+        (Self::DYNAMIC_TASKS_REQUIRED - 1) * Self::TASK_STACK_BYTES_PER_TASK
+            + PROFILE_WORKER_STACK_BYTES
+    } else {
+        Self::DYNAMIC_TASKS_REQUIRED * Self::TASK_STACK_BYTES_PER_TASK
+    };
     /// Caller-owned bytes reserved for RTOS-owned synchronization objects.
     const RUNTIME_OBJECT_HEADROOM_BYTES: usize = RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned scheduler arena for task stacks, metadata and RTOS objects.
-    const RUNTIME_ARENA_BYTES: usize = Self::DYNAMIC_TASKS_REQUIRED
-        * Self::TASK_STACK_BYTES_PER_TASK
+    const RUNTIME_ARENA_BYTES: usize = Self::TASK_STACK_BYTES
         + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES
         + Self::RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
@@ -291,6 +318,8 @@ pub struct Storage<P: Profile, const EVENTS: usize> {
     crypto: StaticCell<Ws63CryptoStorage>,
     task_reservation: StaticCell<TaskReservation>,
     #[cfg(feature = "incremental-embassy-wait")]
+    worker_task_reservation: StaticCell<TaskReservation>,
+    #[cfg(feature = "incremental-embassy-wait")]
     incremental_worker: StaticCell<IncrementalWorkerState>,
     claimed: AtomicBool,
     _profile: PhantomData<P>,
@@ -305,6 +334,8 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
             runner: StaticCell::new(),
             crypto: StaticCell::new(),
             task_reservation: StaticCell::new(),
+            #[cfg(feature = "incremental-embassy-wait")]
+            worker_task_reservation: StaticCell::new(),
             #[cfg(feature = "incremental-embassy-wait")]
             incremental_worker: StaticCell::new(),
             claimed: AtomicBool::new(false),
@@ -356,6 +387,14 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         worker: IncrementalWorkerState,
     ) -> &'static mut IncrementalWorkerState {
         self.incremental_worker.init(worker)
+    }
+
+    #[cfg(feature = "incremental-embassy-wait")]
+    pub(crate) fn store_worker_task_reservation(
+        &'static self,
+        reservation: TaskReservation,
+    ) -> &'static TaskReservation {
+        self.worker_task_reservation.init(reservation)
     }
 }
 
@@ -549,7 +588,7 @@ impl ResourceReport {
             main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
             runtime_internal_tasks: Some(2),
-            task_stack_bytes: Some(P::DYNAMIC_TASKS_REQUIRED * P::TASK_STACK_BYTES_PER_TASK),
+            task_stack_bytes: Some(P::TASK_STACK_BYTES),
             runtime_object_headroom_bytes: Some(P::RUNTIME_OBJECT_HEADROOM_BYTES),
             runtime_arena_bytes: Some(P::RUNTIME_ARENA_BYTES),
             supplicant_arena_bytes: None,
@@ -715,7 +754,7 @@ mod tests {
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(
             report.task_stack_bytes,
-            Some(crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED * 24 * 1024)
+            Some(WifiWpa2Smoltcp::TASK_STACK_BYTES)
         );
         assert_eq!(
             report.runtime_object_headroom_bytes,
@@ -724,7 +763,7 @@ mod tests {
         assert_eq!(
             report.runtime_arena_bytes,
             Some(
-                crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED * 24 * 1024
+                WifiWpa2Smoltcp::TASK_STACK_BYTES
                     + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES
                     + RUNTIME_OBJECT_HEADROOM_BYTES
             )
@@ -783,8 +822,8 @@ mod tests {
                 .as_str()
                 .contains(if cfg!(feature = "incremental-embassy-wait") {
                     concat!(
-                        "\"runtime_internal_tasks\":2,\"task_stack_bytes\":196608,",
-                        "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":213504"
+                        "\"runtime_internal_tasks\":2,\"task_stack_bytes\":180224,",
+                        "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":197120"
                     )
                 } else {
                     concat!(
@@ -797,7 +836,7 @@ mod tests {
             output
                 .as_str()
                 .contains(if cfg!(feature = "incremental-embassy-wait") {
-                    "\"shared_rf_arena_bytes\":89600"
+                    "\"shared_rf_arena_bytes\":101888"
                 } else {
                     "\"shared_rf_arena_bytes\":114176"
                 })
