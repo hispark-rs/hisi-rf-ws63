@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.64] - 2026-08-03
+
+### Fixed
+
+- Keep the seven-slot vendor bootstrap admission separate from the eighth
+  Rust incremental worker slot. The vendor runtime now validates only its own
+  reserved capacity instead of rejecting the correctly split `7 + 1` profile
+  with an `8 required, 7 available` initialization error.
+
 ## [0.1.0-alpha.63] - 2026-08-03
 
 ### Fixed
