@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.61] - 2026-08-02
+
+### Fixed
+
+- Keep the incremental operation active when a synchronous WS63 supplicant
+  submission or eloop poll returns after the configured time grant. The runner
+  now observes a budget-exhaustion turn and can receive the later authorization
+  event instead of failing with internal status `0x5732b003` after external
+  protocol state has already advanced.
+
 ## [0.1.0-alpha.60] - 2026-07-30
 
 ### Changed

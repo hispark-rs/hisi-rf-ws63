@@ -532,6 +532,14 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalSupplicantBackend<P, C> {
         if elapsed > u64::from(u32::MAX) {
             return self.clear_with_error(operation_error(ERROR_WORK_BUDGET));
         }
+        let disposition = if elapsed >= u64::from(budget.max_time_us().get()) {
+            match disposition {
+                PollDisposition::Pending(wait) => PollDisposition::BudgetExhausted(wait),
+                disposition => disposition,
+            }
+        } else {
+            disposition
+        };
         let report = WorkReport::try_new(
             id,
             budget,
@@ -893,7 +901,7 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             }
         }
         let elapsed = finished_us.wrapping_sub(started_us);
-        if elapsed > u64::from(budget.max_time_us().get()) || elapsed > u64::from(u32::MAX) {
+        if elapsed > u64::from(u32::MAX) {
             return self.clear_with_error(operation_error(ERROR_WORK_BUDGET));
         }
 
@@ -947,7 +955,10 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
                 .with_trace(DiagnosticTraceKind::VendorStatus, status as u32);
                 return self.clear_with_error(error);
             }
-            OperationOutcome::Continue if consumed == budget.max_events().get() => {
+            OperationOutcome::Continue
+                if consumed == budget.max_events().get()
+                    || elapsed >= u64::from(budget.max_time_us().get()) =>
+            {
                 PollDisposition::BudgetExhausted(wait)
             }
             OperationOutcome::Continue => PollDisposition::Pending(wait),
@@ -1338,7 +1349,7 @@ mod tests {
     };
     use ws63_radio_sys::supplicant::{ABI_VERSION, EVENT_DATA_LEN};
 
-    struct FakePort {
+    struct FakePort<'a> {
         result: PollResult,
         events: [Option<Event>; 2],
         next_event: usize,
@@ -1353,9 +1364,13 @@ mod tests {
         connect_calls: u8,
         recovery_diagnostic_word: u32,
         external_auth_retry_stalled: bool,
+        connect_clock: Option<&'a Cell<u64>>,
+        connect_elapsed_us: u64,
+        poll_clock: Option<&'a Cell<u64>>,
+        poll_elapsed_us: u64,
     }
 
-    impl FakePort {
+    impl FakePort<'_> {
         fn new(result: PollResult, events: [Option<Event>; 2]) -> Self {
             Self {
                 result,
@@ -1372,11 +1387,15 @@ mod tests {
                 connect_calls: 0,
                 recovery_diagnostic_word: 0,
                 external_auth_retry_stalled: false,
+                connect_clock: None,
+                connect_elapsed_us: 0,
+                poll_clock: None,
+                poll_elapsed_us: 0,
             }
         }
     }
 
-    impl SupplicantPort for FakePort {
+    impl SupplicantPort for FakePort<'_> {
         fn start_scan(&mut self) -> Result<(), BackendError> {
             self.scan_start_calls += 1;
             Ok(())
@@ -1410,6 +1429,9 @@ mod tests {
 
         fn connect(&mut self) -> Result<(), BackendError> {
             self.connect_calls += 1;
+            if let Some(clock) = self.connect_clock {
+                clock.set(clock.get().saturating_add(self.connect_elapsed_us));
+            }
             Ok(())
         }
 
@@ -1419,6 +1441,9 @@ mod tests {
         }
 
         fn poll(&mut self, _: NonZeroU32) -> Result<PollResult, BackendError> {
+            if let Some(clock) = self.poll_clock {
+                clock.set(clock.get().saturating_add(self.poll_elapsed_us));
+            }
             Ok(self.result)
         }
 
@@ -1522,12 +1547,20 @@ mod tests {
         }
     }
 
+    struct SharedClock<'a>(&'a Cell<u64>);
+
+    impl MonotonicClock for SharedClock<'_> {
+        fn now_us(&self) -> u64 {
+            self.0.get()
+        }
+    }
+
     fn operation_id() -> OperationId {
         OperationTracker::new().queue(0).unwrap()
     }
 
-    fn advance_start<P: SupplicantPort>(
-        backend: &mut IncrementalSupplicantBackend<P, FakeClock>,
+    fn advance_start<P: SupplicantPort, C: MonotonicClock>(
+        backend: &mut IncrementalSupplicantBackend<P, C>,
         id: OperationId,
         budget: WorkBudget,
     ) {
@@ -1611,6 +1644,100 @@ mod tests {
             active.observe(super::super::NATIVE_EVENT_AUTHORIZED, 0),
             OperationOutcome::Complete(IncrementalCompletion::Connected(connection()))
         );
+    }
+
+    #[test]
+    fn connect_time_overrun_preserves_operation_until_authorized() {
+        let id = operation_id();
+        let now_us = Cell::new(0);
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.connect_clock = Some(&now_us);
+        port.connect_elapsed_us = 179_000;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, SharedClock(&now_us));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Connect(transition_station_config(10_000)),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(2, 100_000).unwrap();
+
+        let configured = backend
+            .poll(id, WakeReason::Command, budget, &mut [])
+            .unwrap();
+        assert!(matches!(
+            configured.disposition(),
+            PollDisposition::Pending(wait) if wait.is_empty()
+        ));
+
+        let submitted = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(submitted.elapsed_us(), 179_000);
+        assert!(submitted.time_budget_exhausted());
+        assert!(matches!(
+            submitted.disposition(),
+            PollDisposition::BudgetExhausted(wait)
+                if wait == WaitSet::BACKEND.union(WaitSet::TIMER)
+        ));
+        assert!(backend.active.is_some());
+        assert_eq!(backend.port.connect_calls, 1);
+
+        backend.port.result = poll_result(0, true);
+        backend.port.events[0] = Some(event(super::super::NATIVE_EVENT_AUTHORIZED, 0));
+        let authorized = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(
+            authorized.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Connected(ConnectionInfo {
+                bssid: [1, 2, 3, 4, 5, 6],
+                frequency_mhz: 2_412,
+            }))
+        );
+        assert!(backend.active.is_none());
+    }
+
+    #[test]
+    fn supplicant_poll_time_overrun_preserves_operation_until_authorized() {
+        let id = operation_id();
+        let now_us = Cell::new(0);
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.poll_clock = Some(&now_us);
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, SharedClock(&now_us));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Connect(transition_station_config(10_000)),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(2, 100_000).unwrap();
+        advance_start(&mut backend, id, budget);
+
+        backend.port.poll_elapsed_us = 179_000;
+        let overrun = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert_eq!(overrun.elapsed_us(), 179_000);
+        assert!(overrun.time_budget_exhausted());
+        assert!(matches!(
+            overrun.disposition(),
+            PollDisposition::BudgetExhausted(wait)
+                if wait == WaitSet::BACKEND.union(WaitSet::TIMER)
+        ));
+        assert!(backend.active.is_some());
+
+        backend.port.poll_elapsed_us = 0;
+        backend.port.result = poll_result(0, true);
+        backend.port.events[0] = Some(event(super::super::NATIVE_EVENT_AUTHORIZED, 0));
+        let authorized = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        assert!(matches!(
+            authorized.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Connected(_))
+        ));
+        assert!(backend.active.is_none());
     }
 
     #[test]
