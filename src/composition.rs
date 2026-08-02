@@ -16,11 +16,16 @@ use hisi_rf_core::{
 #[cfg(feature = "incremental-backend-experiment")]
 use hisi_rf_core::{RadioResources, WifiBackend};
 
-#[cfg(feature = "incremental-backend-experiment")]
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    not(feature = "incremental-embassy-wait")
+))]
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
 use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
+#[cfg(feature = "incremental-embassy-wait")]
+use crate::incremental_worker::{IncrementalWorkerState, WorkerBackedIncrementalBackend};
 use crate::netif_smoltcp::Ws63Device;
 pub use crate::netif_smoltcp::{DhcpDiagnostics, L2ProtocolDiagnostics, RxQueueDiagnostics};
 use crate::profile::{
@@ -262,8 +267,17 @@ type CoreRadioController<const EVENTS: usize> =
     hisi_rf_core::RadioController<Ws63WifiBackend<'static>, Ws63Device, EVENTS>;
 
 #[cfg(feature = "incremental-backend-experiment")]
+#[cfg(feature = "incremental-embassy-wait")]
+type ActiveIncrementalBackend = WorkerBackedIncrementalBackend;
+#[cfg(all(
+    feature = "incremental-backend-experiment",
+    not(feature = "incremental-embassy-wait")
+))]
+type ActiveIncrementalBackend = OwnedIncrementalSupplicantBackend;
+
+#[cfg(feature = "incremental-backend-experiment")]
 type CoreIncrementalRadioController<const EVENTS: usize> =
-    hisi_rf_core::RadioController<OwnedIncrementalSupplicantBackend, Ws63Device, EVENTS>;
+    hisi_rf_core::RadioController<ActiveIncrementalBackend, Ws63Device, EVENTS>;
 
 /// WS63 controller bound to the caller-owned storage that will hold its runner.
 pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
@@ -568,7 +582,7 @@ pub struct IncrementalRadioParts<const EVENTS: usize> {
 /// Opaque WS63 runner over the owned initialized backend.
 #[cfg(feature = "incremental-embassy-wait")]
 pub struct IncrementalRadioRunner<const EVENTS: usize> {
-    inner: hisi_rf_core::IncrementalRadioRunner<OwnedIncrementalSupplicantBackend, EVENTS>,
+    inner: hisi_rf_core::IncrementalRadioRunner<ActiveIncrementalBackend, EVENTS>,
     platform: Ws63IncrementalWaitPlatform,
 }
 
@@ -695,7 +709,10 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
-    let (state, crypto_storage, _reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
+    #[cfg(feature = "incremental-embassy-wait")]
+    hisi_rf_rtos_driver::require_runtime(hisi_rf_rtos_driver::RuntimeRequirements::V1_5_BUDGETED)
+        .map_err(InitError::runtime)?;
+    let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
     let RadioResources {
         mut backend,
         device,
@@ -717,6 +734,13 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     let backend = match backend.into_incremental() {
         Ok(backend) => backend,
         Err(error) => return Err(InitError::core(Error::Backend(error))),
+    };
+    #[cfg(not(feature = "incremental-embassy-wait"))]
+    let _ = reservation;
+    #[cfg(feature = "incremental-embassy-wait")]
+    let backend = {
+        let worker = storage.store_incremental_worker(IncrementalWorkerState::new(backend));
+        worker.start(reservation).map_err(InitError::runtime)?
     };
     match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
         Ok(controller) => Ok(IncrementalRadioController {

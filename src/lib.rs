@@ -489,7 +489,12 @@ pub use station_pm_diag::{
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
     )
 ))]
-pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize = 7;
+pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize =
+    if cfg!(feature = "incremental-embassy-wait") {
+        8
+    } else {
+        7
+    };
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;
 #[cfg(feature = "wifi-personal")]
@@ -515,6 +520,13 @@ mod data_path_diag;
     feature = "upstream-supplicant-port"
 ))]
 mod incremental_wait;
+#[cfg(all(
+    feature = "net",
+    feature = "incremental-backend-experiment",
+    feature = "incremental-embassy-wait",
+    feature = "upstream-supplicant-port"
+))]
+mod incremental_worker;
 #[cfg(feature = "incremental-embassy-wait")]
 #[doc(hidden)]
 pub use incremental_wait::{Ws63IncrementalWaitDiagnostics, incremental_wait_diagnostics};

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.62] - 2026-08-03
+
+### Added
+
+- Run the opt-in Embassy incremental backend through a caller-owned RTOS worker
+  and fixed mailbox. The worker receives its `Budgeted` 100/200 ms periodic CPU
+  quota atomically at task creation, so a synchronous vendor turn can no longer
+  monopolize the hart indefinitely while the runner remains responsive to
+  deferred completion and cancellation.
+
+### Changed
+
+- Require runtime contract v1.5 for the worker-backed path, reserve an eighth
+  dynamic task slot, and advance the resource profile to
+  `ws63-wifi-2026-08-03-r7`. The profile is uncalibrated until repeated WS63 HIL
+  establishes its actual scheduling and memory envelope.
+- Keep `WorkReport` elapsed-time accounting distinct from the RTOS CPU quota:
+  the quota bounds CPU ownership, but does not claim that one uninterruptible C
+  call returns within the 100 ms wall-clock grant.
+
 ## [0.1.0-alpha.61] - 2026-08-02
 
 ### Fixed

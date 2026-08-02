@@ -13,15 +13,24 @@ use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
 
 use crate::hisi_rf_backend::Ws63WifiBackend;
+#[cfg(feature = "incremental-embassy-wait")]
+use crate::incremental_worker::IncrementalWorkerState;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v8";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-07-30-r6";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r7";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = 296 * 1024;
 const TASK_STACK_ALLOCATOR_OVERHEAD_BYTES: usize = 512;
 const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
-const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361;
+const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361
+    + if cfg!(feature = "incremental-embassy-wait") {
+        // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
+        // and alignment. The 32-bit layout assertion below keeps this honest.
+        3_856
+    } else {
+        0
+    };
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
     // The incremental profile adds 18 instance-owned counters published by the
@@ -70,7 +79,7 @@ impl Profile for WifiWpa2Smoltcp {
     const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
     const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
-    const RUNTIME_RESOURCES_CALIBRATED: bool = true;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = !cfg!(feature = "incremental-embassy-wait");
 }
 
 /// Upstream-hostap WPA3-Personal with the smoltcp L2 adapter.
@@ -275,11 +284,14 @@ impl fmt::Display for ArenaAdmissionError {
 /// and SPACC DMA scratch. Packet RAM remains linker-owned. Task stacks are
 /// atomically reserved through the runtime capability before hardware startup;
 /// the shared RF arena is installed separately from caller-owned storage.
+#[cfg_attr(feature = "incremental-embassy-wait", repr(C, align(32)))]
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
     runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
     crypto: StaticCell<Ws63CryptoStorage>,
     task_reservation: StaticCell<TaskReservation>,
+    #[cfg(feature = "incremental-embassy-wait")]
+    incremental_worker: StaticCell<IncrementalWorkerState>,
     claimed: AtomicBool,
     _profile: PhantomData<P>,
 }
@@ -293,6 +305,8 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
             runner: StaticCell::new(),
             crypto: StaticCell::new(),
             task_reservation: StaticCell::new(),
+            #[cfg(feature = "incremental-embassy-wait")]
+            incremental_worker: StaticCell::new(),
             claimed: AtomicBool::new(false),
             _profile: PhantomData,
         }
@@ -334,6 +348,14 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         // controller bound to it. Consuming that controller to start the runner
         // therefore initializes this cell at most once.
         self.runner.init(runner)
+    }
+
+    #[cfg(feature = "incremental-embassy-wait")]
+    pub(crate) fn store_incremental_worker(
+        &'static self,
+        worker: IncrementalWorkerState,
+    ) -> &'static mut IncrementalWorkerState {
+        self.incremental_worker.init(worker)
     }
 }
 
@@ -508,7 +530,11 @@ impl ResourceReport {
             radio_backend: "hisi-rf-ws63",
             supplicant_backend: "hostap-2.11-native",
             crypto_backend: "hisi-crypto-ws63-mixed",
-            runtime_contract: "hisi-rf-rtos-driver/v1.4-ported-cooperative",
+            runtime_contract: if cfg!(feature = "incremental-embassy-wait") {
+                "hisi-rf-rtos-driver/v1.5-ported-budgeted-worker"
+            } else {
+                "hisi-rf-rtos-driver/v1.4-ported-cooperative"
+            },
             task_admission: "owner-bound-slot-stack-reservation",
             event_capacity: EVENTS,
             caller_owned_bytes: control_storage_bytes
@@ -681,10 +707,16 @@ mod tests {
         );
         assert_eq!(report.linker_packet_ram_bytes, 0xc000);
         assert_eq!(report.main_stack_bytes_required, 0x8000);
-        assert_eq!(report.dynamic_tasks_required, 7);
+        assert_eq!(
+            report.dynamic_tasks_required,
+            crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED
+        );
         assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
         assert_eq!(report.runtime_internal_tasks, Some(2));
-        assert_eq!(report.task_stack_bytes, Some(7 * 24 * 1024));
+        assert_eq!(
+            report.task_stack_bytes,
+            Some(crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED * 24 * 1024)
+        );
         assert_eq!(
             report.runtime_object_headroom_bytes,
             Some(RUNTIME_OBJECT_HEADROOM_BYTES)
@@ -692,7 +724,9 @@ mod tests {
         assert_eq!(
             report.runtime_arena_bytes,
             Some(
-                7 * 24 * 1024 + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES + RUNTIME_OBJECT_HEADROOM_BYTES
+                crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED * 24 * 1024
+                    + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES
+                    + RUNTIME_OBJECT_HEADROOM_BYTES
             )
         );
         assert_eq!(report.supplicant_arena_bytes, None);
@@ -701,7 +735,10 @@ mod tests {
             Some(WifiWpa2Smoltcp::RF_ARENA_BYTES)
         );
         assert_eq!(report.flash_bytes, None);
-        assert!(report.runtime_resources_calibrated);
+        assert_eq!(
+            report.runtime_resources_calibrated,
+            !cfg!(feature = "incremental-embassy-wait")
+        );
         assert_eq!(
             report.caller_owned_bytes,
             report.control_storage_bytes
@@ -735,13 +772,36 @@ mod tests {
         assert!(
             output
                 .as_str()
-                .contains("\"runtime_contract\":\"hisi-rf-rtos-driver/v1.4-ported-cooperative\"")
+                .contains(if cfg!(feature = "incremental-embassy-wait") {
+                    "\"runtime_contract\":\"hisi-rf-rtos-driver/v1.5-ported-budgeted-worker\""
+                } else {
+                    "\"runtime_contract\":\"hisi-rf-rtos-driver/v1.4-ported-cooperative\""
+                })
         );
-        assert!(output.as_str().contains(concat!(
-            "\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032,",
-            "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":188928"
-        )));
-        assert!(output.as_str().contains("\"shared_rf_arena_bytes\":114176"));
+        assert!(
+            output
+                .as_str()
+                .contains(if cfg!(feature = "incremental-embassy-wait") {
+                    concat!(
+                        "\"runtime_internal_tasks\":2,\"task_stack_bytes\":196608,",
+                        "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":213504"
+                    )
+                } else {
+                    concat!(
+                        "\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032,",
+                        "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":188928"
+                    )
+                })
+        );
+        assert!(
+            output
+                .as_str()
+                .contains(if cfg!(feature = "incremental-embassy-wait") {
+                    "\"shared_rf_arena_bytes\":89600"
+                } else {
+                    "\"shared_rf_arena_bytes\":114176"
+                })
+        );
         assert!(
             output
                 .as_str()
@@ -768,7 +828,9 @@ mod tests {
         assert_eq!(report.composition_handle_bytes, 0);
         assert_eq!(
             report.control_storage_bytes,
-            if cfg!(feature = "incremental-backend-experiment") {
+            if cfg!(feature = "incremental-embassy-wait") {
+                0x3020
+            } else if cfg!(feature = "incremental-backend-experiment") {
                 0x2100
             } else {
                 0x20c0
