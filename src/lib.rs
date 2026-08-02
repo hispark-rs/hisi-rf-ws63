@@ -479,9 +479,21 @@ pub use station_pm_diag::{
     StationPowerSaveDiagnosticError, disable_station_power_save_for_diagnostics,
 };
 
-/// Dynamic worker count required by the public composition root: one bounded
-/// radio runner, one asynchronous WAL control worker, and five workers observed
-/// for the pinned WS63 Wi-Fi payload.
+/// Dynamic task slots required by the pinned WS63 vendor bootstrap.
+///
+/// The optional Rust incremental worker is reserved separately by the public
+/// composition root and must not be included in the vendor bootstrap's
+/// remaining-capacity check.
+#[cfg(any(
+    target_arch = "riscv32",
+    all(
+        feature = "net",
+        any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    )
+))]
+pub(crate) const WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED: usize = 7;
+
+/// Total dynamic task slots required by the public composition root.
 #[cfg(any(
     target_arch = "riscv32",
     all(
@@ -491,9 +503,9 @@ pub use station_pm_diag::{
 ))]
 pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize =
     if cfg!(feature = "incremental-embassy-wait") {
-        8
+        WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED + 1
     } else {
-        7
+        WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED
     };
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;

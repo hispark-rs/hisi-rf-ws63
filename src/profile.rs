@@ -750,6 +750,10 @@ mod tests {
             report.dynamic_tasks_required,
             crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED
         );
+        assert_eq!(
+            WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED,
+            crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED
+        );
         assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(
