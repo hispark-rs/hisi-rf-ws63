@@ -358,6 +358,7 @@ pub enum hisi_rf_ws63::WifiWpa2Smoltcp
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -370,6 +371,7 @@ pub enum hisi_rf_ws63::WifiWpa3Smoltcp
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -437,6 +439,7 @@ pub hisi_rf_ws63::ResourceReport::event_capacity: usize
 pub hisi_rf_ws63::ResourceReport::flash_bytes: core::option::Option<usize>
 pub hisi_rf_ws63::ResourceReport::linker_packet_ram_bytes: usize
 pub hisi_rf_ws63::ResourceReport::main_stack_bytes_required: usize
+pub hisi_rf_ws63::ResourceReport::minimum_task_stack_bytes: core::option::Option<usize>
 pub hisi_rf_ws63::ResourceReport::network: &'static str
 pub hisi_rf_ws63::ResourceReport::profile: &'static str
 pub hisi_rf_ws63::ResourceReport::profile_revision: &'static str
@@ -505,12 +508,14 @@ pub fn hisi_rf_ws63::WifiTxToken::consume<R, F: core::ops::function::FnOnce(&mut
 pub const hisi_rf_ws63::OSAL_NOK: i32
 pub const hisi_rf_ws63::OSAL_OK: i32
 pub const hisi_rf_ws63::OSAL_SYS_WAIT_FOREVER: u32
+pub const hisi_rf_ws63::SELECTED_MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_TASK_STACK_ARENA_BYTES: usize
 pub trait hisi_rf_ws63::Profile: hisi_rf_ws63::profile::sealed::Sealed
 pub const hisi_rf_ws63::Profile::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::ID: &'static str
+pub const hisi_rf_ws63::Profile::MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::Profile::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -522,6 +527,7 @@ pub const hisi_rf_ws63::Profile::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -533,6 +539,7 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
