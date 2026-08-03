@@ -18,7 +18,7 @@ use core::cell::{Cell, UnsafeCell};
 use core::ffi::{c_char, c_uint, c_void};
 #[cfg(target_arch = "riscv32")]
 use critical_section::Mutex;
-#[cfg(feature = "upstream-supplicant-port")]
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
 use portable_atomic::AtomicU32;
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::{AtomicBool, Ordering};
