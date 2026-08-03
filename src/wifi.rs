@@ -18,8 +18,10 @@ use core::cell::{Cell, UnsafeCell};
 use core::ffi::{c_char, c_uint, c_void};
 #[cfg(target_arch = "riscv32")]
 use critical_section::Mutex;
+#[cfg(feature = "upstream-supplicant-port")]
+use portable_atomic::AtomicU32;
 #[cfg(target_arch = "riscv32")]
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
+use portable_atomic::{AtomicBool, Ordering};
 
 const IFNAME_CAPACITY: usize = 17;
 const SSID_CAPACITY: usize = 32;

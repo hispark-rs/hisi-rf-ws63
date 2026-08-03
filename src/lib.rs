@@ -89,6 +89,12 @@ compile_error!("incremental-backend-experiment requires the upstream supplicant 
 #[cfg(all(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 compile_error!("select either a vendor supplicant profile or an upstream supplicant profile");
 
+#[cfg(all(
+    feature = "upstream-authenticator-wpa2",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+compile_error!("select either the AP authenticator or a STA supplicant profile");
+
 #[cfg(all(feature = "wpa2-personal", feature = "wpa3-personal"))]
 compile_error!("select exactly one WS63 Personal profile");
 
@@ -119,8 +125,11 @@ use critical_section::Mutex;
 
 #[cfg(all(
     target_arch = "riscv32",
-    feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        feature = "upstream-authenticator-wpa2"
+    )
 ))]
 mod link_contract {
     core::arch::global_asm!(include_str!(concat!(
@@ -156,7 +165,11 @@ pub mod alloc;
 )]
 mod blocking_diagnostics;
 mod compiler_rt;
-#[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    feature = "wifi-wpa2-personal",
+    feature = "upstream-supplicant-port",
+    feature = "upstream-authenticator-wpa2"
+))]
 mod crypto;
 #[cfg(feature = "rf-eloop-diag")]
 #[doc(hidden)]
@@ -189,6 +202,9 @@ pub mod rf_init_diag;
 mod station_pm_diag;
 pub mod timer;
 pub mod uapi;
+#[cfg(feature = "upstream-authenticator-wpa2")]
+#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code, unused_imports))]
+mod upstream_authenticator;
 #[cfg(feature = "upstream-supplicant-port")]
 mod upstream_supplicant;
 
@@ -219,6 +235,22 @@ pub fn blocking_backend_metrics() -> BlockingBackendMetrics {
 #[doc(hidden)]
 pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
     upstream_supplicant::diagnostic_snapshot()
+}
+
+/// Return secret-free crypto counters for the native AP HIL fixture.
+#[cfg(all(target_arch = "riscv32", feature = "upstream-authenticator-wpa2"))]
+#[doc(hidden)]
+pub fn upstream_authenticator_crypto_diagnostic_snapshot() -> [u32; 25] {
+    let entropy = crypto::hardware_entropy_diagnostic_snapshot();
+    let pbkdf2 = crypto::hardware_pbkdf2_diagnostic_snapshot();
+    let hash = crypto::hardware_hash_diagnostic_snapshot();
+    let cipher = crypto::hardware_cipher_diagnostic_snapshot();
+    let mut output = [0; 25];
+    output[..4].copy_from_slice(&entropy);
+    output[4..9].copy_from_slice(&pbkdf2);
+    output[9..19].copy_from_slice(&hash);
+    output[19..25].copy_from_slice(&cipher);
+    output
 }
 
 /// Return call counts plus last/max latency for association-related WAL ioctls.
@@ -462,7 +494,8 @@ pub fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
     test,
     target_arch = "riscv32",
     feature = "wifi-personal",
-    feature = "upstream-supplicant-port"
+    feature = "upstream-supplicant-port",
+    feature = "upstream-authenticator-wpa2"
 ))]
 mod wal;
 pub mod wifi;
@@ -496,9 +529,17 @@ pub use station_pm_diag::{
     all(
         feature = "net",
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
-    )
+    ),
+    feature = "upstream-authenticator-wpa2"
 ))]
 pub(crate) const WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED: usize = 7;
+
+/// Total caller-owned SRAM envelope shared by the WS63 radio runtime.
+///
+/// STA and AP compositions divide this same physical envelope between RTOS
+/// task stacks and the RF/hostap heap. Keeping the value here prevents the two
+/// firmware roles from silently drifting apart.
+pub const WS63_SHARED_RADIO_ARENA_BYTES: usize = 296 * 1024;
 
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;
@@ -507,6 +548,14 @@ mod wpa_compat;
 mod ws63_runtime_compat;
 
 pub use pmp::prepare_vendor_memory;
+#[cfg(feature = "upstream-authenticator-wpa2")]
+#[doc(hidden)]
+pub use upstream_authenticator::{
+    ACCESS_POINT_ARENA_BYTES, AccessPoint, AccessPointArenaStorage, AccessPointConfig,
+    AccessPointControlStorage, AccessPointInitError, AccessPointResources, AccessPointStorage,
+    InstalledAccessPointStorage, NativeAuthenticator, NativeAuthenticatorError, init_access_point,
+    prepare_upstream_authenticator_port,
+};
 #[cfg(feature = "upstream-supplicant-port")]
 #[doc(hidden)]
 pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supplicant_port};

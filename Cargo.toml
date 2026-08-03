@@ -119,6 +119,18 @@ upstream-supplicant-wpa3 = [
     "ws63-radio-sys/upstream-supplicant-wpa3",
     "hisi-crypto-ws63/p256",
 ]
+# Build the pinned upstream hostapd WPA2-Personal authenticator. AP and STA are
+# separate firmware roles and ws63-radio-sys rejects selecting both archives.
+upstream-authenticator-wpa2 = [
+    "wifi",
+    "ws63-radio-sys/upstream-authenticator-wpa2",
+    "dep:hisi-crypto",
+    "dep:hisi-crypto-ws63",
+    "hisi-crypto-ws63/cipher",
+    "hisi-crypto-ws63/hash",
+    "hisi-crypto-ws63/pbkdf2",
+    "hisi-crypto-ws63/hal-trng",
+]
 # Portable provider and host oracle. WS63 firmware defaults to unified-cipher.
 wifi-security-rustcrypto = ["wifi-wpa2-personal"]
 # Compatibility alias for the pre-profile bring-up feature.

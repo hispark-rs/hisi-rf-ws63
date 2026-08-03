@@ -31,7 +31,7 @@ const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "incremental-embassy
     // 4 KiB page from the large shared arenas.
     292 * 1024
 } else {
-    296 * 1024
+    crate::WS63_SHARED_RADIO_ARENA_BYTES
 };
 const TASK_STACK_ALLOCATOR_OVERHEAD_BYTES: usize = 512;
 const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;

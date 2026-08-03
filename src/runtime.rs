@@ -11,9 +11,12 @@ use hisi_rf_rtos_driver::{Error, TaskConfig, TaskEntry, TaskId, TaskPriority, Ta
 static TASK_RESERVATION: Mutex<Cell<Option<&'static TaskReservation>>> =
     Mutex::new(Cell::new(None));
 
-#[cfg(all(
-    feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+#[cfg(any(
+    all(
+        feature = "net",
+        any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    ),
+    feature = "upstream-authenticator-wpa2"
 ))]
 pub(crate) fn install_task_reservation(reservation: &'static TaskReservation) -> Result<(), Error> {
     critical_section::with(|cs| {

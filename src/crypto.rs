@@ -8,7 +8,11 @@
 pub(crate) use hisi_crypto::CryptoError;
 #[cfg(all(
     target_arch = "riscv32",
-    any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-wpa2-personal",
+        feature = "upstream-supplicant-port",
+        feature = "upstream-authenticator-wpa2"
+    )
 ))]
 use hisi_crypto::Pbkdf2HmacSha1;
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
@@ -671,19 +675,31 @@ pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
 }
 
 /// P-256 is not part of the selected firmware profile.
-#[cfg(all(target_arch = "riscv32", not(feature = "upstream-supplicant-wpa3")))]
+#[cfg(all(
+    target_arch = "riscv32",
+    not(feature = "upstream-supplicant-wpa3"),
+    any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
+))]
 pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
     [0; 8]
 }
 
 /// P-256 is not part of the selected firmware profile.
-#[cfg(all(target_arch = "riscv32", not(feature = "upstream-supplicant-wpa3")))]
+#[cfg(all(
+    target_arch = "riscv32",
+    not(feature = "upstream-supplicant-wpa3"),
+    any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
+))]
 pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
     [0; 10]
 }
 
 /// P-256 is not part of the selected firmware profile.
-#[cfg(all(target_arch = "riscv32", not(feature = "upstream-supplicant-wpa3")))]
+#[cfg(all(
+    target_arch = "riscv32",
+    not(feature = "upstream-supplicant-wpa3"),
+    any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
+))]
 pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
     [0; 10]
 }

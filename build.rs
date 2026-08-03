@@ -401,6 +401,9 @@ fn main() {
     if let Some(archive) = env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE") {
         combined_inputs.push(PathBuf::from(archive));
     }
+    if let Some(archive) = env::var_os("DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ARCHIVE") {
+        combined_inputs.push(PathBuf::from(archive));
+    }
     let combined_archive = out_dir.join("libws63_radio_closure.a");
     write_combined_archive(&combined_inputs, &patch_object, &combined_archive);
 
@@ -412,6 +415,11 @@ fn main() {
     if env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE").is_some() {
         roots.extend(metadata_list(
             "DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ROOT_SYMBOLS",
+        ));
+    }
+    if env::var_os("DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ARCHIVE").is_some() {
+        roots.extend(metadata_list(
+            "DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ROOT_SYMBOLS",
         ));
     }
     roots.push("__hisi_ws63_rom_patch_table".to_owned());
