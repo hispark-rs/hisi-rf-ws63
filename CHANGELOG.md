@@ -9,11 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add an opt-in, credential-free late-completion fixture that injects one
+  old-generation success after a replacement operation starts and requires the
+  worker proxy to drop it without disturbing the replacement scan.
 - Make the credential-free incremental scan and cancellation fixture identify
   the real 8 KiB RTOS worker and fail closed when its measured uninterrupted
   run exceeds the configured 100 ms CPU quota or a budget expires while the
   scheduler lock is held. The emitted counters remain HIL observations rather
   than a wall-clock return guarantee for individual vendor calls.
+
+### Fixed
+
+- Keep the replacement operation active when the RTOS worker proxy receives a
+  response for an older `OperationId`. Stale responses are discarded before
+  they can copy scan output or clear the current operation identity.
 
 ## [0.1.0-alpha.65] - 2026-08-03
 

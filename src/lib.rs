@@ -571,7 +571,9 @@ pub use composition::{
     feature = "incremental-embassy-wait",
     feature = "upstream-supplicant-port"
 ))]
-pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
+pub use composition::{
+    IncrementalRadioParts, IncrementalRadioRunner, IncrementalWorkerDiagnostics,
+};
 pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",

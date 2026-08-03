@@ -32,6 +32,8 @@ use hisi_rf_core::{
 };
 #[cfg(feature = "incremental-connect-profile")]
 use hisi_rf_core::{Passphrase, Security, StationConfig};
+#[cfg(feature = "incremental-late-completion-profile")]
+use hisi_rf_ws63::IncrementalWorkerDiagnostics;
 use hisi_rf_ws63::{
     IncrementalRadioParts, IncrementalRadioRunner, Ws63IncrementalWaitDiagnostics,
     declare_radio_storage,
@@ -94,6 +96,11 @@ static RUNNER_DIAGNOSTICS: Mutex<Cell<Option<IncrementalRunnerDiagnostics>>> =
     Mutex::new(Cell::new(None));
 static WAIT_DIAGNOSTICS: Mutex<Cell<Option<Ws63IncrementalWaitDiagnostics>>> =
     Mutex::new(Cell::new(None));
+#[cfg(feature = "incremental-late-completion-profile")]
+static WORKER_DIAGNOSTICS: Mutex<Cell<Option<IncrementalWorkerDiagnostics>>> =
+    Mutex::new(Cell::new(None));
+#[cfg(feature = "incremental-late-completion-profile")]
+static ARM_STALE_COMPLETION: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
 
 hisi_rtos::bind_interrupts!(struct RtosIrqs {
     TIMER_INT0 => hisi_rtos::ws63::TimerInterrupt;
@@ -237,6 +244,14 @@ async fn radio_runner(
         uart.write(b"RFDBG_A5B_RUNNER_WAKE ready=0x");
         uart.write(&hex8(u32::from(ready.bits())));
         uart.write(b"\r\n");
+        #[cfg(feature = "incremental-late-completion-profile")]
+        if critical_section::with(|cs| ARM_STALE_COMPLETION.borrow(cs).replace(false)) {
+            if runner.arm_stale_completion_injection().is_err() {
+                uart.write(b"RFDBG_A5B_STALE_COMPLETION_ERR reason=arm_failed\r\n");
+                halt()
+            }
+            uart.write(b"RFDBG_A5B_STALE_COMPLETION_ARMED\r\n");
+        }
         let started = monotonic_ms();
         let event = runner.run_once(ready).expect("incremental runner");
         write_incremental_event(uart, event);
@@ -252,6 +267,10 @@ async fn radio_runner(
             WAIT_DIAGNOSTICS
                 .borrow(cs)
                 .set(Some(runner.wait_diagnostics()));
+            #[cfg(feature = "incremental-late-completion-profile")]
+            WORKER_DIAGNOSTICS
+                .borrow(cs)
+                .set(Some(runner.worker_diagnostics()));
         });
     }
 }
@@ -281,6 +300,8 @@ async fn scan_profile(
 
     #[cfg(feature = "incremental-cancel-profile")]
     cancel_active_scan(controller, uart).await;
+    #[cfg(feature = "incremental-late-completion-profile")]
+    critical_section::with(|cs| ARM_STALE_COMPLETION.borrow(cs).set(true));
 
     let mut scan_results = [ScanResult::empty(); SCAN_RESULT_DEPTH];
     let scan_started = monotonic_ms();
@@ -399,6 +420,28 @@ async fn scan_profile(
         }
         _ => {
             uart.write(b"RFDBG_A5B_CANCEL_CONTRACT_ERR reason=missing_terminal_cancel\r\n");
+            halt()
+        }
+    }
+
+    #[cfg(feature = "incremental-late-completion-profile")]
+    match critical_section::with(|cs| WORKER_DIAGNOSTICS.borrow(cs).get()) {
+        Some(diagnostics)
+            if diagnostics.stale_responses_injected == 1
+                && diagnostics.stale_responses_dropped == 1 =>
+        {
+            uart.write(b"RFDBG_A5B_STALE_COMPLETION_OK\r\n");
+        }
+        Some(diagnostics) => {
+            uart.write(b"RFDBG_A5B_STALE_COMPLETION_ERR injected=0x");
+            uart.write(&hex8(diagnostics.stale_responses_injected));
+            uart.write(b" dropped=0x");
+            uart.write(&hex8(diagnostics.stale_responses_dropped));
+            uart.write(b"\r\n");
+            halt()
+        }
+        None => {
+            uart.write(b"RFDBG_A5B_STALE_COMPLETION_ERR reason=missing_snapshot\r\n");
             halt()
         }
     }

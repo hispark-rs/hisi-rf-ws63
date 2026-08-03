@@ -53,7 +53,11 @@ struct WorkerMailbox {
     cancellation: Option<OperationId>,
     worker_busy: bool,
     active: Option<OperationId>,
+    last_terminal: Option<OperationId>,
     deadline_us: Option<u64>,
+    stale_responses_dropped: u32,
+    stale_responses_injected: u32,
+    stale_injection_armed: bool,
     scan: [ScanResult; SCAN_CAPACITY],
 }
 
@@ -65,7 +69,11 @@ impl WorkerMailbox {
             cancellation: None,
             worker_busy: false,
             active: None,
+            last_terminal: None,
             deadline_us: None,
+            stale_responses_dropped: 0,
+            stale_responses_injected: 0,
+            stale_injection_armed: false,
             scan: [ScanResult::empty(); SCAN_CAPACITY],
         }
     }
@@ -146,10 +154,21 @@ impl IncrementalWorkerState {
             .map_err(|_| worker_error(ERROR_WORKER_RUNTIME))
     }
 
-    fn take_response(&self, scan_output: &mut [ScanResult]) -> Option<WorkerResponse> {
+    fn take_response(
+        &self,
+        expected_id: OperationId,
+        scan_output: &mut [ScanResult],
+    ) -> Option<WorkerResponse> {
         critical_section::with(|cs| {
             let mut mailbox = self.mailbox.borrow_ref_mut(cs);
             let response = mailbox.response.take();
+            if response
+                .as_ref()
+                .is_some_and(|response| response.id() != expected_id)
+            {
+                mailbox.stale_responses_dropped = mailbox.stale_responses_dropped.saturating_add(1);
+                return response;
+            }
             if let Some(WorkerResponse::Polled {
                 result: Ok(report), ..
             }) = response.as_ref()
@@ -161,6 +180,34 @@ impl IncrementalWorkerState {
             }
             response
         })
+    }
+
+    pub(crate) fn diagnostics(&self) -> (u32, u32) {
+        critical_section::with(|cs| {
+            let mailbox = self.mailbox.borrow_ref(cs);
+            (
+                mailbox.stale_responses_dropped,
+                mailbox.stale_responses_injected,
+            )
+        })
+    }
+
+    #[cfg(feature = "incremental-late-completion-profile")]
+    pub(crate) fn arm_stale_completion_injection(&self) -> Result<(), BackendError> {
+        let armed = critical_section::with(|cs| {
+            let mut mailbox = self.mailbox.borrow_ref_mut(cs);
+            if mailbox.last_terminal.is_none() || mailbox.stale_injection_armed {
+                false
+            } else {
+                mailbox.stale_injection_armed = true;
+                true
+            }
+        });
+        if armed {
+            Ok(())
+        } else {
+            Err(worker_error(ERROR_WORKER_PROTOCOL))
+        }
     }
 
     fn deadline(&self, id: OperationId) -> Option<u64> {
@@ -178,13 +225,24 @@ impl IncrementalWorkerState {
                 let _ = hisi_rf_rtos_driver::yield_now();
                 continue;
             }
-            let (cancel, command, previous_active) = critical_section::with(|cs| {
+            let (cancel, command, previous_active, injected_stale) = critical_section::with(|cs| {
                 let mut mailbox = self.mailbox.borrow_ref_mut(cs);
                 let cancel = mailbox.cancellation.take();
                 let command = mailbox.command.take();
                 let previous_active = mailbox.active;
+                let injected_stale = match (&command, mailbox.last_terminal) {
+                    (Some(WorkerCommand::Poll { id, budget, .. }), Some(stale_id))
+                        if mailbox.stale_injection_armed && stale_id != *id =>
+                    {
+                        mailbox.stale_injection_armed = false;
+                        mailbox.stale_responses_injected =
+                            mailbox.stale_responses_injected.saturating_add(1);
+                        Some((stale_id, *budget))
+                    }
+                    _ => None,
+                };
                 mailbox.worker_busy = cancel.is_some() || command.is_some();
-                (cancel, command, previous_active)
+                (cancel, command, previous_active, injected_stale)
             });
 
             // SAFETY: this worker is the sole code path that dereferences the
@@ -202,6 +260,25 @@ impl IncrementalWorkerState {
                     }),
                     None,
                 ),
+                Some(WorkerCommand::Poll { .. }) if injected_stale.is_some() => {
+                    let (stale_id, budget) = injected_stale.expect("matched stale injection");
+                    let report = WorkReport::try_new(
+                        stale_id,
+                        budget,
+                        0,
+                        1,
+                        true,
+                        PollDisposition::Complete(hisi_rf_core::IncrementalCompletion::Initialized),
+                    )
+                    .expect("diagnostic completion fits its submitted budget");
+                    (
+                        Some(WorkerResponse::Polled {
+                            id: stale_id,
+                            result: Ok(report),
+                        }),
+                        None,
+                    )
+                }
                 Some(WorkerCommand::Poll { id, reason, budget }) => {
                     let mut scan = [ScanResult::empty(); SCAN_CAPACITY];
                     let result = backend.poll(id, reason, budget, &mut scan);
@@ -213,6 +290,9 @@ impl IncrementalWorkerState {
             let deadline = active.and_then(|id| backend.next_deadline_us(id));
             critical_section::with(|cs| {
                 let mut mailbox = self.mailbox.borrow_ref_mut(cs);
+                if previous_active.is_some() && active.is_none() {
+                    mailbox.last_terminal = previous_active;
+                }
                 mailbox.worker_busy = false;
                 mailbox.active = active;
                 mailbox.deadline_us = deadline;
@@ -282,7 +362,7 @@ impl IncrementalWifiBackend for WorkerBackedIncrementalBackend {
         budget: WorkBudget,
         scan_output: &mut [ScanResult],
     ) -> Result<WorkReport, BackendError> {
-        if let Some(response) = self.state.take_response(scan_output) {
+        while let Some(response) = self.state.take_response(id, scan_output) {
             match response {
                 WorkerResponse::Started {
                     id: response_id,
@@ -294,10 +374,8 @@ impl IncrementalWifiBackend for WorkerBackedIncrementalBackend {
                 WorkerResponse::Polled {
                     id: response_id,
                     result,
-                } if response_id == id => {
-                    return result;
-                }
-                _ => return Err(worker_error(ERROR_WORKER_PROTOCOL)),
+                } if response_id == id => return result,
+                _ => continue,
             }
         }
         self.submit_poll(id, reason, budget)
@@ -324,20 +402,33 @@ fn next_active(
     previous: Option<OperationId>,
     response: Option<&WorkerResponse>,
 ) -> Option<OperationId> {
-    response.map_or(previous, |response| match response {
-        WorkerResponse::Started { id, result: Ok(()) } => Some(*id),
-        WorkerResponse::Polled {
-            id,
-            result: Ok(report),
-        } if matches!(
-            report.disposition(),
-            PollDisposition::Pending(_) | PollDisposition::BudgetExhausted(_)
-        ) =>
-        {
-            Some(*id)
+    response.map_or(previous, |response| {
+        if previous.is_some_and(|active| active != response.id()) {
+            return previous;
         }
-        _ => None,
+        match response {
+            WorkerResponse::Started { id, result: Ok(()) } => Some(*id),
+            WorkerResponse::Polled {
+                id,
+                result: Ok(report),
+            } if matches!(
+                report.disposition(),
+                PollDisposition::Pending(_) | PollDisposition::BudgetExhausted(_)
+            ) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        }
     })
+}
+
+impl WorkerResponse {
+    fn id(&self) -> OperationId {
+        match self {
+            Self::Started { id, .. } | Self::Polled { id, .. } => *id,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -386,6 +477,34 @@ mod tests {
             result: Ok(report),
         };
         assert_eq!(next_active(Some(id), Some(&response)), None);
+    }
+
+    #[test]
+    fn stale_terminal_response_cannot_release_replacement_identity() {
+        let mut tracker = OperationTracker::new();
+        let stale = tracker.queue(0).unwrap();
+        tracker.mark_started(stale).unwrap();
+        tracker.commit_terminal(stale).unwrap();
+        tracker.reap(stale).unwrap();
+        let replacement = tracker.queue(0).unwrap();
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+        let report = WorkReport::try_new(
+            stale,
+            budget,
+            0,
+            1,
+            true,
+            PollDisposition::Complete(IncrementalCompletion::Initialized),
+        )
+        .unwrap();
+        let response = WorkerResponse::Polled {
+            id: stale,
+            result: Ok(report),
+        };
+        assert_eq!(
+            next_active(Some(replacement), Some(&response)),
+            Some(replacement)
+        );
     }
 
     #[test]

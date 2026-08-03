@@ -567,7 +567,19 @@ fn wrap_wifi_parts<const EVENTS: usize>(
 pub struct IncrementalRadioController<P: Profile + 'static, const EVENTS: usize> {
     #[cfg_attr(not(feature = "incremental-embassy-wait"), allow(dead_code))]
     inner: CoreIncrementalRadioController<EVENTS>,
+    #[cfg(feature = "incremental-embassy-wait")]
+    worker: &'static IncrementalWorkerState,
     _profile: core::marker::PhantomData<P>,
+}
+
+/// WS63-specific diagnostics for the RTOS-backed incremental worker.
+#[cfg(feature = "incremental-embassy-wait")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IncrementalWorkerDiagnostics {
+    /// Responses carrying an operation generation older than the active one.
+    pub stale_responses_dropped: u32,
+    /// Diagnostic stale responses injected after a replacement started.
+    pub stale_responses_injected: u32,
 }
 
 /// Wi-Fi handles and the explicit A5B bounded runner.
@@ -584,6 +596,7 @@ pub struct IncrementalRadioParts<const EVENTS: usize> {
 pub struct IncrementalRadioRunner<const EVENTS: usize> {
     inner: hisi_rf_core::IncrementalRadioRunner<ActiveIncrementalBackend, EVENTS>,
     platform: Ws63IncrementalWaitPlatform,
+    worker: &'static IncrementalWorkerState,
 }
 
 #[cfg(feature = "incremental-embassy-wait")]
@@ -597,6 +610,7 @@ impl<P: Profile + 'static, const EVENTS: usize> IncrementalRadioController<P, EV
             runner: IncrementalRadioRunner {
                 inner: runner,
                 platform: Ws63IncrementalWaitPlatform::new(),
+                worker: self.worker,
             },
         }
     }
@@ -649,6 +663,24 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     /// Snapshot raw WS63 callback/L2/timer wait-bridge activity.
     pub fn wait_diagnostics(&self) -> Ws63IncrementalWaitDiagnostics {
         self.platform.diagnostics()
+    }
+
+    /// Snapshot stale-generation handling in the RTOS worker proxy.
+    pub fn worker_diagnostics(&self) -> IncrementalWorkerDiagnostics {
+        let (stale_responses_dropped, stale_responses_injected) = self.worker.diagnostics();
+        IncrementalWorkerDiagnostics {
+            stale_responses_dropped,
+            stale_responses_injected,
+        }
+    }
+
+    /// Arm one stale-success response after the next replacement starts.
+    ///
+    /// This exists only for the credential-free A5B silicon contract fixture.
+    #[cfg(feature = "incremental-late-completion-profile")]
+    #[doc(hidden)]
+    pub fn arm_stale_completion_injection(&self) -> Result<(), BackendError> {
+        self.worker.arm_stale_completion_injection()
     }
 }
 
@@ -752,10 +784,10 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     #[cfg(not(feature = "incremental-embassy-wait"))]
     let _ = reservation;
     #[cfg(feature = "incremental-embassy-wait")]
-    let backend = {
+    let (backend, worker) = {
         let worker = storage.store_incremental_worker(IncrementalWorkerState::new(backend));
         match worker.start(worker_reservation) {
-            Ok(backend) => backend,
+            Ok(backend) => (backend, &*worker),
             Err(error) => {
                 release_profile_reservation(worker_reservation)?;
                 return Err(InitError::runtime(error));
@@ -765,6 +797,8 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
         Ok(controller) => Ok(IncrementalRadioController {
             inner: controller,
+            #[cfg(feature = "incremental-embassy-wait")]
+            worker,
             _profile: core::marker::PhantomData,
         }),
         Err(error) => Err(InitError::core(error)),
