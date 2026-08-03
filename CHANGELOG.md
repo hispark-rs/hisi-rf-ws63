@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.67] - 2026-08-03
+
+### Fixed
+
+- Preserve multiple backend and L2 wake observations that arrive before the
+  incremental runner polls, preventing worker-response readiness from hiding a
+  queued EAPOL input event.
+- Keep queued supplicant input level-triggered until consumed and retain scan
+  storage without manufacturing a mutable reference from shared state.
+- Update the exact WS63 radio ABI dependency to `ws63-radio-sys
+  0.1.0-alpha.9` for the association diagnostic contract.
+
 ## [0.1.0-alpha.66] - 2026-08-03
 
 ### Added
