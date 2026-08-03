@@ -49,6 +49,8 @@ const PORT_READY: u8 = 2;
 const PORT_POISONED: u8 = 3;
 const AP_INTERFACE_TYPE: u8 = 3;
 const MODE_11B_G_N_AX: u32 = 4;
+const EVENT_NEW_STATION: c_int = 0;
+const EVENT_DEL_STATION: c_int = 1;
 const EVENT_RX_MGMT: c_int = 2;
 const IOCTL_RECEIVE_EAPOL: u32 = 6;
 const IOCTL_ENABLE_EAPOL: u32 = 7;
@@ -82,6 +84,9 @@ struct AccessPointDiagnosticCounters {
     management_dropped: AtomicU32,
     management_fed: AtomicU32,
     management_feed_errors: AtomicU32,
+    stations_associated: AtomicU32,
+    stations_disassociated: AtomicU32,
+    station_feed_errors: AtomicU32,
     eapol_polls: AtomicU32,
     eapol_received: AtomicU32,
     eapol_fed: AtomicU32,
@@ -105,6 +110,9 @@ impl AccessPointDiagnosticCounters {
             management_dropped: AtomicU32::new(0),
             management_fed: AtomicU32::new(0),
             management_feed_errors: AtomicU32::new(0),
+            stations_associated: AtomicU32::new(0),
+            stations_disassociated: AtomicU32::new(0),
+            station_feed_errors: AtomicU32::new(0),
             eapol_polls: AtomicU32::new(0),
             eapol_received: AtomicU32::new(0),
             eapol_fed: AtomicU32::new(0),
@@ -128,6 +136,9 @@ impl AccessPointDiagnosticCounters {
             management_dropped: self.management_dropped.load(Ordering::Acquire),
             management_fed: self.management_fed.load(Ordering::Acquire),
             management_feed_errors: self.management_feed_errors.load(Ordering::Acquire),
+            stations_associated: self.stations_associated.load(Ordering::Acquire),
+            stations_disassociated: self.stations_disassociated.load(Ordering::Acquire),
+            station_feed_errors: self.station_feed_errors.load(Ordering::Acquire),
             eapol_polls: self.eapol_polls.load(Ordering::Acquire),
             eapol_received: self.eapol_received.load(Ordering::Acquire),
             eapol_fed: self.eapol_fed.load(Ordering::Acquire),
@@ -153,6 +164,9 @@ pub struct AccessPointDiagnostics {
     pub management_dropped: u32,
     pub management_fed: u32,
     pub management_feed_errors: u32,
+    pub stations_associated: u32,
+    pub stations_disassociated: u32,
+    pub station_feed_errors: u32,
     pub eapol_polls: u32,
     pub eapol_received: u32,
     pub eapol_fed: u32,
@@ -166,8 +180,11 @@ pub struct AccessPointDiagnostics {
 }
 
 struct MgmtFrame {
+    event: c_int,
     frequency_mhz: u32,
     rssi_dbm: i32,
+    reassociated: u8,
+    address: [u8; 6],
     len: usize,
     bytes: [u8; MAX_MGMT_FRAME_LEN],
 }
@@ -186,8 +203,11 @@ impl MgmtSlot {
         Self {
             state: AtomicU8::new(SLOT_FREE),
             frame: UnsafeCell::new(MgmtFrame {
+                event: EVENT_RX_MGMT,
                 frequency_mhz: 0,
                 rssi_dbm: 0,
+                reassociated: 0,
+                address: [0; 6],
                 len: 0,
                 bytes: [0; MAX_MGMT_FRAME_LEN],
             }),
@@ -613,23 +633,63 @@ impl NativeAuthenticator {
             // SAFETY: SLOT_READING grants this runner exclusive access until
             // it publishes SLOT_FREE below.
             let frame = unsafe { &*slot.frame.get() };
-            let status = unsafe {
-                ws63_radio_sys::authenticator::hisi_wpa_ap_feed_mgmt(
-                    self.context.as_ptr(),
-                    frame.frequency_mhz,
-                    frame.rssi_dbm,
-                    frame.bytes.as_ptr(),
-                    frame.len,
-                )
+            let event = frame.event;
+            let status = match event {
+                EVENT_NEW_STATION => unsafe {
+                    ws63_radio_sys::authenticator::hisi_wpa_ap_feed_associated(
+                        self.context.as_ptr(),
+                        frame.address.as_ptr(),
+                        frame.bytes.as_ptr(),
+                        frame.len,
+                        frame.reassociated,
+                    )
+                },
+                EVENT_DEL_STATION => unsafe {
+                    ws63_radio_sys::authenticator::hisi_wpa_ap_feed_disassociated(
+                        self.context.as_ptr(),
+                        frame.address.as_ptr(),
+                    )
+                },
+                EVENT_RX_MGMT => unsafe {
+                    ws63_radio_sys::authenticator::hisi_wpa_ap_feed_mgmt(
+                        self.context.as_ptr(),
+                        frame.frequency_mhz,
+                        frame.rssi_dbm,
+                        frame.bytes.as_ptr(),
+                        frame.len,
+                    )
+                },
+                _ => -1,
             };
             slot.state.store(SLOT_FREE, Ordering::Release);
-            AP_DIAGNOSTICS
-                .management_fed
-                .fetch_add(1, Ordering::Relaxed);
+            match event {
+                EVENT_NEW_STATION => {
+                    AP_DIAGNOSTICS
+                        .stations_associated
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                EVENT_DEL_STATION => {
+                    AP_DIAGNOSTICS
+                        .stations_disassociated
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                EVENT_RX_MGMT => {
+                    AP_DIAGNOSTICS
+                        .management_fed
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            }
             if status != 0 {
-                AP_DIAGNOSTICS
-                    .management_feed_errors
-                    .fetch_add(1, Ordering::Relaxed);
+                if event == EVENT_RX_MGMT {
+                    AP_DIAGNOSTICS
+                        .management_feed_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    AP_DIAGNOSTICS
+                        .station_feed_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 return Err(NativeAuthenticatorError::Poll(status));
             }
         }
@@ -1361,11 +1421,34 @@ unsafe extern "C" fn eapol_event(_: *mut c_void, _: *mut c_void) {
 }
 
 #[repr(C)]
+struct VendorNewStation {
+    reassociated: i32,
+    information_elements_len: usize,
+    information_elements: *const u8,
+    address: [u8; 6],
+    reserved: [u8; 2],
+}
+
+#[repr(C)]
 struct VendorRxMgmt {
     frame: *const u8,
     frame_len: u32,
     signal_mbm: i32,
     frequency_mhz: i32,
+}
+
+fn claim_driver_event_slot() -> Option<&'static MgmtSlot> {
+    MGMT_RX.iter().find(|slot| {
+        slot.state
+            .compare_exchange(SLOT_FREE, SLOT_WRITING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    })
+}
+
+fn release_vendor_buffer(pointer: *const u8) {
+    if !pointer.is_null() {
+        crate::alloc::osal_kfree(pointer.cast_mut().cast());
+    }
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1380,47 +1463,100 @@ unsafe extern "C" fn ap_event(
     AP_DIAGNOSTICS
         .last_event_length
         .store(length, Ordering::Release);
-    if ifname.is_null()
-        || event != EVENT_RX_MGMT
-        || data.is_null()
-        || length as usize != core::mem::size_of::<VendorRxMgmt>()
-    {
+    if ifname.is_null() || data.is_null() {
         AP_DIAGNOSTICS
             .invalid_events
             .fetch_add(1, Ordering::Relaxed);
         return 0;
     }
-    let input = unsafe { &*data.cast::<VendorRxMgmt>() };
-    let frame_len = input.frame_len as usize;
-    if input.frame.is_null() || frame_len == 0 || frame_len > MAX_MGMT_FRAME_LEN {
-        AP_DIAGNOSTICS
-            .management_dropped
-            .fetch_add(1, Ordering::Relaxed);
-        return -1;
+    match event {
+        EVENT_NEW_STATION if length as usize == core::mem::size_of::<VendorNewStation>() => {
+            let input = unsafe { &*data.cast::<VendorNewStation>() };
+            let ies_len = input.information_elements_len;
+            if ies_len > MAX_MGMT_FRAME_LEN
+                || (ies_len != 0 && input.information_elements.is_null())
+            {
+                release_vendor_buffer(input.information_elements);
+                AP_DIAGNOSTICS
+                    .station_feed_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                return -1;
+            }
+            let Some(slot) = claim_driver_event_slot() else {
+                release_vendor_buffer(input.information_elements);
+                AP_DIAGNOSTICS
+                    .station_feed_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                return -1;
+            };
+            let output = unsafe { &mut *slot.frame.get() };
+            output.event = EVENT_NEW_STATION;
+            output.reassociated = u8::from(input.reassociated != 0);
+            output.address = input.address;
+            output.len = ies_len;
+            if ies_len != 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        input.information_elements,
+                        output.bytes.as_mut_ptr(),
+                        ies_len,
+                    );
+                }
+            }
+            release_vendor_buffer(input.information_elements);
+            slot.state.store(SLOT_READY, Ordering::Release);
+        }
+        EVENT_DEL_STATION if length == 6 => {
+            let Some(slot) = claim_driver_event_slot() else {
+                AP_DIAGNOSTICS
+                    .station_feed_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                return -1;
+            };
+            let output = unsafe { &mut *slot.frame.get() };
+            output.event = EVENT_DEL_STATION;
+            unsafe { core::ptr::copy_nonoverlapping(data, output.address.as_mut_ptr(), 6) };
+            output.len = 0;
+            slot.state.store(SLOT_READY, Ordering::Release);
+        }
+        EVENT_RX_MGMT if length as usize == core::mem::size_of::<VendorRxMgmt>() => {
+            let input = unsafe { &*data.cast::<VendorRxMgmt>() };
+            let frame_len = input.frame_len as usize;
+            if input.frame.is_null() || frame_len == 0 || frame_len > MAX_MGMT_FRAME_LEN {
+                release_vendor_buffer(input.frame);
+                AP_DIAGNOSTICS
+                    .management_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                return -1;
+            }
+            let Some(slot) = claim_driver_event_slot() else {
+                release_vendor_buffer(input.frame);
+                AP_DIAGNOSTICS
+                    .management_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                return -1;
+            };
+            let output = unsafe { &mut *slot.frame.get() };
+            output.event = EVENT_RX_MGMT;
+            output.frequency_mhz = input.frequency_mhz.max(0) as u32;
+            output.rssi_dbm = input.signal_mbm / 100;
+            output.len = frame_len;
+            unsafe {
+                core::ptr::copy_nonoverlapping(input.frame, output.bytes.as_mut_ptr(), frame_len);
+            }
+            release_vendor_buffer(input.frame);
+            slot.state.store(SLOT_READY, Ordering::Release);
+            AP_DIAGNOSTICS
+                .management_queued
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        _ => {
+            AP_DIAGNOSTICS
+                .invalid_events
+                .fetch_add(1, Ordering::Relaxed);
+            return 0;
+        }
     }
-    let Some(slot) = MGMT_RX.iter().find(|slot| {
-        slot.state
-            .compare_exchange(SLOT_FREE, SLOT_WRITING, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    }) else {
-        AP_DIAGNOSTICS
-            .management_dropped
-            .fetch_add(1, Ordering::Relaxed);
-        return -1;
-    };
-    // SAFETY: SLOT_WRITING grants this callback exclusive access and the
-    // vendor guarantees the source frame remains valid for this callback.
-    let output = unsafe { &mut *slot.frame.get() };
-    output.frequency_mhz = input.frequency_mhz.max(0) as u32;
-    output.rssi_dbm = input.signal_mbm / 100;
-    output.len = frame_len;
-    unsafe {
-        core::ptr::copy_nonoverlapping(input.frame, output.bytes.as_mut_ptr(), frame_len);
-    }
-    slot.state.store(SLOT_READY, Ordering::Release);
-    AP_DIAGNOSTICS
-        .management_queued
-        .fetch_add(1, Ordering::Relaxed);
     let _ = RUNNER_WAKE.up();
     0
 }
@@ -1442,6 +1578,7 @@ unsafe extern "C" {
 #[cfg(target_arch = "riscv32")]
 const _: () = {
     assert!(core::mem::size_of::<VendorRxMgmt>() == 16);
+    assert!(core::mem::size_of::<VendorNewStation>() == 20);
     assert!(core::mem::size_of::<FrequencyParameters>() == 36);
     assert!(core::mem::size_of::<BeaconData>() == 16);
     assert!(core::mem::size_of::<ApSettings>() == 84);
