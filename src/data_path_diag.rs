@@ -9,13 +9,9 @@ static RX_PREPARES: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_ZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_NONZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_LAST_RESULT: AtomicU32 = AtomicU32::new(0);
-static RX_DATA_FRAMES: AtomicU32 = AtomicU32::new(0);
-static RX_QOS_DATA_FRAMES: AtomicU32 = AtomicU32::new(0);
-static RX_PROTECTED_DATA_FRAMES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
-    fn oal_netbuf_mac_header(netbuf: *const c_void) -> *const u8;
     #[link_name = "__real_dmac_tx_complete_event_handler"]
     fn vendor_dmac_tx_complete_event_handler(vap: *mut c_void, message: *mut c_void) -> i32;
     #[link_name = "__real_dmac_rx_prepare_data_patch"]
@@ -36,14 +32,11 @@ pub(crate) fn rx_prepares() -> u32 {
     RX_PREPARES.load(Ordering::Relaxed)
 }
 
-pub(crate) fn rx_prepare_results() -> [u32; 6] {
+pub(crate) fn rx_prepare_results() -> [u32; 3] {
     [
         RX_PREPARE_ZERO.load(Ordering::Relaxed),
         RX_PREPARE_NONZERO.load(Ordering::Relaxed),
         RX_PREPARE_LAST_RESULT.load(Ordering::Relaxed),
-        RX_DATA_FRAMES.load(Ordering::Relaxed),
-        RX_QOS_DATA_FRAMES.load(Ordering::Relaxed),
-        RX_PROTECTED_DATA_FRAMES.load(Ordering::Relaxed),
     ]
 }
 
@@ -78,26 +71,6 @@ pub unsafe extern "C" fn dmac_rx_prepare_data_patch(
     process_flag: *mut c_void,
 ) -> u32 {
     RX_PREPARES.fetch_add(1, Ordering::Relaxed);
-    if !netbuf.is_null() {
-        // SAFETY: the vendor owns a live RX netbuf for the duration of this
-        // callback and exposes its 802.11 header through this exact helper.
-        let frame = unsafe { oal_netbuf_mac_header(netbuf) };
-        if !frame.is_null() {
-            // Frame-control byte 0 contains type/subtype; byte 1 contains the
-            // protected-frame bit. Read only the fixed header prefix.
-            let control0 = unsafe { frame.read() };
-            let control1 = unsafe { frame.add(1).read() };
-            if control0 & 0x0c == 0x08 {
-                RX_DATA_FRAMES.fetch_add(1, Ordering::Relaxed);
-                if control0 & 0x80 != 0 {
-                    RX_QOS_DATA_FRAMES.fetch_add(1, Ordering::Relaxed);
-                }
-                if control1 & 0x40 != 0 {
-                    RX_PROTECTED_DATA_FRAMES.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-    }
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // this call preserves all arguments and the return value.
     let result = unsafe {
