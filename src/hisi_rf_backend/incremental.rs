@@ -307,6 +307,9 @@ pub(crate) trait SupplicantPort {
     fn poll_scan(&mut self) -> Result<Option<usize>, BackendError>;
     fn scan_result(&self, index: usize) -> Option<ScanResult>;
     fn scan_cache_pending(&self) -> bool;
+    fn scan_cache_completion_observed(&self) -> bool {
+        false
+    }
     fn cancel_scan(&mut self);
     fn configure(&mut self, config: &StationConfig) -> Result<(), BackendError>;
     fn connect(&mut self) -> Result<(), BackendError>;
@@ -344,6 +347,10 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
 
     fn scan_cache_pending(&self) -> bool {
         (**self).scan_cache_pending()
+    }
+
+    fn scan_cache_completion_observed(&self) -> bool {
+        (**self).scan_cache_completion_observed()
     }
 
     fn cancel_scan(&mut self) {
@@ -428,6 +435,12 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
         self.supplicant
             .as_ref()
             .is_some_and(NativeSupplicant::scan_cache_capture_pending)
+    }
+
+    fn scan_cache_completion_observed(&self) -> bool {
+        self.supplicant
+            .as_ref()
+            .is_some_and(NativeSupplicant::scan_cache_completion_observed)
     }
 
     fn cancel_scan(&mut self) {
@@ -957,10 +970,12 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
 
         let (scan_completion_observed, scan_work_pending) = if is_scan {
             let cache_pending = self.port.scan_cache_pending();
+            let native_completion_observed = self.port.scan_cache_completion_observed();
             let active = self.active_mut(id)?;
             (
-                active.scan_total.is_some(),
-                cache_pending
+                active.scan_total.is_some() || native_completion_observed,
+                native_completion_observed
+                    || cache_pending
                     || active
                         .scan_total
                         .is_some_and(|total| active.scan_seen < total),
@@ -1434,6 +1449,7 @@ mod tests {
         scan_poll_calls: u8,
         scan_complete_on_poll: u8,
         scan_cache_pending: bool,
+        scan_cache_completion_observed: bool,
         scan_start_calls: u8,
         scan_cancel_calls: u8,
         connect_calls: u8,
@@ -1458,6 +1474,7 @@ mod tests {
                 scan_poll_calls: 0,
                 scan_complete_on_poll: 0,
                 scan_cache_pending: false,
+                scan_cache_completion_observed: false,
                 scan_start_calls: 0,
                 scan_cancel_calls: 0,
                 connect_calls: 0,
@@ -1493,6 +1510,10 @@ mod tests {
 
         fn scan_cache_pending(&self) -> bool {
             self.scan_cache_pending
+        }
+
+        fn scan_cache_completion_observed(&self) -> bool {
+            self.scan_cache_completion_observed
         }
 
         fn cancel_scan(&mut self) {
@@ -2415,6 +2436,51 @@ mod tests {
             }))
         );
         assert_eq!(output[0].ssid.as_bytes(), b"late-ready");
+    }
+
+    #[test]
+    fn native_scan_completion_precedes_rust_scan_state_without_timing_out() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_total = Some(1);
+        port.scan_complete_on_poll = 3;
+        port.scan_cache_completion_observed = true;
+        port.scan_results = [Some(scan_result(b"native-first", 1)), None, None];
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 1];
+
+        let retained = backend
+            .poll(id, WakeReason::Timer, budget, &mut output)
+            .unwrap();
+        assert!(matches!(
+            retained.disposition(),
+            PollDisposition::Pending(wait) if wait == WaitSet::BACKEND.union(WaitSet::TIMER)
+        ));
+        assert_eq!(backend.port.scan_poll_calls, 2);
+
+        backend.clock.0 = 1_001;
+        let completed = backend
+            .poll(id, WakeReason::Backend, budget, &mut output)
+            .unwrap();
+        assert_eq!(
+            completed.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 1,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[0].ssid.as_bytes(), b"native-first");
     }
 
     #[test]

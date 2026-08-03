@@ -1551,6 +1551,15 @@ impl NativeSupplicant {
         NATIVE_SCAN_ACTIVE.load(Ordering::Acquire) || SCAN_EVENT_QUEUE.has_pending()
     }
 
+    /// Whether the vendor callback has published scan completion.
+    ///
+    /// The callback clears `NATIVE_SCAN_ACTIVE` before it queues the native
+    /// scan-done event and before the parallel Rust scan state is updated.
+    /// This edge is therefore the earliest completion linearization point.
+    pub(crate) fn scan_cache_completion_observed(&self) -> bool {
+        !NATIVE_SCAN_ACTIVE.load(Ordering::Acquire)
+    }
+
     /// Abort a failed vendor scan without leaking events into the next scan.
     pub(crate) fn cancel_scan_cache_capture(&mut self) {
         NATIVE_SCAN_ACTIVE.store(false, Ordering::Release);
