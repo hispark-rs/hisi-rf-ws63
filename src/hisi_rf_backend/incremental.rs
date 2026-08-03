@@ -955,15 +955,18 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             return self.clear_with_error(operation_error(ERROR_WORK_BUDGET));
         }
 
-        let scan_work_pending = if is_scan {
+        let (scan_completion_observed, scan_work_pending) = if is_scan {
             let cache_pending = self.port.scan_cache_pending();
             let active = self.active_mut(id)?;
-            cache_pending
-                || active
-                    .scan_total
-                    .is_some_and(|total| active.scan_seen < total)
+            (
+                active.scan_total.is_some(),
+                cache_pending
+                    || active
+                        .scan_total
+                        .is_some_and(|total| active.scan_seen < total),
+            )
         } else {
-            false
+            (false, false)
         };
         let timeout = {
             let active = self.active_mut(id)?;
@@ -971,7 +974,12 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
                 .then(|| result.next_deadline_ms.saturating_mul(1_000));
             if finished_us >= active.deadline_us
                 && matches!(outcome, OperationOutcome::Continue)
-                && !(is_scan && made_progress && scan_work_pending)
+                // Scan completion is the operation's timeout linearization
+                // point. Once observed, the bounded native-cache drain and
+                // result copy are already-owned work and must not be turned
+                // into a timeout merely because one runner turn made no
+                // progress.
+                && !(is_scan && scan_completion_observed && scan_work_pending)
             {
                 Some(timeout_error(active))
             } else {
@@ -2456,6 +2464,51 @@ mod tests {
             }))
         );
         assert_eq!(output[2].ssid.as_bytes(), b"third");
+    }
+
+    #[test]
+    fn observed_scan_completion_survives_a_no_progress_cache_drain_turn() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_total = Some(1);
+        port.scan_results = [Some(scan_result(b"retained", 1)), None, None];
+        port.scan_cache_pending = true;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(1, 100).unwrap();
+        advance_start(&mut backend, id, budget);
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 1];
+
+        let draining = backend
+            .poll(id, WakeReason::Timer, budget, &mut output)
+            .unwrap();
+        assert!(matches!(
+            draining.disposition(),
+            PollDisposition::Pending(wait) if wait == WaitSet::BACKEND.union(WaitSet::TIMER)
+        ));
+        assert_eq!(output[0], ScanResult::empty());
+
+        backend.port.scan_cache_pending = false;
+        backend.clock.0 = 1_001;
+        let completed = backend
+            .poll(id, WakeReason::Backend, budget, &mut output)
+            .unwrap();
+        assert_eq!(
+            completed.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 1,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[0].ssid.as_bytes(), b"retained");
     }
 
     #[test]
