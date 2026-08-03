@@ -170,6 +170,10 @@ incremental-embassy-wait = [
 # and disconnect. Credentials are accepted only through compile-time
 # environment variables and the fixture never emits them.
 incremental-connect-profile = []
+# Cancel one real scan through the public async controller, then require a
+# replacement scan to complete. This credential-free HIL profile proves that
+# the RTOS worker consumes cancellation and releases the operation slot.
+incremental-cancel-profile = []
 
 [build-dependencies]
 ar_archive_writer = "0.5.2"

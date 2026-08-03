@@ -63,6 +63,11 @@ compile_error!("incremental-connect-profile requires wpa2-personal or wpa3-perso
     feature = "wpa3-personal"
 ))]
 compile_error!("incremental-connect-profile requires exactly one WPA profile");
+#[cfg(all(
+    feature = "incremental-connect-profile",
+    feature = "incremental-cancel-profile"
+))]
+compile_error!("incremental connect and cancellation profiles are mutually exclusive");
 
 #[cfg(feature = "incremental-connect-profile")]
 const TEST_SSID: &[u8] = match option_env!("WS63_WIFI_SSID") {
@@ -274,6 +279,9 @@ async fn scan_profile(
         monotonic_ms().wrapping_sub(initialize_started),
     );
 
+    #[cfg(feature = "incremental-cancel-profile")]
+    cancel_active_scan(controller, uart).await;
+
     let mut scan_results = [ScanResult::empty(); SCAN_RESULT_DEPTH];
     let scan_started = monotonic_ms();
     let mut scan_attempt = 0_u8;
@@ -380,6 +388,20 @@ async fn scan_profile(
         uart.write(b"RFDBG_A5B_WAIT_ERR reason=missing_snapshot\r\n");
     }
 
+    #[cfg(feature = "incremental-cancel-profile")]
+    match runner {
+        Some(diagnostics)
+            if diagnostics.cancellations_requested != 0
+                && diagnostics.operations_cancelled != 0 =>
+        {
+            uart.write(b"RFDBG_A5B_CANCEL_CONTRACT_OK\r\n");
+        }
+        _ => {
+            uart.write(b"RFDBG_A5B_CANCEL_CONTRACT_ERR reason=missing_terminal_cancel\r\n");
+            halt()
+        }
+    }
+
     let blocking = hisi_rf_ws63::blocking_backend_metrics();
     uart.write(b"RFDBG_A5B_BLOCKING init_calls=0x");
     uart.write(&hex8(blocking.initialize.calls));
@@ -393,12 +415,43 @@ async fn scan_profile(
     uart.write(&hex8(blocking.internal_sleep_calls));
     uart.write(b" supplicant_poll=0x");
     uart.write(&hex8(blocking.supplicant_poll_calls));
-    #[cfg(not(feature = "incremental-connect-profile"))]
+    #[cfg(all(
+        not(feature = "incremental-connect-profile"),
+        not(feature = "incremental-cancel-profile")
+    ))]
     uart.write(b"\r\nRFDBG_A5B_SCAN_PROFILE_OK\r\n");
     #[cfg(feature = "incremental-connect-profile")]
     uart.write(b"\r\nRFDBG_A5B_CONNECT_PROFILE_OK\r\n");
+    #[cfg(feature = "incremental-cancel-profile")]
+    uart.write(b"\r\nRFDBG_A5B_CANCEL_PROFILE_OK\r\n");
 
     halt()
+}
+
+#[cfg(feature = "incremental-cancel-profile")]
+async fn cancel_active_scan(
+    controller: &mut WifiController<RADIO_EVENT_DEPTH>,
+    uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
+) {
+    let mut discarded = [ScanResult::empty(); 1];
+    let scan = controller.scan(
+        ScanConfig::new(
+            hisi_rf_core::OperationTimeout::try_from_millis(15_000).expect("non-zero scan timeout"),
+        ),
+        &mut discarded,
+    );
+    match with_timeout(Duration::from_millis(100), scan).await {
+        Err(_) => uart.write(b"RFDBG_A5B_CANCEL_REQUESTED kind=scan\r\n"),
+        Ok(_) => {
+            uart.write(b"RFDBG_A5B_CANCEL_PROFILE_ERR reason=scan_completed_before_cancel\r\n");
+            halt()
+        }
+    }
+
+    // Native scan cancellation finishes asynchronously. Wait before reusing
+    // the controller so the replacement scan proves terminal cleanup rather
+    // than racing the old firmware transaction.
+    Timer::after(Duration::from_millis(500)).await;
 }
 
 fn write_scan_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, prefix: &[u8]) {
@@ -647,6 +700,10 @@ fn write_runner_diagnostics(
     uart.write(&hex8(diagnostics.operations_started));
     uart.write(b" completed=0x");
     uart.write(&hex8(diagnostics.operations_completed));
+    uart.write(b" cancel_req=0x");
+    uart.write(&hex8(diagnostics.cancellations_requested));
+    uart.write(b" cancelled=0x");
+    uart.write(&hex8(diagnostics.operations_cancelled));
     uart.write(b" pending=0x");
     uart.write(&hex8(diagnostics.pending_polls));
     uart.write(b" exhausted=0x");
