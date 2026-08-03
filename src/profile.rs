@@ -274,17 +274,25 @@ impl ActiveProfile for WifiWpa2Smoltcp {}
 impl ActiveProfile for WifiWpa3Smoltcp {}
 
 /// The profile selected by the current Cargo feature set.
-#[cfg(feature = "wpa2-personal")]
+#[cfg(all(feature = "wpa2-personal", not(feature = "wpa3-personal")))]
 pub type SelectedProfile = WifiWpa2Smoltcp;
 
 /// The profile selected by the current Cargo feature set.
-#[cfg(feature = "wpa3-personal")]
+#[cfg(all(feature = "wpa3-personal", not(feature = "wpa2-personal")))]
 pub type SelectedProfile = WifiWpa3Smoltcp;
 
 /// Byte capacity selected by the active named radio profile.
+#[cfg(any(
+    all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+    all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+))]
 pub const SELECTED_RF_ARENA_BYTES: usize = SelectedProfile::RF_ARENA_BYTES;
 
 /// Scheduler arena bytes required by the active named profile.
+#[cfg(any(
+    all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+    all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+))]
 pub const SELECTED_RUNTIME_ARENA_BYTES: usize = SelectedProfile::RUNTIME_ARENA_BYTES;
 
 /// RTOS minimum task-stack setting required by the active named profile.
@@ -292,9 +300,17 @@ pub const SELECTED_RUNTIME_ARENA_BYTES: usize = SelectedProfile::RUNTIME_ARENA_B
 /// Vendor reservations still retain their measured 24 KiB stacks. This value
 /// permits the separately reserved Rust incremental worker to consume its
 /// smaller typed stack without weakening any vendor reservation.
+#[cfg(any(
+    all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+    all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+))]
 pub const SELECTED_MINIMUM_TASK_STACK_BYTES: usize = SelectedProfile::MINIMUM_TASK_STACK_BYTES;
 
 /// Migration alias for [`SELECTED_RUNTIME_ARENA_BYTES`].
+#[cfg(any(
+    all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+    all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+))]
 #[deprecated(
     since = "0.1.0-alpha.59",
     note = "use SELECTED_RUNTIME_ARENA_BYTES; the arena also backs RTOS objects"

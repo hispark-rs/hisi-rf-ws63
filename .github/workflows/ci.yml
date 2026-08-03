@@ -6,6 +6,32 @@ on:
   pull_request:
 
 jobs:
+  feature-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-09
+      - name: Reject a missing station security profile cleanly
+        run: |
+          log="${RUNNER_TEMP}/missing-profile.log"
+          if cargo check --locked --features incremental-backend-experiment 2>"${log}"; then
+            echo "backend unexpectedly accepted an incremental STA without a security profile" >&2
+            exit 1
+          fi
+          grep -F 'select exactly one WS63 station profile' "${log}"
+          ! grep -E 'E0428|E0432|E0433|SelectedProfile' "${log}"
+      - name: Reject conflicting station security profiles cleanly
+        run: |
+          log="${RUNNER_TEMP}/conflicting-profile.log"
+          if cargo check --locked --features wpa2-personal,wpa3-personal,incremental-backend-experiment 2>"${log}"; then
+            echo "backend unexpectedly accepted conflicting station profiles" >&2
+            exit 1
+          fi
+          grep -F 'select exactly one WS63 Personal profile' "${log}"
+          ! grep -E 'E0428|E0432|E0433|SelectedProfile' "${log}"
+
   api-boundary:
     runs-on: ubuntu-latest
     steps:

@@ -107,6 +107,13 @@ compile_error!("select exactly one AP authenticator security profile");
 #[cfg(all(feature = "wpa2-personal", feature = "wpa3-personal"))]
 compile_error!("select exactly one WS63 Personal profile");
 
+#[cfg(all(
+    feature = "net",
+    feature = "upstream-supplicant-port",
+    not(any(feature = "wpa2-personal", feature = "wpa3-personal"))
+))]
+compile_error!("select exactly one WS63 station profile: `wpa2-personal` or `wpa3-personal`");
+
 #[cfg(all(test, not(target_arch = "riscv32")))]
 mod host_test_support {
     use core::ffi::c_void;
@@ -664,18 +671,27 @@ pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
 pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+        all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+    )
 ))]
 #[allow(deprecated)]
 pub use profile::SELECTED_TASK_STACK_ARENA_BYTES;
 #[cfg(all(
     feature = "net",
-    any(feature = "wpa2-personal", feature = "wpa3-personal")
+    any(
+        all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+        all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+    )
 ))]
 pub use profile::SelectedProfile;
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
+        all(feature = "wpa3-personal", not(feature = "wpa2-personal"))
+    )
 ))]
 pub use profile::{
     ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
