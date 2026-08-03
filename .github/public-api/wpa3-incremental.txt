@@ -359,6 +359,7 @@ impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -367,11 +368,14 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 pub enum hisi_rf_ws63::WifiWpa3Smoltcp
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -380,6 +384,8 @@ pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 pub struct hisi_rf_ws63::IncrementalRadioController<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize>
 impl<P: hisi_rf_ws63::Profile + 'static, const EVENTS: usize> hisi_rf_ws63::IncrementalRadioController<P, EVENTS>
 pub fn hisi_rf_ws63::IncrementalRadioController<P, EVENTS>::split(self, hisi_rf_core::incremental::WorkBudget) -> hisi_rf_ws63::IncrementalRadioParts<EVENTS>
@@ -457,6 +463,10 @@ pub hisi_rf_ws63::ResourceReport::supplicant_arena_bytes: core::option::Option<u
 pub hisi_rf_ws63::ResourceReport::supplicant_backend: &'static str
 pub hisi_rf_ws63::ResourceReport::task_admission: &'static str
 pub hisi_rf_ws63::ResourceReport::task_stack_bytes: core::option::Option<usize>
+pub hisi_rf_ws63::ResourceReport::vendor_stack_bytes_per_task: usize
+pub hisi_rf_ws63::ResourceReport::vendor_task_slots: usize
+pub hisi_rf_ws63::ResourceReport::worker_stack_bytes_per_task: core::option::Option<usize>
+pub hisi_rf_ws63::ResourceReport::worker_task_slots: core::option::Option<usize>
 impl hisi_rf_ws63::ResourceReport
 pub fn hisi_rf_ws63::ResourceReport::write_json(self, &mut impl core::fmt::Write) -> core::fmt::Result
 pub struct hisi_rf_ws63::Resources<P: hisi_rf_ws63::Profile>
@@ -481,6 +491,12 @@ pub const fn hisi_rf_ws63::Storage<P, EVENTS>::new() -> Self
 pub const fn hisi_rf_ws63::Storage<P, EVENTS>::report(&self) -> hisi_rf_ws63::ResourceReport
 impl<P: hisi_rf_ws63::Profile, const EVENTS: usize> core::default::Default for hisi_rf_ws63::Storage<P, EVENTS>
 pub fn hisi_rf_ws63::Storage<P, EVENTS>::default() -> Self
+pub struct hisi_rf_ws63::TaskGroupPlan
+pub hisi_rf_ws63::TaskGroupPlan::owner: u32
+pub hisi_rf_ws63::TaskGroupPlan::stack_bytes_per_task: usize
+pub hisi_rf_ws63::TaskGroupPlan::task_slots: usize
+impl hisi_rf_ws63::TaskGroupPlan
+pub const fn hisi_rf_ws63::TaskGroupPlan::total_stack_bytes(self) -> usize
 pub struct hisi_rf_ws63::WifiDevice(_)
 impl hisi_rf_ws63::WifiDevice
 pub fn hisi_rf_ws63::WifiDevice::dhcp_diagnostics(&self) -> DhcpDiagnostics
@@ -499,6 +515,18 @@ pub fn hisi_rf_ws63::WifiDevice::transmit(&mut self, smoltcp::time::Instant) -> 
 pub struct hisi_rf_ws63::WifiParts<const EVENTS: usize>
 pub hisi_rf_ws63::WifiParts::controller: hisi_rf_core::wifi::WifiController<EVENTS>
 pub hisi_rf_ws63::WifiParts::device: hisi_rf_ws63::WifiDevice
+pub struct hisi_rf_ws63::WifiResourcePlan
+pub hisi_rf_ws63::WifiResourcePlan::event_capacity: usize
+pub hisi_rf_ws63::WifiResourcePlan::rf_heap_min_bytes: usize
+pub hisi_rf_ws63::WifiResourcePlan::runtime_object_bytes: usize
+pub hisi_rf_ws63::WifiResourcePlan::vendor: hisi_rf_ws63::TaskGroupPlan
+pub hisi_rf_ws63::WifiResourcePlan::worker: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+impl hisi_rf_ws63::WifiResourcePlan
+pub const fn hisi_rf_ws63::WifiResourcePlan::minimum_task_stack_bytes(self) -> usize
+pub const fn hisi_rf_ws63::WifiResourcePlan::runtime_arena_bytes(self) -> usize
+pub const fn hisi_rf_ws63::WifiResourcePlan::total_stack_bytes(self) -> usize
+pub const fn hisi_rf_ws63::WifiResourcePlan::total_task_slots(self) -> usize
+pub const fn hisi_rf_ws63::WifiResourcePlan::with_event_capacity(self, usize) -> Self
 pub struct hisi_rf_ws63::WifiRxToken(_)
 impl smoltcp::phy::RxToken for hisi_rf_ws63::WifiRxToken
 pub fn hisi_rf_ws63::WifiRxToken::consume<R, F: core::ops::function::FnOnce(&[u8]) -> R>(self, F) -> R
@@ -516,6 +544,7 @@ pub trait hisi_rf_ws63::Profile: hisi_rf_ws63::profile::sealed::Sealed
 pub const hisi_rf_ws63::Profile::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::ID: &'static str
 pub const hisi_rf_ws63::Profile::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::Profile::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
 pub const hisi_rf_ws63::Profile::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::Profile::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -524,10 +553,13 @@ pub const hisi_rf_ws63::Profile::SECURITY: &'static str
 pub const hisi_rf_ws63::Profile::TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::Profile::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::Profile::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::Profile::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::Profile::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -536,10 +568,13 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::RUNTIME_OBJECT_HEADROOM_BYTES: usize
@@ -548,6 +583,8 @@ pub const hisi_rf_ws63::WifiWpa3Smoltcp::SECURITY: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 pub fn hisi_rf_ws63::association_timing_diagnostics() -> hisi_rf_ws63::blocking_diagnostics::AssociationTimingDiagnostics
 pub fn hisi_rf_ws63::hardware_cipher_diagnostic_snapshot() -> [u32; 6]
 pub fn hisi_rf_ws63::hardware_p256_curve_diagnostic_snapshot() -> [u32; 10]
@@ -561,5 +598,6 @@ pub const fn hisi_rf_ws63::resource_report<P: hisi_rf_ws63::Profile, const EVENT
 pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics
 pub fn hisi_rf_ws63::set_log_sink(hisi_rf_ws63::LogSink)
 pub fn hisi_rf_ws63::upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2]
+pub const fn hisi_rf_ws63::wifi_resource_plan<P: hisi_rf_ws63::Profile, const EVENTS: usize>() -> hisi_rf_ws63::WifiResourcePlan
 pub type hisi_rf_ws63::LogSink = fn(&[u8])
 pub type hisi_rf_ws63::SelectedProfile = hisi_rf_ws63::WifiWpa3Smoltcp
