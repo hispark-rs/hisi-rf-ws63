@@ -67,6 +67,7 @@ static PORT_STATE: AtomicU8 = AtomicU8::new(PORT_FREE);
 static PORT_IDENTITY: u8 = 0;
 static DRIVER_CONTEXT: DriverContext = DriverContext::new();
 static AP_CLAIMED: AtomicBool = AtomicBool::new(false);
+static EAPOL_PENDING: AtomicU32 = AtomicU32::new(0);
 static MGMT_RX: [MgmtSlot; MGMT_QUEUE_CAPACITY] = [const { MgmtSlot::new() }; MGMT_QUEUE_CAPACITY];
 static AP_DIAGNOSTICS: AccessPointDiagnosticCounters = AccessPointDiagnosticCounters::new();
 
@@ -459,6 +460,7 @@ pub enum AccessPointInitError {
 /// Running native authenticator and its vendor AP interface.
 pub struct AccessPoint {
     authenticator: NativeAuthenticator,
+    network_device_taken: bool,
 }
 
 impl AccessPoint {
@@ -484,10 +486,35 @@ impl AccessPoint {
         AP_DIAGNOSTICS.snapshot()
     }
 
+    /// Take the AP's Rust-visible L2 device and hardware address.
+    ///
+    /// The network stack is owned by the application. This method succeeds
+    /// once so two independent stacks cannot drain the process-wide WS63 RX
+    /// queue at the same time.
+    pub fn take_network_device(&mut self) -> Option<AccessPointNetworkDevice> {
+        if self.network_device_taken {
+            return None;
+        }
+        let hardware_address = crate::netif::hardware_address()?;
+        self.network_device_taken = true;
+        Some(AccessPointNetworkDevice {
+            hardware_address,
+            device: crate::netif_smoltcp::Ws63Device,
+        })
+    }
+
     /// Stop beaconing and release the native authenticator context.
     pub fn stop(&mut self) -> Result<(), NativeAuthenticatorError> {
         self.authenticator.stop()
     }
+}
+
+/// L2 resources owned by the application-side SoftAP network stack.
+pub struct AccessPointNetworkDevice {
+    /// MAC address assigned to the vendor AP netdev.
+    pub hardware_address: [u8; 6],
+    /// Rust-visible Ethernet device backed by the WS63 data path.
+    pub device: crate::netif_smoltcp::Ws63Device,
 }
 
 impl<'a> AccessPointConfig<'a> {
@@ -694,18 +721,28 @@ impl NativeAuthenticator {
             }
         }
 
-        AP_DIAGNOSTICS.eapol_polls.fetch_add(1, Ordering::Relaxed);
+        if EAPOL_PENDING.swap(0, Ordering::AcqRel) == 0 {
+            return Ok(());
+        }
         let mut ethernet = [0_u8; ETHERNET_HEADER_LEN + MAX_EAPOL_PAYLOAD_LEN];
-        let mut receive = RxEapol {
-            buffer: ethernet.as_mut_ptr(),
-            length: ethernet.len() as u32,
-        };
-        let status = crate::wal::ioctl(
-            DRIVER_CONTEXT.ifname(),
-            IOCTL_RECEIVE_EAPOL,
-            (&mut receive as *mut RxEapol).cast(),
-        );
-        if status == 0 && receive.length as usize >= ETHERNET_HEADER_LEN {
+        loop {
+            AP_DIAGNOSTICS.eapol_polls.fetch_add(1, Ordering::Relaxed);
+            let mut receive = RxEapol {
+                buffer: ethernet.as_mut_ptr(),
+                length: ethernet.len() as u32,
+            };
+            let status = crate::wal::ioctl(
+                DRIVER_CONTEXT.ifname(),
+                IOCTL_RECEIVE_EAPOL,
+                (&mut receive as *mut RxEapol).cast(),
+            );
+            if status != 0 {
+                break;
+            }
+            if (receive.length as usize) < ETHERNET_HEADER_LEN {
+                AP_DIAGNOSTICS.eapol_errors.fetch_add(1, Ordering::Relaxed);
+                return Err(NativeAuthenticatorError::Poll(-1));
+            }
             AP_DIAGNOSTICS
                 .eapol_received
                 .fetch_add(1, Ordering::Relaxed);
@@ -723,8 +760,6 @@ impl NativeAuthenticator {
                 return Err(NativeAuthenticatorError::Poll(status));
             }
             AP_DIAGNOSTICS.eapol_fed.fetch_add(1, Ordering::Relaxed);
-        } else if status != 0 && status != -22 {
-            AP_DIAGNOSTICS.eapol_errors.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -893,7 +928,11 @@ pub fn init_access_point<const N: usize>(
         authenticator
             .start()
             .map_err(AccessPointInitError::Authenticator)?;
-        Ok(AccessPoint { authenticator })
+        crate::netif_smoltcp::set_tx_sink(crate::netif::vendor_tx_sink);
+        Ok(AccessPoint {
+            authenticator,
+            network_device_taken: false,
+        })
     }
 }
 
@@ -1417,6 +1456,7 @@ unsafe extern "C" fn wake_runner(_: *mut c_void) {
 }
 
 unsafe extern "C" fn eapol_event(_: *mut c_void, _: *mut c_void) {
+    EAPOL_PENDING.fetch_add(1, Ordering::Release);
     let _ = RUNNER_WAKE.up();
 }
 

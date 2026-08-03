@@ -123,6 +123,7 @@ upstream-supplicant-wpa3 = [
 # separate firmware roles and ws63-radio-sys rejects selecting both archives.
 upstream-authenticator-wpa2 = [
     "wifi",
+    "net",
     "ws63-radio-sys/upstream-authenticator-wpa2",
     "dep:hisi-crypto",
     "dep:hisi-crypto-ws63",
