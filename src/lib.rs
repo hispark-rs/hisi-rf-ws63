@@ -549,6 +549,12 @@ pub use incremental_wait::{Ws63IncrementalWaitDiagnostics, incremental_wait_diag
 mod profile;
 #[cfg(all(
     feature = "net",
+    feature = "incremental-late-completion-profile",
+    feature = "upstream-supplicant-port"
+))]
+pub use composition::IncrementalWorkerDiagnostics;
+#[cfg(all(
+    feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{
@@ -571,9 +577,7 @@ pub use composition::{
     feature = "incremental-embassy-wait",
     feature = "upstream-supplicant-port"
 ))]
-pub use composition::{
-    IncrementalRadioParts, IncrementalRadioRunner, IncrementalWorkerDiagnostics,
-};
+pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
 pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",

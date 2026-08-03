@@ -572,8 +572,8 @@ pub struct IncrementalRadioController<P: Profile + 'static, const EVENTS: usize>
     _profile: core::marker::PhantomData<P>,
 }
 
-/// WS63-specific diagnostics for the RTOS-backed incremental worker.
-#[cfg(feature = "incremental-embassy-wait")]
+/// WS63-specific diagnostics for the stale-completion contract fixture.
+#[cfg(feature = "incremental-late-completion-profile")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IncrementalWorkerDiagnostics {
     /// Responses carrying an operation generation older than the active one.
@@ -666,6 +666,7 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     }
 
     /// Snapshot stale-generation handling in the RTOS worker proxy.
+    #[cfg(feature = "incremental-late-completion-profile")]
     pub fn worker_diagnostics(&self) -> IncrementalWorkerDiagnostics {
         let (stale_responses_dropped, stale_responses_injected) = self.worker.diagnostics();
         IncrementalWorkerDiagnostics {
