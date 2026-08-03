@@ -11,18 +11,15 @@
 #![no_main]
 
 use core::cell::Cell;
-use core::num::NonZeroU32;
+use core::num::{NonZeroU32, NonZeroUsize};
 
 use critical_section::Mutex;
 use embassy_executor::{Executor, Spawner};
 use embassy_time::{Duration, Timer, with_timeout};
 use hisi_hal::Peripherals;
 use hisi_hal::delay::Delay;
-use hisi_hal::interrupt;
 use hisi_hal::rf_power::RfPower;
-use hisi_hal::software_interrupt::SoftwareInterrupt0;
 use hisi_hal::time::Instant;
-use hisi_hal::timer::TimerAlarm0;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
@@ -36,8 +33,8 @@ use hisi_rf_core::{
 #[cfg(feature = "incremental-connect-profile")]
 use hisi_rf_core::{Passphrase, Security, StationConfig};
 use hisi_rf_ws63::{
-    IncrementalRadioParts, IncrementalRadioRunner, InstalledRadioStorage, SelectedProfile,
-    Ws63IncrementalWaitDiagnostics, declare_radio_storage,
+    IncrementalRadioParts, IncrementalRadioRunner, Ws63IncrementalWaitDiagnostics,
+    declare_radio_storage,
 };
 use hisi_riscv_rt::entry;
 use static_cell::StaticCell;
@@ -79,6 +76,10 @@ const TEST_PASSPHRASE: &[u8] = match option_env!("WS63_WIFI_PASSPHRASE") {
 };
 
 declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
+static RTOS_STORAGE: hisi_rtos::SchedulerStorage<15> = hisi_rtos::SchedulerStorage::new();
+#[cfg_attr(target_arch = "riscv32", unsafe(link_section = ".hisi.shared-arena"))]
+static RTOS_ARENA: hisi_rtos::SchedulerArena<{ hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES }> =
+    hisi_rtos::SchedulerArena::new();
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 static UART: StaticCell<Uart<'static, hisi_hal::peripherals::Uart0<'static>>> = StaticCell::new();
 static RADIO_PARTS: StaticCell<
@@ -88,6 +89,11 @@ static RUNNER_DIAGNOSTICS: Mutex<Cell<Option<IncrementalRunnerDiagnostics>>> =
     Mutex::new(Cell::new(None));
 static WAIT_DIAGNOSTICS: Mutex<Cell<Option<Ws63IncrementalWaitDiagnostics>>> =
     Mutex::new(Cell::new(None));
+
+hisi_rtos::bind_interrupts!(struct RtosIrqs {
+    TIMER_INT0 => hisi_rtos::ws63::TimerInterrupt;
+    SOFT_INT0 => hisi_rtos::ws63::SoftwareInterrupt;
+});
 
 #[entry]
 fn main() -> ! {
@@ -105,33 +111,28 @@ fn main() -> ! {
     let installed_storage = RADIO_STORAGE
         .install()
         .expect("install caller-owned radio storage");
+    let scheduler_storage = RTOS_STORAGE
+        .install(&RTOS_ARENA)
+        .expect("install caller-owned scheduler storage");
 
     let mut delay = Delay::new();
     let rf_ready = RfPower::new(p.CMU, p.CLDO_CRG).enable(p.EFUSE, &mut delay);
     let (_cldo_crg, efuse) = rf_ready.into_parts();
     uart.write(b"RFDBG_A5B_RF_POWER_OK\r\n");
 
-    let _timer = TimerAlarm0::new(p.TIMER);
-    let _software_interrupt = SoftwareInterrupt0::new(p.SYS_CTL1);
-    let runtime = hisi_rtos::start_with_port(
-        hisi_rtos::PortedConfig {
+    let runtime = hisi_rtos::ws63::start(
+        hisi_rtos::ws63::Config {
+            minimum_stack_size: NonZeroUsize::new(hisi_rf_ws63::SELECTED_MINIMUM_TASK_STACK_BYTES)
+                .expect("selected profile minimum task stack is non-zero"),
             radio_task_policy: hisi_rtos::RunPolicy::Cooperative,
-            #[cfg(feature = "bootstrap-stage-diag")]
             max_scheduler_lock_duration: NonZeroU32::new(5_000).unwrap(),
-            ..hisi_rtos::PortedConfig::default()
         },
-        hisi_rtos::Resources {
-            allocate: rtos_allocate,
-            deallocate: rtos_deallocate,
-            monotonic_ms,
-        },
-        hisi_rtos::SchedulerPort {
-            max_timer_delay: NonZeroU32::new(TimerAlarm0::MAX_DELAY_MS)
-                .expect("timer maximum delay must be non-zero"),
-            arm_timer: TimerAlarm0::arm_millis,
-            disarm_timer: TimerAlarm0::disarm,
-            pend_reschedule: SoftwareInterrupt0::pend_interrupt,
+        hisi_rtos::ws63::Resources {
+            timer: p.TIMER,
+            software_interrupt: p.SYS_CTL1,
+            storage: scheduler_storage,
             contract_violation: rtos_contract_violation,
+            irqs: RtosIrqs::new(),
         },
     )
     .expect("start ported runtime");
@@ -139,8 +140,9 @@ fn main() -> ! {
     // The adopted main thread hosts Embassy's executor. Executor idle does not
     // call the RTOS yield contract, so let the timer preempt it and run vendor
     // workers that produce scan/result callbacks.
-    let main_task = hisi_rf_rtos_driver::current_task().expect("adopted main task");
+    let main_task = runtime.handle().current_task().expect("adopted main task");
     runtime
+        .handle()
         .set_task_run_policy(
             main_task,
             hisi_rtos::RunPolicy::Preemptive {
@@ -149,8 +151,6 @@ fn main() -> ! {
         )
         .expect("configure Embassy executor thread");
 
-    unsafe { interrupt::enable_global() };
-    hisi_rtos::request_reschedule();
     uart.write(b"RFDBG_A5B_RTOS_OK\r\n");
 
     let bootstrap_started = monotonic_ms();
@@ -173,9 +173,27 @@ fn main() -> ! {
     let parts = match parts {
         Ok(parts) => parts,
         Err(error) => {
+            let diagnostic = (*error).diagnostic();
             uart.write(b"RFDBG_A5B_BOOTSTRAP_ERR code=");
-            uart.write((*error).diagnostic().code().as_str().as_bytes());
+            uart.write(diagnostic.code().as_str().as_bytes());
+            uart.write(b" stage=");
+            uart.write(diagnostic.stage().as_str().as_bytes());
+            if let Some(code) = diagnostic.backend_code() {
+                uart.write(b" backend=0x");
+                uart.write(&hex8(code));
+            }
             uart.write(b"\r\n");
+            for index in 0..diagnostic.trace().len() {
+                let entry = diagnostic
+                    .trace()
+                    .get(index)
+                    .expect("bounded diagnostic trace");
+                uart.write(b"RFDBG_A5B_BOOTSTRAP_ERR_TRACE kind=");
+                uart.write(entry.kind().as_str().as_bytes());
+                uart.write(b" value=0x");
+                uart.write(&hex8(entry.value()));
+                uart.write(b"\r\n");
+            }
             halt()
         }
     };
@@ -708,32 +726,6 @@ fn write_incremental_event(
         IncrementalDriverEvent::Failed { .. } => uart.write(b"failed"),
     }
     uart.write(b"\r\n");
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn TIMER_INT0() {
-    TimerAlarm0::clear_interrupt();
-    hisi_rtos::interrupt_enter();
-    hisi_rtos::on_timer_interrupt();
-    hisi_rtos::interrupt_exit();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn SOFT_INT0() {
-    SoftwareInterrupt0::clear_interrupt();
-    hisi_rtos::interrupt_enter();
-    hisi_rtos::on_software_interrupt();
-    hisi_rtos::interrupt_exit();
-}
-
-unsafe fn rtos_allocate(size: usize) -> *mut u8 {
-    // SAFETY: hisi-rtos releases this allocation through `rtos_deallocate`.
-    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::allocate(size) }
-}
-
-unsafe fn rtos_deallocate(pointer: *mut u8) {
-    // SAFETY: hisi-rtos returns only pointers produced by `rtos_allocate`.
-    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::deallocate(pointer) };
 }
 
 fn monotonic_ms() -> u64 {

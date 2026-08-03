@@ -188,7 +188,7 @@ hisi-riscv-rt = { version = "0.5.7", default-features = false, features = [
     "ws63-radio-main-stack-32k",
 ] }
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
-hisi-rtos = { version = "=0.1.0-alpha.18", features = ["embassy"] }
+hisi-rtos = { version = "=0.1.0-alpha.18", features = ["chip-ws63", "embassy"] }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }

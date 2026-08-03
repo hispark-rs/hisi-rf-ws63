@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Configure firmware examples from the selected profile's minimum task stack
+  instead of the RTOS vendor default. The incremental worker keeps its explicit
+  8 KiB reservation while all seven vendor tasks retain their measured 24 KiB
+  reservations.
+
+### Changed
+
+- Advance the resource report to `hisi-rf-resource-report/v9` and publish the
+  heterogeneous profile's minimum task-stack setting beside its total stack
+  budget.
+
 ## [0.1.0-alpha.64] - 2026-08-03
 
 ### Fixed

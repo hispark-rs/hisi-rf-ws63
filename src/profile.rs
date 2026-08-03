@@ -21,7 +21,7 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v8";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v9";
 pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r8";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
@@ -77,6 +77,12 @@ pub trait Profile: sealed::Sealed {
     };
     /// Stack bytes reserved for every dynamic task in this profile.
     const TASK_STACK_BYTES_PER_TASK: usize;
+    /// Smallest task stack admitted by this heterogeneous profile.
+    const MINIMUM_TASK_STACK_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
+        PROFILE_WORKER_STACK_BYTES
+    } else {
+        Self::TASK_STACK_BYTES_PER_TASK
+    };
     /// Exact total stack bytes reserved across heterogeneous profile tasks.
     const TASK_STACK_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
         (Self::DYNAMIC_TASKS_REQUIRED - 1) * Self::TASK_STACK_BYTES_PER_TASK
@@ -145,6 +151,13 @@ pub const SELECTED_RF_ARENA_BYTES: usize = SelectedProfile::RF_ARENA_BYTES;
 
 /// Scheduler arena bytes required by the active named profile.
 pub const SELECTED_RUNTIME_ARENA_BYTES: usize = SelectedProfile::RUNTIME_ARENA_BYTES;
+
+/// RTOS minimum task-stack setting required by the active named profile.
+///
+/// Vendor reservations still retain their measured 24 KiB stacks. This value
+/// permits the separately reserved Rust incremental worker to consume its
+/// smaller typed stack without weakening any vendor reservation.
+pub const SELECTED_MINIMUM_TASK_STACK_BYTES: usize = SelectedProfile::MINIMUM_TASK_STACK_BYTES;
 
 /// Migration alias for [`SELECTED_RUNTIME_ARENA_BYTES`].
 #[deprecated(
@@ -537,6 +550,8 @@ pub struct ResourceReport {
     pub runtime_internal_tasks: Option<usize>,
     /// Total task-stack bytes, once stacks become profile-owned.
     pub task_stack_bytes: Option<usize>,
+    /// Smallest task stack admitted by the selected heterogeneous profile.
+    pub minimum_task_stack_bytes: Option<usize>,
     /// Bytes reserved for RTOS-owned synchronization objects.
     pub runtime_object_headroom_bytes: Option<usize>,
     /// Scheduler arena bytes backing stacks, metadata and RTOS objects.
@@ -589,6 +604,7 @@ impl ResourceReport {
             dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
             runtime_internal_tasks: Some(2),
             task_stack_bytes: Some(P::TASK_STACK_BYTES),
+            minimum_task_stack_bytes: Some(P::MINIMUM_TASK_STACK_BYTES),
             runtime_object_headroom_bytes: Some(P::RUNTIME_OBJECT_HEADROOM_BYTES),
             runtime_arena_bytes: Some(P::RUNTIME_ARENA_BYTES),
             supplicant_arena_bytes: None,
@@ -616,6 +632,7 @@ impl ResourceReport {
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
                 "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
+                "\"minimum_task_stack_bytes\":{},",
                 "\"runtime_object_headroom_bytes\":{},\"runtime_arena_bytes\":{},",
                 "\"supplicant_arena_bytes\":null,\"shared_rf_arena_bytes\":{},\"flash_bytes\":null,",
                 "\"runtime_resources_calibrated\":{}}}"
@@ -643,6 +660,7 @@ impl ResourceReport {
             self.dynamic_tasks_required,
             self.runtime_internal_tasks.unwrap_or(0),
             self.task_stack_bytes.unwrap_or(0),
+            self.minimum_task_stack_bytes.unwrap_or(0),
             self.runtime_object_headroom_bytes.unwrap_or(0),
             self.runtime_arena_bytes.unwrap_or(0),
             self.shared_rf_arena_bytes.unwrap_or(0),
@@ -735,7 +753,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v8");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v9");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -759,6 +777,10 @@ mod tests {
         assert_eq!(
             report.task_stack_bytes,
             Some(WifiWpa2Smoltcp::TASK_STACK_BYTES)
+        );
+        assert_eq!(
+            report.minimum_task_stack_bytes,
+            Some(WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES)
         );
         assert_eq!(
             report.runtime_object_headroom_bytes,
@@ -805,7 +827,7 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v8\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v9\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -827,11 +849,13 @@ mod tests {
                 .contains(if cfg!(feature = "incremental-embassy-wait") {
                     concat!(
                         "\"runtime_internal_tasks\":2,\"task_stack_bytes\":180224,",
+                        "\"minimum_task_stack_bytes\":8192,",
                         "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":197120"
                     )
                 } else {
                     concat!(
                         "\"runtime_internal_tasks\":2,\"task_stack_bytes\":172032,",
+                        "\"minimum_task_stack_bytes\":24576,",
                         "\"runtime_object_headroom_bytes\":16384,\"runtime_arena_bytes\":188928"
                     )
                 })
