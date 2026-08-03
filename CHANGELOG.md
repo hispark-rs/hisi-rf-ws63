@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.68] - 2026-08-03
+
+### Added
+
+- Expose one-shot ownership of the WS63 SoftAP L2 device and hardware address
+  so an application-owned network stack can serve DHCP and local traffic.
+
+### Fixed
+
+- Drain queued AP EAPOL frames only after a level-triggered callback wake and
+  bridge SoftAP Ethernet TX through the same vendor data path used by the
+  station facade.
+- Update the exact radio artifact dependency to `ws63-radio-sys
+  0.1.0-alpha.10`, which packages the native WPA2 authenticator archive and
+  station-event ABI used by the two-board fixture.
+
 ## [0.1.0-alpha.67] - 2026-08-03
 
 ### Fixed
@@ -903,7 +919,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.61...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.68...HEAD
+[0.1.0-alpha.68]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.67...v0.1.0-alpha.68
+[0.1.0-alpha.67]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.66...v0.1.0-alpha.67
+[0.1.0-alpha.66]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.65...v0.1.0-alpha.66
+[0.1.0-alpha.65]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.64...v0.1.0-alpha.65
+[0.1.0-alpha.64]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.63...v0.1.0-alpha.64
+[0.1.0-alpha.63]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.62...v0.1.0-alpha.63
+[0.1.0-alpha.62]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.61...v0.1.0-alpha.62
 [0.1.0-alpha.61]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.60...v0.1.0-alpha.61
 [0.1.0-alpha.60]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.59...v0.1.0-alpha.60
 [0.1.0-alpha.59]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.58...v0.1.0-alpha.59
