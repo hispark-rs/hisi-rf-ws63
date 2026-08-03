@@ -63,7 +63,7 @@ observed in the pinned payload. Applications consume the controller with
 the runtime-driver spawn API themselves.
 
 `RadioStorage::report()` exposes deterministic
-`hisi-rf-resource-report/v9` metadata. The report separates ordinary control
+`hisi-rf-resource-report/v10` metadata. The report separates ordinary control
 BSS, the composition handle, the RF/supplicant arena, bounded event capacity,
 the 4,384-byte caller-owned crypto DMA scratch, task-stack payload, explicit
 RTOS-object headroom and scheduler arena bytes, and the 48 KiB linker-owned

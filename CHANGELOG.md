@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.66] - 2026-08-03
+
+### Added
+
+- Derive WS63 task slots, heterogeneous stack bytes, and runtime arena size
+  from one checked resource tree covering vendor tasks and the incremental
+  worker.
+- Reserve the complete task resource plan atomically before claiming storage
+  or touching RF hardware, with owner-aware failure diagnostics.
+
+### Fixed
+
+- Remove composition-level double counting of the incremental worker and make
+  the generated resource report match the final linked shared arena exactly.
+
 ### Added
 
 - Add an opt-in, credential-free late-completion fixture that injects one

@@ -493,20 +493,6 @@ pub use station_pm_diag::{
 ))]
 pub(crate) const WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED: usize = 7;
 
-/// Total dynamic task slots required by the public composition root.
-#[cfg(any(
-    target_arch = "riscv32",
-    all(
-        feature = "net",
-        any(feature = "wifi-personal", feature = "upstream-supplicant-port")
-    )
-))]
-pub(crate) const WS63_WIFI_DYNAMIC_TASKS_REQUIRED: usize =
-    if cfg!(feature = "incremental-embassy-wait") {
-        WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED + 1
-    } else {
-        WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED
-    };
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;
 #[cfg(feature = "wifi-personal")]
@@ -597,8 +583,8 @@ pub use profile::SelectedProfile;
 pub use profile::{
     ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
     RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_MINIMUM_TASK_STACK_BYTES,
-    SELECTED_RF_ARENA_BYTES, SELECTED_RUNTIME_ARENA_BYTES, Storage, WifiWpa2Smoltcp,
-    WifiWpa3Smoltcp, resource_report,
+    SELECTED_RF_ARENA_BYTES, SELECTED_RUNTIME_ARENA_BYTES, Storage, TaskGroupPlan,
+    WifiResourcePlan, WifiWpa2Smoltcp, WifiWpa3Smoltcp, resource_report, wifi_resource_plan,
 };
 
 /// Declare all caller-owned storage for the selected named radio profile.

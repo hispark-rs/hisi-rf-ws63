@@ -21,8 +21,8 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v9";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r8";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v10";
+pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r9";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
@@ -61,43 +61,182 @@ mod sealed {
     pub trait Sealed {}
 }
 
+/// Stable owner identifiers used by admission diagnostics and reports.
+pub mod resource_owner {
+    /// Tasks created by the pinned WS63 vendor radio payload.
+    pub const VENDOR_TASKS: u32 = 1;
+    /// Rust incremental backend worker.
+    pub const INCREMENTAL_WORKER: u32 = 2;
+}
+
+/// One uniform-stack child in the Wi-Fi resource tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskGroupPlan {
+    /// Stable owner identity.
+    pub owner: u32,
+    /// Number of dynamic tasks owned by this child.
+    pub task_slots: usize,
+    /// Stack payload reserved for each task.
+    pub stack_bytes_per_task: usize,
+}
+
+impl TaskGroupPlan {
+    /// Total stack payload derived from this child.
+    pub const fn total_stack_bytes(self) -> usize {
+        match self.task_slots.checked_mul(self.stack_bytes_per_task) {
+            Some(total) => total,
+            None => panic!("task-group stack total overflow"),
+        }
+    }
+}
+
+/// Structured WS63 Wi-Fi resource tree used by reports and admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiResourcePlan {
+    /// Pinned vendor-payload task group.
+    pub vendor: TaskGroupPlan,
+    /// Optional Rust incremental worker group.
+    pub worker: Option<TaskGroupPlan>,
+    /// Bounded public event queue capacity.
+    pub event_capacity: usize,
+    /// RTOS object/headroom budget outside task-stack payloads.
+    pub runtime_object_bytes: usize,
+    /// Minimum RF/supplicant heap supplied by caller-owned storage.
+    pub rf_heap_min_bytes: usize,
+}
+
+impl WifiResourcePlan {
+    /// Bind the caller-selected bounded event queue to this profile plan.
+    pub const fn with_event_capacity(mut self, event_capacity: usize) -> Self {
+        self.event_capacity = event_capacity;
+        self
+    }
+
+    /// Total dynamic slots derived exclusively from child groups.
+    pub const fn total_task_slots(self) -> usize {
+        match self.worker {
+            Some(worker) => match self.vendor.task_slots.checked_add(worker.task_slots) {
+                Some(total) => total,
+                None => panic!("task-slot total overflow"),
+            },
+            None => self.vendor.task_slots,
+        }
+    }
+
+    /// Total task-stack payload derived exclusively from child groups.
+    pub const fn total_stack_bytes(self) -> usize {
+        match self.worker {
+            Some(worker) => match self
+                .vendor
+                .total_stack_bytes()
+                .checked_add(worker.total_stack_bytes())
+            {
+                Some(total) => total,
+                None => panic!("task-stack total overflow"),
+            },
+            None => self.vendor.total_stack_bytes(),
+        }
+    }
+
+    /// Smallest stack represented by the current child inventory.
+    pub const fn minimum_task_stack_bytes(self) -> usize {
+        match self.worker {
+            Some(worker) if worker.stack_bytes_per_task < self.vendor.stack_bytes_per_task => {
+                worker.stack_bytes_per_task
+            }
+            _ => self.vendor.stack_bytes_per_task,
+        }
+    }
+
+    /// Scheduler arena payload derived from children plus explicit overhead.
+    pub const fn runtime_arena_bytes(self) -> usize {
+        let stacks = self.total_stack_bytes();
+        let with_allocator = match stacks.checked_add(TASK_STACK_ALLOCATOR_OVERHEAD_BYTES) {
+            Some(total) => total,
+            None => panic!("runtime arena overflow"),
+        };
+        match with_allocator.checked_add(self.runtime_object_bytes) {
+            Some(total) => total,
+            None => panic!("runtime arena overflow"),
+        }
+    }
+}
+
 /// A named WS63 radio composition with a fixed security and network contract.
 pub trait Profile: sealed::Sealed {
     /// Stable profile identifier used by build reports and diagnostics.
     const ID: &'static str;
     /// Security implementation selected by this profile.
     const SECURITY: &'static str;
-    /// Dynamic task slots observed for this profile's pinned payload.
-    const DYNAMIC_TASKS_REQUIRED: usize;
-    /// Dynamic task slots reserved for vendor tasks before the Rust worker.
-    const VENDOR_DYNAMIC_TASKS_REQUIRED: usize = if cfg!(feature = "incremental-embassy-wait") {
-        Self::DYNAMIC_TASKS_REQUIRED - 1
-    } else {
-        Self::DYNAMIC_TASKS_REQUIRED
+    /// Pinned vendor task inventory for this profile.
+    const VENDOR_TASKS: TaskGroupPlan = TaskGroupPlan {
+        owner: resource_owner::VENDOR_TASKS,
+        task_slots: crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED,
+        stack_bytes_per_task: 24 * 1024,
     };
-    /// Stack bytes reserved for every dynamic task in this profile.
-    const TASK_STACK_BYTES_PER_TASK: usize;
-    /// Smallest task stack admitted by this heterogeneous profile.
-    const MINIMUM_TASK_STACK_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
-        PROFILE_WORKER_STACK_BYTES
+    /// Optional Rust worker inventory for the selected execution feature set.
+    const WORKER_TASKS: Option<TaskGroupPlan> = if cfg!(feature = "incremental-embassy-wait") {
+        Some(TaskGroupPlan {
+            owner: resource_owner::INCREMENTAL_WORKER,
+            task_slots: 1,
+            stack_bytes_per_task: PROFILE_WORKER_STACK_BYTES,
+        })
     } else {
-        Self::TASK_STACK_BYTES_PER_TASK
-    };
-    /// Exact total stack bytes reserved across heterogeneous profile tasks.
-    const TASK_STACK_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
-        (Self::DYNAMIC_TASKS_REQUIRED - 1) * Self::TASK_STACK_BYTES_PER_TASK
-            + PROFILE_WORKER_STACK_BYTES
-    } else {
-        Self::DYNAMIC_TASKS_REQUIRED * Self::TASK_STACK_BYTES_PER_TASK
+        None
     };
     /// Caller-owned bytes reserved for RTOS-owned synchronization objects.
     const RUNTIME_OBJECT_HEADROOM_BYTES: usize = RUNTIME_OBJECT_HEADROOM_BYTES;
-    /// Caller-owned scheduler arena for task stacks, metadata and RTOS objects.
-    const RUNTIME_ARENA_BYTES: usize = Self::TASK_STACK_BYTES
-        + TASK_STACK_ALLOCATOR_OVERHEAD_BYTES
-        + Self::RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
     const RF_ARENA_BYTES: usize;
+    /// Complete resource tree; all totals are derived from these children.
+    const RESOURCE_PLAN: WifiResourcePlan = WifiResourcePlan {
+        vendor: Self::VENDOR_TASKS,
+        worker: Self::WORKER_TASKS,
+        event_capacity: 0,
+        runtime_object_bytes: Self::RUNTIME_OBJECT_HEADROOM_BYTES,
+        rf_heap_min_bytes: Self::RF_ARENA_BYTES,
+    };
+    /// Dynamic task slots observed for this profile's pinned payload.
+    const DYNAMIC_TASKS_REQUIRED: usize = match Self::WORKER_TASKS {
+        Some(worker) => match Self::VENDOR_TASKS.task_slots.checked_add(worker.task_slots) {
+            Some(total) => total,
+            None => panic!("profile task-slot total overflow"),
+        },
+        None => Self::VENDOR_TASKS.task_slots,
+    };
+    /// Dynamic task slots owned by the vendor payload.
+    const VENDOR_DYNAMIC_TASKS_REQUIRED: usize = Self::VENDOR_TASKS.task_slots;
+    /// Stack bytes reserved for each vendor task.
+    const TASK_STACK_BYTES_PER_TASK: usize = Self::VENDOR_TASKS.stack_bytes_per_task;
+    /// Smallest task stack admitted by this heterogeneous profile.
+    const MINIMUM_TASK_STACK_BYTES: usize = match Self::WORKER_TASKS {
+        Some(worker) if worker.stack_bytes_per_task < Self::VENDOR_TASKS.stack_bytes_per_task => {
+            worker.stack_bytes_per_task
+        }
+        _ => Self::VENDOR_TASKS.stack_bytes_per_task,
+    };
+    /// Exact total stack bytes reserved across heterogeneous profile tasks.
+    const TASK_STACK_BYTES: usize = match Self::WORKER_TASKS {
+        Some(worker) => match Self::VENDOR_TASKS
+            .total_stack_bytes()
+            .checked_add(worker.total_stack_bytes())
+        {
+            Some(total) => total,
+            None => panic!("profile task-stack total overflow"),
+        },
+        None => Self::VENDOR_TASKS.total_stack_bytes(),
+    };
+    /// Scheduler arena derived from child stacks and explicit object budgets.
+    const RUNTIME_ARENA_BYTES: usize =
+        match Self::TASK_STACK_BYTES.checked_add(TASK_STACK_ALLOCATOR_OVERHEAD_BYTES) {
+            Some(with_allocator) => {
+                match with_allocator.checked_add(Self::RUNTIME_OBJECT_HEADROOM_BYTES) {
+                    Some(total) => total,
+                    None => panic!("profile runtime arena overflow"),
+                }
+            }
+            None => panic!("profile runtime arena overflow"),
+        };
     /// Whether this profile's runtime arena completed repeated-silicon calibration.
     const RUNTIME_RESOURCES_CALIBRATED: bool;
 }
@@ -109,8 +248,6 @@ impl sealed::Sealed for WifiWpa2Smoltcp {}
 impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
-    const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
-    const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
     const RUNTIME_RESOURCES_CALIBRATED: bool = !cfg!(feature = "incremental-embassy-wait");
 }
@@ -122,8 +259,6 @@ impl sealed::Sealed for WifiWpa3Smoltcp {}
 impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
-    const DYNAMIC_TASKS_REQUIRED: usize = crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED;
-    const TASK_STACK_BYTES_PER_TASK: usize = 24 * 1024;
     const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
     const RUNTIME_RESOURCES_CALIBRATED: bool = false;
 }
@@ -338,6 +473,18 @@ pub struct Storage<P: Profile, const EVENTS: usize> {
     _profile: PhantomData<P>,
 }
 
+pub(crate) struct ProfileReservations {
+    pub(crate) vendor: TaskReservation,
+    pub(crate) worker: Option<TaskReservation>,
+}
+
+pub(crate) struct ClaimedStorage<const EVENTS: usize> {
+    pub(crate) state: &'static RadioState<EVENTS>,
+    pub(crate) crypto: &'static mut Ws63CryptoStorage,
+    pub(crate) vendor: &'static TaskReservation,
+    pub(crate) worker: Option<&'static TaskReservation>,
+}
+
 impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
     /// Construct unclaimed storage suitable for a `static` item.
     pub const fn new() -> Self {
@@ -363,25 +510,32 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
 
     pub(crate) fn claim(
         &'static self,
-        reservation: TaskReservation,
-    ) -> Result<
-        (
-            &'static RadioState<EVENTS>,
-            &'static mut Ws63CryptoStorage,
-            &'static TaskReservation,
-        ),
-        TaskReservation,
-    > {
+        reservations: ProfileReservations,
+    ) -> Result<ClaimedStorage<EVENTS>, ProfileReservations> {
         if self
             .claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err(reservation);
+            return Err(reservations);
         }
         let crypto = self.crypto.init(Ws63CryptoStorage::new());
-        let reservation = self.task_reservation.init(reservation);
-        Ok((&self.state, crypto, reservation))
+        let vendor = self.task_reservation.init(reservations.vendor);
+        #[cfg(feature = "incremental-embassy-wait")]
+        let worker = reservations
+            .worker
+            .map(|reservation| &*self.worker_task_reservation.init(reservation));
+        #[cfg(not(feature = "incremental-embassy-wait"))]
+        let worker = {
+            debug_assert!(reservations.worker.is_none());
+            None
+        };
+        Ok(ClaimedStorage {
+            state: &self.state,
+            crypto,
+            vendor,
+            worker,
+        })
     }
 
     pub(crate) fn store_runner(
@@ -400,14 +554,6 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         worker: IncrementalWorkerState,
     ) -> &'static mut IncrementalWorkerState {
         self.incremental_worker.init(worker)
-    }
-
-    #[cfg(feature = "incremental-embassy-wait")]
-    pub(crate) fn store_worker_task_reservation(
-        &'static self,
-        reservation: TaskReservation,
-    ) -> &'static TaskReservation {
-        self.worker_task_reservation.init(reservation)
     }
 }
 
@@ -546,6 +692,14 @@ pub struct ResourceReport {
     pub main_stack_bytes_required: usize,
     /// Observed dynamic-task requirement for the current payload.
     pub dynamic_tasks_required: usize,
+    /// Vendor task slots from the pinned archive inventory.
+    pub vendor_task_slots: usize,
+    /// Stack payload reserved for each pinned vendor task.
+    pub vendor_stack_bytes_per_task: usize,
+    /// Incremental-worker slots, when that profile is selected.
+    pub worker_task_slots: Option<usize>,
+    /// Stack payload reserved for each incremental worker.
+    pub worker_stack_bytes_per_task: Option<usize>,
     /// Runtime-internal task count, once the runtime exposes admission metadata.
     pub runtime_internal_tasks: Option<usize>,
     /// Total task-stack bytes, once stacks become profile-owned.
@@ -568,6 +722,7 @@ pub struct ResourceReport {
 
 impl ResourceReport {
     const fn for_profile<P: Profile, const EVENTS: usize>(arena_bytes: usize) -> Self {
+        let plan = P::RESOURCE_PLAN.with_event_capacity(EVENTS);
         let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
         let control_storage_bytes = align_up(
             WS63_CONTROL_STORAGE_FIXED_BYTES + radio_state_bytes,
@@ -601,7 +756,17 @@ impl ResourceReport {
             arena_storage_bytes,
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
             main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
-            dynamic_tasks_required: P::DYNAMIC_TASKS_REQUIRED,
+            dynamic_tasks_required: plan.total_task_slots(),
+            vendor_task_slots: plan.vendor.task_slots,
+            vendor_stack_bytes_per_task: plan.vendor.stack_bytes_per_task,
+            worker_task_slots: match plan.worker {
+                Some(worker) => Some(worker.task_slots),
+                None => None,
+            },
+            worker_stack_bytes_per_task: match plan.worker {
+                Some(worker) => Some(worker.stack_bytes_per_task),
+                None => None,
+            },
             runtime_internal_tasks: Some(2),
             task_stack_bytes: Some(P::TASK_STACK_BYTES),
             minimum_task_stack_bytes: Some(P::MINIMUM_TASK_STACK_BYTES),
@@ -631,6 +796,8 @@ impl ResourceReport {
                 "\"linker_packet_ram_bytes\":{},",
                 "\"main_stack_bytes_required\":{},",
                 "\"dynamic_tasks_required\":{},",
+                "\"vendor_task_slots\":{},\"vendor_stack_bytes_per_task\":{},",
+                "\"worker_task_slots\":{},\"worker_stack_bytes_per_task\":{},",
                 "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
                 "\"minimum_task_stack_bytes\":{},",
                 "\"runtime_object_headroom_bytes\":{},\"runtime_arena_bytes\":{},",
@@ -658,6 +825,10 @@ impl ResourceReport {
             self.linker_packet_ram_bytes,
             self.main_stack_bytes_required,
             self.dynamic_tasks_required,
+            self.vendor_task_slots,
+            self.vendor_stack_bytes_per_task,
+            self.worker_task_slots.unwrap_or(0),
+            self.worker_stack_bytes_per_task.unwrap_or(0),
             self.runtime_internal_tasks.unwrap_or(0),
             self.task_stack_bytes.unwrap_or(0),
             self.minimum_task_stack_bytes.unwrap_or(0),
@@ -679,6 +850,11 @@ const fn align_up(value: usize, alignment: usize) -> usize {
 /// or borrow radio storage.
 pub const fn resource_report<P: Profile, const EVENTS: usize>() -> ResourceReport {
     ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES)
+}
+
+/// Return the structured resource tree for one profile and event capacity.
+pub const fn wifi_resource_plan<P: Profile, const EVENTS: usize>() -> WifiResourcePlan {
+    P::RESOURCE_PLAN.with_event_capacity(EVENTS)
 }
 
 #[cfg(target_pointer_width = "32")]
@@ -720,14 +896,14 @@ mod tests {
     use super::*;
 
     struct FixedBuffer {
-        bytes: [u8; 1024],
+        bytes: [u8; 1536],
         len: usize,
     }
 
     impl FixedBuffer {
         fn new() -> Self {
             Self {
-                bytes: [0; 1024],
+                bytes: [0; 1536],
                 len: 0,
             }
         }
@@ -753,7 +929,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v9");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v10");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -766,13 +942,23 @@ mod tests {
         assert_eq!(report.main_stack_bytes_required, 0x8000);
         assert_eq!(
             report.dynamic_tasks_required,
-            crate::WS63_WIFI_DYNAMIC_TASKS_REQUIRED
+            WifiWpa2Smoltcp::RESOURCE_PLAN.total_task_slots()
         );
         assert_eq!(
             WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED,
             crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED
         );
         assert_eq!(report.task_admission, "owner-bound-slot-stack-reservation");
+        assert_eq!(report.vendor_task_slots, 7);
+        assert_eq!(report.vendor_stack_bytes_per_task, 24 * 1024);
+        assert_eq!(
+            report.worker_task_slots,
+            cfg!(feature = "incremental-embassy-wait").then_some(1)
+        );
+        assert_eq!(
+            report.worker_stack_bytes_per_task,
+            cfg!(feature = "incremental-embassy-wait").then_some(PROFILE_WORKER_STACK_BYTES)
+        );
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(
             report.task_stack_bytes,
@@ -820,6 +1006,30 @@ mod tests {
     }
 
     #[test]
+    fn structured_resource_tree_derives_every_task_total_from_children() {
+        let plan = wifi_resource_plan::<WifiWpa2Smoltcp, 8>();
+        assert_eq!(plan.event_capacity, 8);
+        assert_eq!(plan.vendor.owner, resource_owner::VENDOR_TASKS);
+        assert_eq!(plan.vendor.task_slots, 7);
+        assert_eq!(plan.vendor.stack_bytes_per_task, 24 * 1024);
+        assert_eq!(
+            plan.total_task_slots(),
+            WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED
+        );
+        assert_eq!(plan.total_stack_bytes(), WifiWpa2Smoltcp::TASK_STACK_BYTES);
+        assert_eq!(
+            plan.runtime_arena_bytes(),
+            WifiWpa2Smoltcp::RUNTIME_ARENA_BYTES
+        );
+        assert_eq!(plan.rf_heap_min_bytes, WifiWpa2Smoltcp::RF_ARENA_BYTES);
+        assert_eq!(
+            plan.worker.map(|worker| worker.owner),
+            cfg!(feature = "incremental-embassy-wait")
+                .then_some(resource_owner::INCREMENTAL_WORKER)
+        );
+    }
+
+    #[test]
     fn report_json_is_deterministic_and_marks_uncalibrated_runtime_resources() {
         let mut output = FixedBuffer::new();
         Storage::<WifiWpa3Smoltcp, 8>::new()
@@ -827,7 +1037,7 @@ mod tests {
             .write_json(&mut output)
             .unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v9\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v10\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -917,10 +1127,20 @@ mod tests {
             unsafe { TaskReservation::from_raw(core::num::NonZeroU32::new(0x101).unwrap()) };
         let second =
             unsafe { TaskReservation::from_raw(core::num::NonZeroU32::new(0x102).unwrap()) };
-        assert!(STORAGE.claim(first).is_ok());
-        match STORAGE.claim(second) {
+        assert!(
+            STORAGE
+                .claim(ProfileReservations {
+                    vendor: first,
+                    worker: None,
+                })
+                .is_ok()
+        );
+        match STORAGE.claim(ProfileReservations {
+            vendor: second,
+            worker: None,
+        }) {
             Ok(_) => panic!("claimed storage accepted a second reservation"),
-            Err(reservation) => assert_eq!(reservation.into_raw().get(), 0x102),
+            Err(reservations) => assert_eq!(reservations.vendor.into_raw().get(), 0x102),
         }
     }
 

@@ -932,6 +932,27 @@ pub(crate) fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError
             let available_kib = (available / 1024).min(u16::MAX as usize) as u32;
             0x8000_0000 | (required_kib << 16) | available_kib
         }
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupSlots {
+            owner,
+            required,
+            available,
+        } => {
+            let owner = owner.into_raw().get().min(u8::MAX as u32);
+            let required = required.min(u8::MAX as usize) as u32;
+            let available = available.min(u8::MAX as usize) as u32;
+            0x4000_0000 | (owner << 16) | (required << 8) | available
+        }
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupStackMemory {
+            owner,
+            required,
+            available,
+            ..
+        } => {
+            let owner = owner.into_raw().get().min(u8::MAX as u32);
+            let required_kib = (required / 1024).min(u8::MAX as usize) as u32;
+            let available_kib = (available / 1024).min(u8::MAX as usize) as u32;
+            0xc000_0000 | (owner << 16) | (required_kib << 8) | available_kib
+        }
     }
 }
 

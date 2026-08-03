@@ -1,7 +1,6 @@
 use core::ffi::c_void;
 use core::fmt;
-use core::num::NonZeroUsize;
-use hisi_crypto_ws63::Ws63CryptoStorage;
+use core::num::{NonZeroU32, NonZeroUsize};
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
@@ -29,7 +28,8 @@ use crate::incremental_worker::{IncrementalWorkerState, WorkerBackedIncrementalB
 use crate::netif_smoltcp::Ws63Device;
 pub use crate::netif_smoltcp::{DhcpDiagnostics, L2ProtocolDiagnostics, RxQueueDiagnostics};
 use crate::profile::{
-    ActiveProfile, InstalledRadioArena, Profile, Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
+    ActiveProfile, InstalledRadioArena, Profile, ProfileReservations, Storage, WifiWpa2Smoltcp,
+    WifiWpa3Smoltcp,
 };
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
@@ -708,22 +708,25 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<RadioController<P, EVENTS>, InitError> {
-    let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
+    let claimed = claim_profile_storage::<P, EVENTS>(storage)?;
     let inner = crate::hisi_rf_backend::resources(
         resources.efuse,
         resources.km,
         resources.spacc,
         resources.pke,
         resources.trng,
-        crypto_storage,
+        claimed.crypto,
     );
-    match hisi_rf_core::init(config, inner, state) {
+    match hisi_rf_core::init(config, inner, claimed.state) {
         Ok(controller) => Ok(RadioController {
             inner: controller,
             storage,
         }),
         Err(error) => {
-            release_profile_reservation(reservation)?;
+            release_profile_reservation(claimed.vendor)?;
+            if let Some(worker_reservation) = claimed.worker {
+                release_profile_reservation(worker_reservation)?;
+            }
             Err(InitError::core(error))
         }
     }
@@ -744,17 +747,9 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
     #[cfg(feature = "incremental-embassy-wait")]
-    hisi_rf_rtos_driver::require_runtime(hisi_rf_rtos_driver::RuntimeRequirements::V1_5_BUDGETED)
+    hisi_rf_rtos_driver::require_runtime(hisi_rf_rtos_driver::RuntimeRequirements::V1_6_BUDGETED)
         .map_err(InitError::runtime)?;
-    let (state, crypto_storage, reservation) = claim_profile_storage::<P, EVENTS>(storage)?;
-    #[cfg(feature = "incremental-embassy-wait")]
-    let worker_reservation = match reserve_incremental_worker(storage) {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            release_profile_reservation(reservation)?;
-            return Err(error);
-        }
-    };
+    let claimed = claim_profile_storage::<P, EVENTS>(storage)?;
     let RadioResources {
         mut backend,
         device,
@@ -764,29 +759,37 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
         resources.spacc,
         resources.pke,
         resources.trng,
-        crypto_storage,
+        claimed.crypto,
     );
+    let worker_reservation = claimed.worker;
     if let Err(error) = backend.initialize(&config.wifi) {
         // The vendor bootstrap may already have spawned tasks through this
         // reservation. It is installed in the process-wide compatibility
         // adapter and cannot be safely detached or reused after a partial
         // failure, so this one-shot storage remains claimed.
         #[cfg(feature = "incremental-embassy-wait")]
-        release_profile_reservation(worker_reservation)?;
+        if let Some(worker_reservation) = worker_reservation {
+            release_profile_reservation(worker_reservation)?;
+        }
         return Err(InitError::core(Error::Backend(error)));
     }
     let backend = match backend.into_incremental() {
         Ok(backend) => backend,
         Err(error) => {
             #[cfg(feature = "incremental-embassy-wait")]
-            release_profile_reservation(worker_reservation)?;
+            if let Some(worker_reservation) = worker_reservation {
+                release_profile_reservation(worker_reservation)?;
+            }
             return Err(InitError::core(Error::Backend(error)));
         }
     };
-    #[cfg(not(feature = "incremental-embassy-wait"))]
-    let _ = reservation;
     #[cfg(feature = "incremental-embassy-wait")]
     let (backend, worker) = {
+        let worker_reservation = worker_reservation.ok_or_else(|| {
+            InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                hisi_rf_rtos_driver::Error::Runtime,
+            ))
+        })?;
         let worker = storage.store_incremental_worker(IncrementalWorkerState::new(backend));
         match worker.start(worker_reservation) {
             Ok(backend) => (backend, &*worker),
@@ -796,7 +799,7 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
             }
         }
     };
-    match hisi_rf_core::init(config, RadioResources { backend, device }, state) {
+    match hisi_rf_core::init(config, RadioResources { backend, device }, claimed.state) {
         Ok(controller) => Ok(IncrementalRadioController {
             inner: controller,
             #[cfg(feature = "incremental-embassy-wait")]
@@ -829,67 +832,108 @@ pub fn init_incremental_after_blocking_bootstrap<
 
 fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     storage: &'static Storage<P, EVENTS>,
-) -> Result<
-    (
-        &'static hisi_rf_core::RadioState<EVENTS>,
-        &'static mut Ws63CryptoStorage,
-        &'static hisi_rf_rtos_driver::TaskReservation,
-    ),
-    InitError,
-> {
+) -> Result<crate::profile::ClaimedStorage<EVENTS>, InitError> {
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
     hisi_rf_rtos_driver::require_runtime(
-        hisi_rf_rtos_driver::RuntimeRequirements::V1_4_PORTED_COOPERATIVE,
+        hisi_rf_rtos_driver::RuntimeRequirements::V1_6_PORTED_COOPERATIVE,
     )
     .map_err(InitError::runtime)?;
     hisi_rf_rtos_driver::current_task().map_err(InitError::runtime)?;
-    let required_slots = NonZeroUsize::new(P::VENDOR_DYNAMIC_TASKS_REQUIRED).ok_or_else(|| {
+    let vendor = task_resource_group(P::VENDOR_TASKS)?;
+    #[cfg(feature = "incremental-embassy-wait")]
+    let groups = [
+        vendor,
+        task_resource_group(P::WORKER_TASKS.ok_or_else(|| {
+            InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                hisi_rf_rtos_driver::Error::Runtime,
+            ))
+        })?)?,
+    ];
+    #[cfg(not(feature = "incremental-embassy-wait"))]
+    let groups = [vendor];
+    let plan = hisi_rf_rtos_driver::TaskResourcePlan::new(&groups).ok_or_else(|| {
+        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+            hisi_rf_rtos_driver::Error::ResourceExhausted,
+        ))
+    })?;
+    let mut reservations =
+        hisi_rf_rtos_driver::reserve_task_resource_plan(plan).map_err(InitError::task_admission)?;
+    let reservation = reservations.take(0).ok_or_else(|| {
         InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
             hisi_rf_rtos_driver::Error::Runtime,
         ))
     })?;
-    let stack_bytes = NonZeroUsize::new(P::TASK_STACK_BYTES_PER_TASK).ok_or_else(|| {
+    #[cfg(feature = "incremental-embassy-wait")]
+    let worker_reservation = match reservations.take(1) {
+        Some(reservation) => Some(reservation),
+        None => {
+            hisi_rf_rtos_driver::release_task_reservation(&reservation)
+                .map_err(InitError::runtime)?;
+            return Err(InitError::task_admission(
+                hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                    hisi_rf_rtos_driver::Error::Runtime,
+                ),
+            ));
+        }
+    };
+    #[cfg(not(feature = "incremental-embassy-wait"))]
+    let worker_reservation = None;
+    let claimed = match storage.claim(ProfileReservations {
+        vendor: reservation,
+        worker: worker_reservation,
+    }) {
+        Ok(claimed) => claimed,
+        Err(reservations) => {
+            hisi_rf_rtos_driver::release_task_reservation(&reservations.vendor)
+                .map_err(InitError::runtime)?;
+            if let Some(worker_reservation) = reservations.worker.as_ref() {
+                hisi_rf_rtos_driver::release_task_reservation(worker_reservation)
+                    .map_err(InitError::runtime)?;
+            }
+            return Err(InitError::storage_already_claimed());
+        }
+    };
+    if let Err(error) = crate::runtime::install_task_reservation(claimed.vendor) {
+        hisi_rf_rtos_driver::release_task_reservation(claimed.vendor)
+            .map_err(InitError::runtime)?;
+        if let Some(worker_reservation) = claimed.worker {
+            hisi_rf_rtos_driver::release_task_reservation(worker_reservation)
+                .map_err(InitError::runtime)?;
+        }
+        return Err(InitError::runtime(error));
+    }
+    Ok(claimed)
+}
+
+fn task_resource_group(
+    group: crate::profile::TaskGroupPlan,
+) -> Result<hisi_rf_rtos_driver::TaskResourceGroupRequirements, InitError> {
+    let owner = NonZeroU32::new(group.owner).ok_or_else(|| {
         InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
             hisi_rf_rtos_driver::Error::Runtime,
         ))
     })?;
-    let required = hisi_rf_rtos_driver::TaskResourceRequirements::new(required_slots, stack_bytes)
+    let slots = NonZeroUsize::new(group.task_slots).ok_or_else(|| {
+        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+            hisi_rf_rtos_driver::Error::Runtime,
+        ))
+    })?;
+    let stack_bytes = NonZeroUsize::new(group.stack_bytes_per_task).ok_or_else(|| {
+        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+            hisi_rf_rtos_driver::Error::Runtime,
+        ))
+    })?;
+    let resources = hisi_rf_rtos_driver::TaskResourceRequirements::new(slots, stack_bytes)
         .ok_or_else(|| {
             InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
                 hisi_rf_rtos_driver::Error::ResourceExhausted,
             ))
         })?;
-    let reservation =
-        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::task_admission)?;
-    let (state, crypto_storage, reservation) = match storage.claim(reservation) {
-        Ok(claimed) => claimed,
-        Err(reservation) => {
-            hisi_rf_rtos_driver::release_task_reservation(&reservation)
-                .map_err(InitError::runtime)?;
-            return Err(InitError::storage_already_claimed());
-        }
-    };
-    if let Err(error) = crate::runtime::install_task_reservation(reservation) {
-        hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::runtime)?;
-        return Err(InitError::runtime(error));
-    }
-    Ok((state, crypto_storage, reservation))
-}
-
-#[cfg(feature = "incremental-embassy-wait")]
-fn reserve_incremental_worker<P: Profile, const EVENTS: usize>(
-    storage: &'static Storage<P, EVENTS>,
-) -> Result<&'static hisi_rf_rtos_driver::TaskReservation, InitError> {
-    let required = hisi_rf_rtos_driver::TaskResourceRequirements::new(
-        NonZeroUsize::new(1).expect("worker reserves one task"),
-        NonZeroUsize::new(crate::incremental_worker::WORKER_STACK_BYTES)
-            .expect("worker stack is non-zero"),
-    )
-    .expect("worker resource requirement is representable");
-    let reservation =
-        hisi_rf_rtos_driver::reserve_task_resources(required).map_err(InitError::task_admission)?;
-    Ok(storage.store_worker_task_reservation(reservation))
+    Ok(hisi_rf_rtos_driver::TaskResourceGroupRequirements::new(
+        hisi_rf_rtos_driver::TaskResourceOwner::new(owner),
+        resources,
+    ))
 }
 
 fn release_profile_reservation(
@@ -967,6 +1011,39 @@ fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> 
                 DiagnosticTraceKind::ResourceAvailable,
                 available.min(u32::MAX as usize) as u32,
             ),
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupSlots {
+            owner,
+            required,
+            available,
+        } => BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_a000 | code)
+            .with_trace(DiagnosticTraceKind::ResourceOwner, owner.into_raw().get())
+            .with_trace(
+                DiagnosticTraceKind::ResourceRequired,
+                required.min(u32::MAX as usize) as u32,
+            )
+            .with_trace(
+                DiagnosticTraceKind::ResourceAvailable,
+                available.min(u32::MAX as usize) as u32,
+            ),
+        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupStackMemory {
+            owner,
+            required,
+            available,
+            largest_contiguous,
+        } => BackendError::new(BackendErrorClass::ResourceUnavailable, 0x5732_a000 | code)
+            .with_trace(DiagnosticTraceKind::ResourceOwner, owner.into_raw().get())
+            .with_trace(
+                DiagnosticTraceKind::ResourceRequired,
+                required.min(u32::MAX as usize) as u32,
+            )
+            .with_trace(
+                DiagnosticTraceKind::ResourceAvailable,
+                available.min(u32::MAX as usize) as u32,
+            )
+            .with_trace(
+                DiagnosticTraceKind::LargestContiguous,
+                largest_contiguous.min(u32::MAX as usize) as u32,
+            ),
     };
     backend = backend
         .with_stage(DiagnosticStage::Runtime)
@@ -1033,6 +1110,48 @@ mod tests {
             diagnostic.trace().get(1).map(|entry| entry.value()),
             Some(120 * 1024)
         );
+    }
+
+    #[test]
+    fn grouped_stack_error_reports_owner_and_largest_contiguous_block() {
+        let owner = hisi_rf_rtos_driver::TaskResourceOwner::new(
+            NonZeroU32::new(crate::profile::resource_owner::INCREMENTAL_WORKER).unwrap(),
+        );
+        let diagnostic = InitError::task_admission(
+            hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupStackMemory {
+                owner,
+                required: 8 * 1024,
+                available: 0,
+                largest_contiguous: 7 * 1024,
+            },
+        )
+        .diagnostic();
+
+        assert_eq!(diagnostic.code(), DiagnosticCode::ResourceUnavailable);
+        let trace = diagnostic.trace();
+        assert_eq!(
+            trace.get(0).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::ResourceOwner)
+        );
+        assert_eq!(
+            trace.get(0).map(|entry| entry.value()),
+            Some(owner.into_raw().get())
+        );
+        assert_eq!(
+            trace.get(1).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::ResourceRequired)
+        );
+        assert_eq!(trace.get(1).map(|entry| entry.value()), Some(8 * 1024));
+        assert_eq!(
+            trace.get(2).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::ResourceAvailable)
+        );
+        assert_eq!(trace.get(2).map(|entry| entry.value()), Some(0));
+        assert_eq!(
+            trace.get(3).map(|entry| entry.kind()),
+            Some(DiagnosticTraceKind::LargestContiguous)
+        );
+        assert_eq!(trace.get(3).map(|entry| entry.value()), Some(7 * 1024));
     }
 
     #[test]
