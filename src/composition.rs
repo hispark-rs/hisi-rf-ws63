@@ -761,6 +761,7 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
         resources.trng,
         claimed.crypto,
     );
+    #[cfg(feature = "incremental-embassy-wait")]
     let worker_reservation = claimed.worker;
     if let Err(error) = backend.initialize(&config.wifi) {
         // The vendor bootstrap may already have spawned tasks through this
