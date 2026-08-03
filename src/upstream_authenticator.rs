@@ -17,10 +17,10 @@ use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
 use portable_atomic::{AtomicBool, AtomicU8, Ordering};
 use static_cell::StaticCell;
 use ws63_radio_sys::authenticator::{
-    ABI_VERSION as AP_ABI_VERSION, Beacon, Config, Context, DriverHooks, Security,
-    hisi_wpa_ap_configure, hisi_wpa_ap_context_align, hisi_wpa_ap_context_size, hisi_wpa_ap_create,
-    hisi_wpa_ap_destroy, hisi_wpa_ap_driver_install, hisi_wpa_ap_poll, hisi_wpa_ap_start,
-    hisi_wpa_ap_stop,
+    ABI_VERSION as AP_ABI_VERSION, Beacon, Config, Context, DriverHooks, HardwareFeatures,
+    Security, hisi_wpa_ap_configure, hisi_wpa_ap_context_align, hisi_wpa_ap_context_size,
+    hisi_wpa_ap_create, hisi_wpa_ap_destroy, hisi_wpa_ap_driver_install, hisi_wpa_ap_poll,
+    hisi_wpa_ap_start, hisi_wpa_ap_stop,
 };
 use ws63_radio_sys::supplicant::{
     ABI_VERSION as HOSTAP_ABI_VERSION, Key, OsHooks, PollResult, cipher, hisi_wpa_os_install,
@@ -37,6 +37,7 @@ const IOCTL_SET_KEY: u32 = 3;
 const IOCTL_SEND_MLME: u32 = 4;
 const IOCTL_SEND_EAPOL: u32 = 5;
 const IOCTL_GET_ADDRESS: u32 = 9;
+const IOCTL_GET_HW_FEATURES: u32 = 13;
 const IOCTL_DEL_BEACON: u32 = 12;
 const IOCTL_SET_NETDEV: u32 = 17;
 const IOCTL_CHANGE_BEACON: u32 = 18;
@@ -758,6 +759,7 @@ fn driver_hooks() -> DriverHooks {
         reserved: 0,
         driver: core::ptr::addr_of!(DRIVER_CONTEXT).cast_mut().cast(),
         get_own_address: Some(get_own_address),
+        get_hw_features: Some(get_hw_features),
         set_netdev_enabled: Some(set_netdev_enabled),
         configure_beacon: Some(configure_beacon),
         send_eapol: Some(send_eapol),
@@ -785,6 +787,19 @@ unsafe extern "C" fn get_own_address(driver: *mut c_void, address: *mut u8) -> c
     } else {
         crate::wal::ioctl(driver.ifname(), IOCTL_GET_ADDRESS, address.cast())
     }
+}
+
+unsafe extern "C" fn get_hw_features(
+    driver: *mut c_void,
+    features: *mut HardwareFeatures,
+) -> c_int {
+    let Some(driver) = driver_context(driver) else {
+        return -1;
+    };
+    if features.is_null() {
+        return -1;
+    }
+    crate::wal::ioctl(driver.ifname(), IOCTL_GET_HW_FEATURES, features.cast())
 }
 
 unsafe extern "C" fn set_netdev_enabled(driver: *mut c_void, enabled: u8) -> c_int {
