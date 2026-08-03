@@ -312,8 +312,20 @@ pub(crate) trait SupplicantPort {
     fn connect(&mut self) -> Result<(), BackendError>;
     fn disconnect(&mut self) -> Result<(), BackendError>;
     fn poll(&mut self, budget: NonZeroU32) -> Result<PollResult, BackendError>;
+    fn input_pending(&self) -> bool {
+        false
+    }
     fn next_event(&mut self) -> Result<Option<Event>, BackendError>;
     fn recovery_diagnostic_word(&self) -> u32;
+    fn context_diagnostic_word(&self) -> u32 {
+        0
+    }
+    fn driver_diagnostic_word(&self) -> u32 {
+        0
+    }
+    fn match_diagnostic_word(&self) -> u32 {
+        0
+    }
     fn external_auth_retry_stalled(&self) -> bool;
 }
 
@@ -354,12 +366,28 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
         (**self).poll(budget)
     }
 
+    fn input_pending(&self) -> bool {
+        (**self).input_pending()
+    }
+
     fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
         (**self).next_event()
     }
 
     fn recovery_diagnostic_word(&self) -> u32 {
         (**self).recovery_diagnostic_word()
+    }
+
+    fn context_diagnostic_word(&self) -> u32 {
+        (**self).context_diagnostic_word()
+    }
+
+    fn driver_diagnostic_word(&self) -> u32 {
+        (**self).driver_diagnostic_word()
+    }
+
+    fn match_diagnostic_word(&self) -> u32 {
+        (**self).match_diagnostic_word()
     }
 
     fn external_auth_retry_stalled(&self) -> bool {
@@ -443,6 +471,12 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
             .map_err(map_native_error)
     }
 
+    fn input_pending(&self) -> bool {
+        self.supplicant
+            .as_ref()
+            .is_some_and(NativeSupplicant::input_pending)
+    }
+
     fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
         self.supplicant
             .as_mut()
@@ -453,6 +487,22 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
 
     fn recovery_diagnostic_word(&self) -> u32 {
         crate::upstream_supplicant::recovery_diagnostic_word()
+    }
+
+    fn context_diagnostic_word(&self) -> u32 {
+        self.supplicant
+            .as_ref()
+            .map_or(0, NativeSupplicant::context_diagnostic_word)
+    }
+
+    fn driver_diagnostic_word(&self) -> u32 {
+        crate::upstream_supplicant::diagnostic_word()
+    }
+
+    fn match_diagnostic_word(&self) -> u32 {
+        self.supplicant
+            .as_ref()
+            .map_or(0, NativeSupplicant::match_diagnostic_word)
     }
 
     fn external_auth_retry_stalled(&self) -> bool {
@@ -929,19 +979,36 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             }
         };
         if let Some(error) = timeout {
+            let error = error
+                .with_trace(
+                    DiagnosticTraceKind::SupplicantContext,
+                    self.port.context_diagnostic_word(),
+                )
+                .with_trace(
+                    DiagnosticTraceKind::DriverContext,
+                    self.port.driver_diagnostic_word(),
+                )
+                .with_trace(
+                    DiagnosticTraceKind::BackendStatus,
+                    self.port.match_diagnostic_word(),
+                );
             return self.clear_with_error(error);
         }
 
         // A full output grant means the native output ring may still hold
-        // work even though no new callback edge will arrive. Scan work already
-        // owned by this backend is level-ready for the same reason.
+        // work even though no new callback edge will arrive. Supplicant input
+        // and scan work already owned by this backend are level-ready for the
+        // same reason. In particular, a worker-response wake must not consume
+        // the only edge for an EAPOL frame that arrived during that worker turn.
         let output_work_pending =
             result.output_pending != 0 && consumed == budget.max_events().get();
-        let wait = if made_progress && (scan_work_pending || output_work_pending) {
-            WaitSet::empty()
-        } else {
-            WaitSet::BACKEND.union(WaitSet::TIMER)
-        };
+        let input_work_pending = self.port.input_pending();
+        let wait =
+            if made_progress && (scan_work_pending || input_work_pending || output_work_pending) {
+                WaitSet::empty()
+            } else {
+                WaitSet::BACKEND.union(WaitSet::TIMER)
+            };
         let terminal = !matches!(outcome, OperationOutcome::Continue);
         let disposition = match outcome {
             OperationOutcome::Complete(completion) => PollDisposition::Complete(completion),
@@ -1362,6 +1429,7 @@ mod tests {
         scan_start_calls: u8,
         scan_cancel_calls: u8,
         connect_calls: u8,
+        input_pending: bool,
         recovery_diagnostic_word: u32,
         external_auth_retry_stalled: bool,
         connect_clock: Option<&'a Cell<u64>>,
@@ -1385,6 +1453,7 @@ mod tests {
                 scan_start_calls: 0,
                 scan_cancel_calls: 0,
                 connect_calls: 0,
+                input_pending: false,
                 recovery_diagnostic_word: 0,
                 external_auth_retry_stalled: false,
                 connect_clock: None,
@@ -1445,6 +1514,10 @@ mod tests {
                 clock.set(clock.get().saturating_add(self.poll_elapsed_us));
             }
             Ok(self.result)
+        }
+
+        fn input_pending(&self) -> bool {
+            self.input_pending
         }
 
         fn next_event(&mut self) -> Result<Option<Event>, BackendError> {
@@ -2090,6 +2163,29 @@ mod tests {
         ));
         drop(backend);
         assert_eq!(port.next_event, 0);
+    }
+
+    #[test]
+    fn level_ready_input_survives_the_worker_response_wake() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(1, false), [None, None]);
+        port.input_pending = true;
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
+            .unwrap();
+        let budget = WorkBudget::try_new(4, 100).unwrap();
+        advance_start(&mut backend, id, budget);
+
+        let report = backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+
+        assert_eq!(report.consumed_events(), 1);
+        assert!(matches!(
+            report.disposition(),
+            PollDisposition::Pending(wait) if wait.is_empty()
+        ));
     }
 
     #[test]

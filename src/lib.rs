@@ -378,6 +378,13 @@ pub fn upstream_supplicant_event_diagnostic_snapshot() -> [u32; 6] {
     upstream_supplicant::event_diagnostic_snapshot()
 }
 
+/// Return the low-level vendor driver callback boundary diagnostics.
+#[cfg(all(feature = "upstream-supplicant-port", target_arch = "riscv32"))]
+#[doc(hidden)]
+pub fn upstream_supplicant_driver_event_diagnostic_snapshot() -> [u32; 6] {
+    wifi::driver_event_diagnostic_snapshot()
+}
+
 /// Return first-EAPOL timeout and reassociation recovery counters.
 #[cfg(feature = "upstream-supplicant-port")]
 #[doc(hidden)]

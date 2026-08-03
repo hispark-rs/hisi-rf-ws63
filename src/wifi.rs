@@ -19,7 +19,7 @@ use core::ffi::{c_char, c_uint, c_void};
 #[cfg(target_arch = "riscv32")]
 use critical_section::Mutex;
 #[cfg(target_arch = "riscv32")]
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 
 const IFNAME_CAPACITY: usize = 17;
 const SSID_CAPACITY: usize = 32;
@@ -1439,6 +1439,31 @@ static CONNECTION_STATE: Mutex<ConnectionState> = Mutex::new(ConnectionState {
     outcome: Cell::new(ConnectionOutcome::Pending),
 });
 
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_EVENT_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_EVENT_LAST_KIND: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_EVENT_LAST_LENGTH: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_CONNECT_RESULT_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_CONNECT_RESULT_REJECT: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_CONNECT_RESULT_QUEUED: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+pub(crate) fn driver_event_diagnostic_snapshot() -> [u32; 6] {
+    [
+        DRIVER_EVENT_CALLS.load(Ordering::Acquire),
+        DRIVER_EVENT_LAST_KIND.load(Ordering::Acquire),
+        DRIVER_EVENT_LAST_LENGTH.load(Ordering::Acquire),
+        DRIVER_CONNECT_RESULT_CALLS.load(Ordering::Acquire),
+        DRIVER_CONNECT_RESULT_REJECT.load(Ordering::Acquire),
+        DRIVER_CONNECT_RESULT_QUEUED.load(Ordering::Acquire),
+    ]
+}
+
 #[cfg(all(feature = "rf-eloop-diag", feature = "wifi-personal"))]
 struct WpaEventState {
     calls: Cell<u32>,
@@ -1594,6 +1619,16 @@ unsafe extern "C" fn scan_event(
     data: *mut u8,
     length: c_uint,
 ) -> c_int {
+    #[cfg(feature = "upstream-supplicant-port")]
+    {
+        DRIVER_EVENT_CALLS.fetch_add(1, Ordering::Relaxed);
+        DRIVER_EVENT_LAST_KIND.store(event as u32, Ordering::Release);
+        DRIVER_EVENT_LAST_LENGTH.store(length, Ordering::Release);
+        if event == EVENT_CONNECT_RESULT {
+            DRIVER_CONNECT_RESULT_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     #[cfg(feature = "upstream-supplicant-port")]
     if event == EVENT_EXTERNAL_AUTH {
         crate::upstream_supplicant::observe_external_auth_callback(length);
@@ -1751,26 +1786,51 @@ unsafe extern "C" fn scan_event(
                 state.done.set(true);
             }
         });
-    } else if event == EVENT_CONNECT_RESULT
-        && !data.is_null()
-        && length as usize == core::mem::size_of::<VendorConnectResult>()
-    {
+    } else if event == EVENT_CONNECT_RESULT {
+        #[cfg(feature = "upstream-supplicant-port")]
+        if data.is_null() {
+            DRIVER_CONNECT_RESULT_REJECT.store(1, Ordering::Release);
+            return -1;
+        }
+        #[cfg(feature = "upstream-supplicant-port")]
+        if length as usize != core::mem::size_of::<VendorConnectResult>() {
+            DRIVER_CONNECT_RESULT_REJECT.store(2, Ordering::Release);
+            return -1;
+        }
+        if data.is_null() || length as usize != core::mem::size_of::<VendorConnectResult>() {
+            return -1;
+        }
         // SAFETY: the vendor callback reports the exact connect-result layout
         // and the value is copied before the callback returns.
         let result = unsafe { &*data.cast::<VendorConnectResult>() };
         #[cfg(feature = "upstream-supplicant-port")]
-        if let (Some(request_ies), Some(response_ies)) = (
+        {
             // SAFETY: the callback descriptor owns both payloads until return.
-            unsafe { transient_event_bytes(result.request_ie, result.request_ie_len) },
-            unsafe { transient_event_bytes(result.response_ie, result.response_ie_len) },
-        ) {
-            let _ = crate::upstream_supplicant::enqueue_associate_result(
+            let Some(request_ies) =
+                (unsafe { transient_event_bytes(result.request_ie, result.request_ie_len) })
+            else {
+                DRIVER_CONNECT_RESULT_REJECT.store(3, Ordering::Release);
+                return -1;
+            };
+            // SAFETY: the callback descriptor owns both payloads until return.
+            let Some(response_ies) =
+                (unsafe { transient_event_bytes(result.response_ie, result.response_ie_len) })
+            else {
+                DRIVER_CONNECT_RESULT_REJECT.store(4, Ordering::Release);
+                return -1;
+            };
+            if crate::upstream_supplicant::enqueue_associate_result(
                 result.status,
                 result.frequency_mhz,
                 result.bssid,
                 request_ies,
                 response_ies,
-            );
+            ) {
+                DRIVER_CONNECT_RESULT_REJECT.store(0, Ordering::Release);
+                DRIVER_CONNECT_RESULT_QUEUED.fetch_add(1, Ordering::Relaxed);
+            } else {
+                DRIVER_CONNECT_RESULT_REJECT.store(5, Ordering::Release);
+            }
         }
         let outcome = if result.status == 0 {
             ConnectionOutcome::Connected(ConnectionInfo {

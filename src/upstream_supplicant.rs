@@ -23,8 +23,8 @@ use ws63_radio_sys::supplicant::{
     hisi_wpa_eloop_diagnostic_flags, hisi_wpa_event_ring_diagnostic_word,
     hisi_wpa_feed_associate_result, hisi_wpa_feed_disconnect, hisi_wpa_feed_eapol,
     hisi_wpa_feed_external_auth, hisi_wpa_feed_mgmt, hisi_wpa_feed_scan_done,
-    hisi_wpa_feed_scan_result, hisi_wpa_init, hisi_wpa_next_event, hisi_wpa_os_install,
-    hisi_wpa_os_uninstall, hisi_wpa_poll, hisi_wpa_recovery_diagnostic_word,
+    hisi_wpa_feed_scan_result, hisi_wpa_init, hisi_wpa_match_diagnostic_word, hisi_wpa_next_event,
+    hisi_wpa_os_install, hisi_wpa_os_uninstall, hisi_wpa_poll, hisi_wpa_recovery_diagnostic_word,
     hisi_wpa_temporary_reject_recovery_diagnostic_word, key_flag,
 };
 
@@ -1563,6 +1563,12 @@ impl NativeSupplicant {
         unsafe { hisi_wpa_context_diagnostic_word(self.context.as_ptr()) }
     }
 
+    pub(crate) fn match_diagnostic_word(&self) -> u32 {
+        // SAFETY: this is a read-only, secret-free snapshot of the configured
+        // network and hostap BSS metadata owned by this context.
+        unsafe { hisi_wpa_match_diagnostic_word(self.context.as_ptr()) }
+    }
+
     fn event_ring_diagnostic_word(&self) -> u32 {
         // SAFETY: the unique owner keeps the native context alive and
         // serializes this read-only snapshot with all other context calls.
@@ -1738,7 +1744,7 @@ impl NativeSupplicant {
             }
             rx_budget -= 1;
         }
-        let notified = EAPOL_PENDING.swap(false, Ordering::AcqRel);
+        let notified = claim_eapol_notification(rx_budget);
         let fallback = !notified && self.eapol_fallback_polls_remaining != 0;
         if rx_budget != 0 && (notified || fallback) {
             if fallback {
@@ -1776,11 +1782,11 @@ impl NativeSupplicant {
         if result.status != 0 {
             return Err(NativeSupplicantError::PollFailed(result.status));
         }
-        // `output_pending` belongs to the C shim's output-event ring. Rust-side
-        // input queues are accounted in `work_completed`; if they exhaust the
-        // grant, the incremental runner observes that exact budget exhaustion
-        // without pretending that `hisi_wpa_next_event` has an item.
         Ok(result)
+    }
+
+    pub(crate) fn input_pending(&self) -> bool {
+        EAPOL_PENDING.load(Ordering::Acquire) || self.eapol_fallback_polls_remaining != 0
     }
 
     fn service_external_auth_status_retry(
@@ -1928,6 +1934,14 @@ fn classify_eapol_receive(status: c_int) -> Result<bool, c_int> {
         // termination; all other non-zero statuses remain real errors.
         0xffff => Ok(false),
         status => Err(status),
+    }
+}
+
+fn claim_eapol_notification(rx_budget: u32) -> bool {
+    if rx_budget == 0 {
+        EAPOL_PENDING.load(Ordering::Acquire)
+    } else {
+        EAPOL_PENDING.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -3218,6 +3232,16 @@ mod tests {
         assert_eq!(result.work_completed, 8);
         assert_eq!(result.output_pending, 1);
         assert_eq!(result.next_deadline_ms, 42);
+    }
+
+    #[test]
+    fn eapol_notification_remains_pending_until_receive_has_budget() {
+        EAPOL_PENDING.store(true, Ordering::Release);
+        assert!(claim_eapol_notification(0));
+        assert!(EAPOL_PENDING.load(Ordering::Acquire));
+
+        assert!(claim_eapol_notification(1));
+        assert!(!EAPOL_PENDING.load(Ordering::Acquire));
     }
 
     #[test]

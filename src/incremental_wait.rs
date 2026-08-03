@@ -11,13 +11,13 @@ use embassy_sync::waitqueue::AtomicWaker;
 #[cfg(target_arch = "riscv32")]
 use embassy_time::Timer;
 use hisi_rf_core::{IncrementalWaitPlatform, WaitSet};
-use portable_atomic::{AtomicU8, AtomicU32, Ordering};
+use portable_atomic::{AtomicU32, Ordering};
 
 /// Secret-free counters for the WS63 incremental wait bridge.
 ///
 /// Counters saturate at `u32::MAX` and never participate in readiness or wake
-/// decisions. Multiple signal calls may intentionally coalesce into one ready
-/// batch.
+/// decisions. Readiness counts preserve distinct signal calls until the
+/// runner consumes them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Ws63IncrementalWaitDiagnostics {
     /// Native supplicant or vendor callback signal calls.
@@ -37,7 +37,8 @@ pub struct Ws63IncrementalWaitDiagnostics {
 }
 
 struct WaitSignals {
-    pending: AtomicU8,
+    backend_pending: AtomicU32,
+    l2_rx_pending: AtomicU32,
     waker: AtomicWaker,
     backend_signals: AtomicU32,
     l2_rx_signals: AtomicU32,
@@ -51,7 +52,8 @@ struct WaitSignals {
 impl WaitSignals {
     const fn new() -> Self {
         Self {
-            pending: AtomicU8::new(0),
+            backend_pending: AtomicU32::new(0),
+            l2_rx_pending: AtomicU32::new(0),
             waker: AtomicWaker::new(),
             backend_signals: AtomicU32::new(0),
             l2_rx_signals: AtomicU32::new(0),
@@ -66,22 +68,22 @@ impl WaitSignals {
     fn signal(&self, source: WaitSet) {
         if source.contains(WaitSet::BACKEND) {
             saturating_increment(&self.backend_signals);
+            saturating_increment(&self.backend_pending);
         }
         if source.contains(WaitSet::L2_RX) {
             saturating_increment(&self.l2_rx_signals);
+            saturating_increment(&self.l2_rx_pending);
         }
-        self.pending.fetch_or(source.bits(), Ordering::Release);
         saturating_increment(&self.waker_notifications);
         self.waker.wake();
     }
 
     fn take_ready(&self, sources: WaitSet) -> WaitSet {
-        let observed = self.pending.fetch_and(!sources.bits(), Ordering::AcqRel) & sources.bits();
         let mut ready = WaitSet::empty();
-        if observed & WaitSet::BACKEND.bits() != 0 {
+        if sources.contains(WaitSet::BACKEND) && take_one(&self.backend_pending) {
             ready = ready.union(WaitSet::BACKEND);
         }
-        if observed & WaitSet::L2_RX.bits() != 0 {
+        if sources.contains(WaitSet::L2_RX) && take_one(&self.l2_rx_pending) {
             ready = ready.union(WaitSet::L2_RX);
         }
         ready
@@ -243,6 +245,14 @@ fn saturating_increment(counter: &AtomicU32) {
     });
 }
 
+fn take_one(counter: &AtomicU32) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            value.checked_sub(1)
+        })
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -314,6 +324,30 @@ mod tests {
             platform.poll_ready(&mut cx, WaitSet::BACKEND, None),
             Poll::Ready(Ok(ready)) if ready == WaitSet::BACKEND
         ));
+    }
+
+    #[test]
+    fn coalesced_backend_edges_remain_independently_ready() {
+        let signals = Box::leak(Box::new(WaitSignals::new()));
+        let mut platform = Ws63IncrementalWaitPlatform::with_signals(signals);
+        let counter = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let waker = Waker::from(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+
+        signals.signal(WaitSet::BACKEND);
+        signals.signal(WaitSet::BACKEND);
+
+        for _ in 0..2 {
+            assert!(matches!(
+                platform.poll_ready(&mut cx, WaitSet::BACKEND, None),
+                Poll::Ready(Ok(ready)) if ready == WaitSet::BACKEND
+            ));
+        }
+        assert!(matches!(
+            platform.poll_ready(&mut cx, WaitSet::BACKEND, None),
+            Poll::Pending
+        ));
+        assert_eq!(counter.0.load(CoreOrdering::Relaxed), 0);
     }
 
     #[test]

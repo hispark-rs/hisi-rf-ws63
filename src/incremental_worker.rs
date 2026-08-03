@@ -58,7 +58,6 @@ struct WorkerMailbox {
     stale_responses_dropped: u32,
     stale_responses_injected: u32,
     stale_injection_armed: bool,
-    scan: [ScanResult; SCAN_CAPACITY],
 }
 
 impl WorkerMailbox {
@@ -74,8 +73,48 @@ impl WorkerMailbox {
             stale_responses_dropped: 0,
             stale_responses_injected: 0,
             stale_injection_armed: false,
-            scan: [ScanResult::empty(); SCAN_CAPACITY],
         }
+    }
+}
+
+struct WorkerScanStorage(core::cell::UnsafeCell<[ScanResult; SCAN_CAPACITY]>);
+
+impl WorkerScanStorage {
+    const fn new() -> Self {
+        Self(core::cell::UnsafeCell::new(
+            [ScanResult::empty(); SCAN_CAPACITY],
+        ))
+    }
+
+    /// Reset the operation-owned output before starting a new scan.
+    ///
+    /// # Safety
+    ///
+    /// Only the worker task may call this method, while no completed scan is
+    /// being copied by the runner.
+    unsafe fn reset(&self) {
+        // SAFETY: upheld by the worker ownership contract above.
+        unsafe { *self.0.get() = [ScanResult::empty(); SCAN_CAPACITY] };
+    }
+
+    /// Return the persistent output storage owned by the worker task.
+    ///
+    /// Only the worker may dereference this pointer, and its mutable borrow
+    /// must end before publishing the corresponding response.
+    fn worker_output_ptr(&self) -> *mut [ScanResult; SCAN_CAPACITY] {
+        self.0.get()
+    }
+
+    /// Copy a terminal scan result after the mailbox has blocked new work.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the mailbox's scan-copy ownership, which prevents
+    /// the worker from accepting another command until this copy completes.
+    unsafe fn copy_to(&self, output: &mut [ScanResult], count: usize) {
+        // SAFETY: the mailbox protocol excludes a concurrent worker writer.
+        let scan = unsafe { &*self.0.get() };
+        output[..count].copy_from_slice(&scan[..count]);
     }
 }
 
@@ -83,6 +122,7 @@ impl WorkerMailbox {
 pub(crate) struct IncrementalWorkerState {
     backend: core::cell::UnsafeCell<OwnedIncrementalSupplicantBackend>,
     mailbox: Mutex<RefCell<WorkerMailbox>>,
+    scan: WorkerScanStorage,
     wake: Semaphore,
     l2_capabilities: Option<WifiL2Capabilities>,
 }
@@ -98,6 +138,7 @@ impl IncrementalWorkerState {
         Self {
             backend: core::cell::UnsafeCell::new(backend),
             mailbox: Mutex::new(RefCell::new(WorkerMailbox::new())),
+            scan: WorkerScanStorage::new(),
             wake: Semaphore::new(0),
             l2_capabilities,
         }
@@ -159,7 +200,7 @@ impl IncrementalWorkerState {
         expected_id: OperationId,
         scan_output: &mut [ScanResult],
     ) -> Option<WorkerResponse> {
-        critical_section::with(|cs| {
+        let (response, scan_count) = critical_section::with(|cs| {
             let mut mailbox = self.mailbox.borrow_ref_mut(cs);
             let response = mailbox.response.take();
             if response
@@ -167,19 +208,31 @@ impl IncrementalWorkerState {
                 .is_some_and(|response| response.id() != expected_id)
             {
                 mailbox.stale_responses_dropped = mailbox.stale_responses_dropped.saturating_add(1);
-                return response;
+                return (response, None);
             }
-            if let Some(WorkerResponse::Polled {
+            let scan_count = if let Some(WorkerResponse::Polled {
                 result: Ok(report), ..
             }) = response.as_ref()
                 && let PollDisposition::Complete(hisi_rf_core::IncrementalCompletion::Scan(outcome)) =
                     report.disposition()
             {
-                let count = outcome.count.min(scan_output.len()).min(mailbox.scan.len());
-                scan_output[..count].copy_from_slice(&mailbox.scan[..count]);
-            }
-            response
-        })
+                mailbox.worker_busy = true;
+                Some(outcome.count.min(scan_output.len()).min(SCAN_CAPACITY))
+            } else {
+                None
+            };
+            (response, scan_count)
+        });
+        if let Some(count) = scan_count {
+            // SAFETY: `worker_busy` prevents a new command from being
+            // accepted until the copy has completed. Bulk copying deliberately
+            // happens outside the interrupt-disabled critical section.
+            unsafe { self.scan.copy_to(scan_output, count) };
+            critical_section::with(|cs| {
+                self.mailbox.borrow_ref_mut(cs).worker_busy = false;
+            });
+        }
+        response
     }
 
     #[cfg(feature = "incremental-late-completion-profile")]
@@ -253,14 +306,18 @@ impl IncrementalWorkerState {
                 let _ = backend.cancel(id);
             }
 
-            let (response, scan) = match command {
-                Some(WorkerCommand::Start { id, request }) => (
+            let response = match command {
+                Some(WorkerCommand::Start { id, request }) => {
+                    if matches!(request, IncrementalRequest::Scan(_)) {
+                        // SAFETY: only this worker accesses scan storage until
+                        // it publishes a terminal response.
+                        unsafe { self.scan.reset() };
+                    }
                     Some(WorkerResponse::Started {
                         id,
                         result: backend.start(id, request),
-                    }),
-                    None,
-                ),
+                    })
+                }
                 Some(WorkerCommand::Poll { .. }) if injected_stale.is_some() => {
                     let (stale_id, budget) = injected_stale.expect("matched stale injection");
                     let report = WorkReport::try_new(
@@ -272,20 +329,21 @@ impl IncrementalWorkerState {
                         PollDisposition::Complete(hisi_rf_core::IncrementalCompletion::Initialized),
                     )
                     .expect("diagnostic completion fits its submitted budget");
-                    (
-                        Some(WorkerResponse::Polled {
-                            id: stale_id,
-                            result: Ok(report),
-                        }),
-                        None,
-                    )
+                    Some(WorkerResponse::Polled {
+                        id: stale_id,
+                        result: Ok(report),
+                    })
                 }
                 Some(WorkerCommand::Poll { id, reason, budget }) => {
-                    let mut scan = [ScanResult::empty(); SCAN_CAPACITY];
-                    let result = backend.poll(id, reason, budget, &mut scan);
-                    (Some(WorkerResponse::Polled { id, result }), Some(scan))
+                    // SAFETY: this worker is the sole writer. The runner may
+                    // read only after a terminal response blocks new work.
+                    // SAFETY: the worker task is the sole writer and the
+                    // returned borrow ends before the response is published.
+                    let scan_output = unsafe { &mut *self.scan.worker_output_ptr() };
+                    let result = backend.poll(id, reason, budget, scan_output);
+                    Some(WorkerResponse::Polled { id, result })
                 }
-                None => (None, None),
+                None => None,
             };
             let active = next_active(previous_active, response.as_ref());
             let deadline = active.and_then(|id| backend.next_deadline_us(id));
@@ -297,9 +355,6 @@ impl IncrementalWorkerState {
                 mailbox.worker_busy = false;
                 mailbox.active = active;
                 mailbox.deadline_us = deadline;
-                if let Some(scan) = scan {
-                    mailbox.scan = scan;
-                }
                 if response.is_some() {
                     debug_assert!(mailbox.response.is_none());
                     mailbox.response = response;
@@ -435,7 +490,7 @@ impl WorkerResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hisi_rf_core::{IncrementalCompletion, OperationTracker};
+    use hisi_rf_core::{IncrementalCompletion, OperationTracker, Security, Ssid};
 
     fn operation() -> OperationId {
         OperationTracker::new().queue(0).unwrap()
@@ -512,5 +567,36 @@ mod tests {
     fn scan_storage_is_not_embedded_in_each_response_variant() {
         assert!(core::mem::size_of::<WorkerResponse>() < 256);
         assert_eq!(SCAN_CAPACITY, 32);
+    }
+
+    #[test]
+    fn scan_storage_accumulates_results_across_worker_poll_turns() {
+        let storage = WorkerScanStorage::new();
+        let first = ScanResult {
+            ssid: Ssid::try_from_bytes(b"first").unwrap(),
+            bssid: [1; 6],
+            frequency_mhz: 2_437,
+            rssi_dbm: -30,
+            security: Security::Wpa2Personal,
+            channel: 6,
+        };
+        let second = ScanResult {
+            ssid: Ssid::try_from_bytes(b"second").unwrap(),
+            bssid: [2; 6],
+            frequency_mhz: 2_437,
+            rssi_dbm: -31,
+            security: Security::Wpa2Personal,
+            channel: 6,
+        };
+
+        // SAFETY: this test models the single worker writer serially.
+        unsafe { (*storage.worker_output_ptr())[0] = first };
+        // SAFETY: the previous mutable borrow ended before this poll turn.
+        unsafe { (*storage.worker_output_ptr())[1] = second };
+
+        let mut copied = [ScanResult::empty(); 2];
+        // SAFETY: no writer is active while the terminal output is copied.
+        unsafe { storage.copy_to(&mut copied, 2) };
+        assert_eq!(copied, [first, second]);
     }
 }
