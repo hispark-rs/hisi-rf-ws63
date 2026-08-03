@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
 use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
-use portable_atomic::{AtomicBool, AtomicU8, Ordering};
+use portable_atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering};
 use static_cell::StaticCell;
 use ws63_radio_sys::authenticator::{
     ABI_VERSION as AP_ABI_VERSION, Beacon, Config, Context, DriverHooks, HardwareFeatures,
@@ -51,6 +51,7 @@ const AP_INTERFACE_TYPE: u8 = 3;
 const MODE_11B_G_N_AX: u32 = 4;
 const EVENT_RX_MGMT: c_int = 2;
 const IOCTL_RECEIVE_EAPOL: u32 = 6;
+const IOCTL_ENABLE_EAPOL: u32 = 7;
 const VENDOR_TASK_OWNER: u32 = 1;
 const VENDOR_TASK_STACK_BYTES: usize = 24 * 1024;
 const MAX_MGMT_FRAME_LEN: usize = 2304;
@@ -65,11 +66,104 @@ static PORT_IDENTITY: u8 = 0;
 static DRIVER_CONTEXT: DriverContext = DriverContext::new();
 static AP_CLAIMED: AtomicBool = AtomicBool::new(false);
 static MGMT_RX: [MgmtSlot; MGMT_QUEUE_CAPACITY] = [const { MgmtSlot::new() }; MGMT_QUEUE_CAPACITY];
+static AP_DIAGNOSTICS: AccessPointDiagnosticCounters = AccessPointDiagnosticCounters::new();
 
 const SLOT_FREE: u8 = 0;
 const SLOT_WRITING: u8 = 1;
 const SLOT_READY: u8 = 2;
 const SLOT_READING: u8 = 3;
+
+struct AccessPointDiagnosticCounters {
+    events: AtomicU32,
+    last_event: AtomicI32,
+    last_event_length: AtomicU32,
+    invalid_events: AtomicU32,
+    management_queued: AtomicU32,
+    management_dropped: AtomicU32,
+    management_fed: AtomicU32,
+    management_feed_errors: AtomicU32,
+    eapol_polls: AtomicU32,
+    eapol_received: AtomicU32,
+    eapol_fed: AtomicU32,
+    eapol_errors: AtomicU32,
+    management_transmits: AtomicU32,
+    last_management_status: AtomicI32,
+    eapol_transmits: AtomicU32,
+    last_eapol_status: AtomicI32,
+    key_installs: AtomicU32,
+    last_key_status: AtomicI32,
+}
+
+impl AccessPointDiagnosticCounters {
+    const fn new() -> Self {
+        Self {
+            events: AtomicU32::new(0),
+            last_event: AtomicI32::new(0),
+            last_event_length: AtomicU32::new(0),
+            invalid_events: AtomicU32::new(0),
+            management_queued: AtomicU32::new(0),
+            management_dropped: AtomicU32::new(0),
+            management_fed: AtomicU32::new(0),
+            management_feed_errors: AtomicU32::new(0),
+            eapol_polls: AtomicU32::new(0),
+            eapol_received: AtomicU32::new(0),
+            eapol_fed: AtomicU32::new(0),
+            eapol_errors: AtomicU32::new(0),
+            management_transmits: AtomicU32::new(0),
+            last_management_status: AtomicI32::new(0),
+            eapol_transmits: AtomicU32::new(0),
+            last_eapol_status: AtomicI32::new(0),
+            key_installs: AtomicU32::new(0),
+            last_key_status: AtomicI32::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> AccessPointDiagnostics {
+        AccessPointDiagnostics {
+            events: self.events.load(Ordering::Acquire),
+            last_event: self.last_event.load(Ordering::Acquire),
+            last_event_length: self.last_event_length.load(Ordering::Acquire),
+            invalid_events: self.invalid_events.load(Ordering::Acquire),
+            management_queued: self.management_queued.load(Ordering::Acquire),
+            management_dropped: self.management_dropped.load(Ordering::Acquire),
+            management_fed: self.management_fed.load(Ordering::Acquire),
+            management_feed_errors: self.management_feed_errors.load(Ordering::Acquire),
+            eapol_polls: self.eapol_polls.load(Ordering::Acquire),
+            eapol_received: self.eapol_received.load(Ordering::Acquire),
+            eapol_fed: self.eapol_fed.load(Ordering::Acquire),
+            eapol_errors: self.eapol_errors.load(Ordering::Acquire),
+            management_transmits: self.management_transmits.load(Ordering::Acquire),
+            last_management_status: self.last_management_status.load(Ordering::Acquire),
+            eapol_transmits: self.eapol_transmits.load(Ordering::Acquire),
+            last_eapol_status: self.last_eapol_status.load(Ordering::Acquire),
+            key_installs: self.key_installs.load(Ordering::Acquire),
+            last_key_status: self.last_key_status.load(Ordering::Acquire),
+        }
+    }
+}
+
+/// Secret-free, bounded diagnostic snapshot for the native WS63 SoftAP path.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AccessPointDiagnostics {
+    pub events: u32,
+    pub last_event: i32,
+    pub last_event_length: u32,
+    pub invalid_events: u32,
+    pub management_queued: u32,
+    pub management_dropped: u32,
+    pub management_fed: u32,
+    pub management_feed_errors: u32,
+    pub eapol_polls: u32,
+    pub eapol_received: u32,
+    pub eapol_fed: u32,
+    pub eapol_errors: u32,
+    pub management_transmits: u32,
+    pub last_management_status: i32,
+    pub eapol_transmits: u32,
+    pub last_eapol_status: i32,
+    pub key_installs: u32,
+    pub last_key_status: i32,
+}
 
 struct MgmtFrame {
     frequency_mhz: u32,
@@ -363,6 +457,13 @@ impl AccessPoint {
             .map_err(NativeAuthenticatorError::Runtime)
     }
 
+    /// Return bounded counters for AP management and EAPOL driver traffic.
+    ///
+    /// The snapshot contains no SSID, station address, frame, or key material.
+    pub fn diagnostics(&self) -> AccessPointDiagnostics {
+        AP_DIAGNOSTICS.snapshot()
+    }
+
     /// Stop beaconing and release the native authenticator context.
     pub fn stop(&mut self) -> Result<(), NativeAuthenticatorError> {
         self.authenticator.stop()
@@ -522,11 +623,18 @@ impl NativeAuthenticator {
                 )
             };
             slot.state.store(SLOT_FREE, Ordering::Release);
+            AP_DIAGNOSTICS
+                .management_fed
+                .fetch_add(1, Ordering::Relaxed);
             if status != 0 {
+                AP_DIAGNOSTICS
+                    .management_feed_errors
+                    .fetch_add(1, Ordering::Relaxed);
                 return Err(NativeAuthenticatorError::Poll(status));
             }
         }
 
+        AP_DIAGNOSTICS.eapol_polls.fetch_add(1, Ordering::Relaxed);
         let mut ethernet = [0_u8; ETHERNET_HEADER_LEN + MAX_EAPOL_PAYLOAD_LEN];
         let mut receive = RxEapol {
             buffer: ethernet.as_mut_ptr(),
@@ -538,6 +646,9 @@ impl NativeAuthenticator {
             (&mut receive as *mut RxEapol).cast(),
         );
         if status == 0 && receive.length as usize >= ETHERNET_HEADER_LEN {
+            AP_DIAGNOSTICS
+                .eapol_received
+                .fetch_add(1, Ordering::Relaxed);
             let length = (receive.length as usize).min(ethernet.len());
             let status = unsafe {
                 ws63_radio_sys::authenticator::hisi_wpa_ap_feed_eapol(
@@ -548,8 +659,12 @@ impl NativeAuthenticator {
                 )
             };
             if status != 0 {
+                AP_DIAGNOSTICS.eapol_errors.fetch_add(1, Ordering::Relaxed);
                 return Err(NativeAuthenticatorError::Poll(status));
             }
+            AP_DIAGNOSTICS.eapol_fed.fetch_add(1, Ordering::Relaxed);
+        } else if status != 0 && status != -22 {
+            AP_DIAGNOSTICS.eapol_errors.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -699,6 +814,20 @@ pub fn init_access_point<const N: usize>(
         }
         prepare_upstream_authenticator_port(&ifname[..length as usize])
             .map_err(AccessPointInitError::Authenticator)?;
+        let mut eapol = EnableEapol {
+            callback: Some(eapol_event),
+            context: core::ptr::null_mut(),
+        };
+        let enable = crate::wal::ioctl(
+            DRIVER_CONTEXT.ifname(),
+            IOCTL_ENABLE_EAPOL,
+            (&mut eapol as *mut EnableEapol).cast(),
+        );
+        if enable != 0 {
+            return Err(AccessPointInitError::Authenticator(
+                NativeAuthenticatorError::Abi(enable),
+            ));
+        }
         let mut authenticator =
             NativeAuthenticator::new(config).map_err(AccessPointInitError::Authenticator)?;
         authenticator
@@ -941,6 +1070,12 @@ struct RxEapol {
 }
 
 #[repr(C)]
+struct EnableEapol {
+    callback: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    context: *mut c_void,
+}
+
+#[repr(C)]
 struct MlmeData {
     frequency_mhz: u32,
     data_len: u32,
@@ -989,11 +1124,18 @@ unsafe extern "C" fn send_eapol(
         buffer: frame.as_mut_ptr(),
         length: (ETHERNET_HEADER_LEN + payload_len) as u32,
     };
-    crate::wal::ioctl(
+    AP_DIAGNOSTICS
+        .eapol_transmits
+        .fetch_add(1, Ordering::Relaxed);
+    let status = crate::wal::ioctl(
         driver.ifname(),
         IOCTL_SEND_EAPOL,
         (&mut request as *mut TxEapol).cast(),
-    )
+    );
+    AP_DIAGNOSTICS
+        .last_eapol_status
+        .store(status, Ordering::Release);
+    status
 }
 
 unsafe extern "C" fn send_mgmt(
@@ -1014,11 +1156,18 @@ unsafe extern "C" fn send_mgmt(
         data: frame.cast_mut(),
         send_action_cookie: driver.send_action_cookie.get(),
     };
-    crate::wal::ioctl(
+    AP_DIAGNOSTICS
+        .management_transmits
+        .fetch_add(1, Ordering::Relaxed);
+    let status = crate::wal::ioctl(
         driver.ifname(),
         IOCTL_SEND_MLME,
         (&mut request as *mut MlmeData).cast(),
-    )
+    );
+    AP_DIAGNOSTICS
+        .last_management_status
+        .store(status, Ordering::Release);
+    status
 }
 
 #[repr(C)]
@@ -1099,19 +1248,27 @@ unsafe extern "C" fn install_key(
     let Some(mut request) = key_request(key, material.cast_mut(), material_len) else {
         return -1;
     };
+    AP_DIAGNOSTICS.key_installs.fetch_add(1, Ordering::Relaxed);
     let status = crate::wal::ioctl(
         driver.ifname(),
         IOCTL_NEW_KEY,
         (&mut request as *mut KeyExtension).cast(),
     );
+    AP_DIAGNOSTICS
+        .last_key_status
+        .store(status, Ordering::Release);
     if status != 0 || key.flags & key_flag::TX == 0 {
         return status;
     }
-    crate::wal::ioctl(
+    let status = crate::wal::ioctl(
         driver.ifname(),
         IOCTL_SET_KEY,
         (&mut request as *mut KeyExtension).cast(),
-    )
+    );
+    AP_DIAGNOSTICS
+        .last_key_status
+        .store(status, Ordering::Release);
+    status
 }
 
 unsafe extern "C" fn remove_key(driver: *mut c_void, key: *const Key) -> c_int {
@@ -1199,6 +1356,10 @@ unsafe extern "C" fn wake_runner(_: *mut c_void) {
     let _ = RUNNER_WAKE.up();
 }
 
+unsafe extern "C" fn eapol_event(_: *mut c_void, _: *mut c_void) {
+    let _ = RUNNER_WAKE.up();
+}
+
 #[repr(C)]
 struct VendorRxMgmt {
     frame: *const u8,
@@ -1214,16 +1375,27 @@ unsafe extern "C" fn ap_event(
     data: *mut u8,
     length: u32,
 ) -> c_int {
+    AP_DIAGNOSTICS.events.fetch_add(1, Ordering::Relaxed);
+    AP_DIAGNOSTICS.last_event.store(event, Ordering::Release);
+    AP_DIAGNOSTICS
+        .last_event_length
+        .store(length, Ordering::Release);
     if ifname.is_null()
         || event != EVENT_RX_MGMT
         || data.is_null()
         || length as usize != core::mem::size_of::<VendorRxMgmt>()
     {
+        AP_DIAGNOSTICS
+            .invalid_events
+            .fetch_add(1, Ordering::Relaxed);
         return 0;
     }
     let input = unsafe { &*data.cast::<VendorRxMgmt>() };
     let frame_len = input.frame_len as usize;
     if input.frame.is_null() || frame_len == 0 || frame_len > MAX_MGMT_FRAME_LEN {
+        AP_DIAGNOSTICS
+            .management_dropped
+            .fetch_add(1, Ordering::Relaxed);
         return -1;
     }
     let Some(slot) = MGMT_RX.iter().find(|slot| {
@@ -1231,6 +1403,9 @@ unsafe extern "C" fn ap_event(
             .compare_exchange(SLOT_FREE, SLOT_WRITING, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }) else {
+        AP_DIAGNOSTICS
+            .management_dropped
+            .fetch_add(1, Ordering::Relaxed);
         return -1;
     };
     // SAFETY: SLOT_WRITING grants this callback exclusive access and the
@@ -1243,6 +1418,9 @@ unsafe extern "C" fn ap_event(
         core::ptr::copy_nonoverlapping(input.frame, output.bytes.as_mut_ptr(), frame_len);
     }
     slot.state.store(SLOT_READY, Ordering::Release);
+    AP_DIAGNOSTICS
+        .management_queued
+        .fetch_add(1, Ordering::Relaxed);
     let _ = RUNNER_WAKE.up();
     0
 }
@@ -1268,6 +1446,7 @@ const _: () = {
     assert!(core::mem::size_of::<BeaconData>() == 16);
     assert!(core::mem::size_of::<ApSettings>() == 84);
     assert!(core::mem::size_of::<TxEapol>() == 8);
+    assert!(core::mem::size_of::<EnableEapol>() == 8);
     assert!(core::mem::size_of::<MlmeData>() == 16);
     assert!(core::mem::size_of::<KeyExtension>() == 36);
 };

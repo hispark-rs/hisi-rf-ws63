@@ -552,9 +552,9 @@ pub use pmp::prepare_vendor_memory;
 #[doc(hidden)]
 pub use upstream_authenticator::{
     ACCESS_POINT_ARENA_BYTES, AccessPoint, AccessPointArenaStorage, AccessPointConfig,
-    AccessPointControlStorage, AccessPointInitError, AccessPointResources, AccessPointStorage,
-    InstalledAccessPointStorage, NativeAuthenticator, NativeAuthenticatorError, init_access_point,
-    prepare_upstream_authenticator_port,
+    AccessPointControlStorage, AccessPointDiagnostics, AccessPointInitError, AccessPointResources,
+    AccessPointStorage, InstalledAccessPointStorage, NativeAuthenticator, NativeAuthenticatorError,
+    init_access_point, prepare_upstream_authenticator_port,
 };
 #[cfg(feature = "upstream-supplicant-port")]
 #[doc(hidden)]
