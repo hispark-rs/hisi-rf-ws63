@@ -540,6 +540,7 @@ pub const hisi_rf_ws63::SELECTED_MINIMUM_TASK_STACK_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_RF_ARENA_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_TASK_STACK_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WS63_SHARED_RADIO_ARENA_BYTES: usize
 pub trait hisi_rf_ws63::Profile: hisi_rf_ws63::profile::sealed::Sealed
 pub const hisi_rf_ws63::Profile::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::ID: &'static str
