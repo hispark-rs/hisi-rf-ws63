@@ -12,6 +12,12 @@ static RX_PREPARE_LAST_RESULT: AtomicU32 = AtomicU32::new(0);
 static HMAC_DATA_EVENT_ADAPT_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_PROCESS_DATA_MSG_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_RX_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_SUCCESS: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_DUPLICATE: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_KEY_FAILURE: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_CCMP_MIC_FAILURE: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_CCMP_REPLAY_FAILURE: AtomicU32 = AtomicU32::new(0);
+static RX_STATUS_OTHER: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -57,6 +63,39 @@ pub(crate) fn rx_pipeline_stages() -> [u32; 3] {
     ]
 }
 
+pub(crate) fn rx_status_counts() -> [u32; 6] {
+    [
+        RX_STATUS_SUCCESS.load(Ordering::Relaxed),
+        RX_STATUS_DUPLICATE.load(Ordering::Relaxed),
+        RX_STATUS_KEY_FAILURE.load(Ordering::Relaxed),
+        RX_STATUS_CCMP_MIC_FAILURE.load(Ordering::Relaxed),
+        RX_STATUS_CCMP_REPLAY_FAILURE.load(Ordering::Relaxed),
+        RX_STATUS_OTHER.load(Ordering::Relaxed),
+    ]
+}
+
+#[cfg(target_arch = "riscv32")]
+fn record_rx_status(rx_status: *const c_void) {
+    if rx_status.is_null() {
+        RX_STATUS_OTHER.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    // SAFETY: `hal_rx_status_stru` is a packed four-byte input structure in
+    // the vendor ABI. Byte zero stores cipher type in the low nibble and the
+    // descriptor status in the high nibble. The pointer remains live for the
+    // duration of `dmac_rx_prepare_data_patch`.
+    let status = unsafe { rx_status.cast::<u8>().read() } >> 4;
+    match status {
+        1 => &RX_STATUS_SUCCESS,
+        2 => &RX_STATUS_DUPLICATE,
+        4 | 12 => &RX_STATUS_KEY_FAILURE,
+        5 => &RX_STATUS_CCMP_MIC_FAILURE,
+        8 => &RX_STATUS_CCMP_REPLAY_FAILURE,
+        _ => &RX_STATUS_OTHER,
+    }
+    .fetch_add(1, Ordering::Relaxed);
+}
+
 /// Count a DMAC completion callback and preserve the vendor implementation.
 ///
 /// The count is deliberately aggregate: one callback may complete more than
@@ -88,6 +127,7 @@ pub unsafe extern "C" fn dmac_rx_prepare_data_patch(
     process_flag: *mut c_void,
 ) -> u32 {
     RX_PREPARES.fetch_add(1, Ordering::Relaxed);
+    record_rx_status(rx_status);
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // this call preserves all arguments and the return value.
     let result = unsafe {
