@@ -309,6 +309,14 @@ pub struct DataPathDiagnostics {
     /// This includes management and internal driver traffic; it is not a count
     /// of Ethernet frames delivered to the Rust L2 device.
     pub dmac_rx_prepares: u32,
+    /// DMAC RX preparation calls returning zero/non-zero and the last result.
+    pub dmac_rx_prepare_zero: u32,
+    pub dmac_rx_prepare_nonzero: u32,
+    pub dmac_rx_prepare_last_result: u32,
+    /// Raw 802.11 data, QoS-data, and protected-data frames at DMAC ingress.
+    pub dmac_rx_data_frames: u32,
+    pub dmac_rx_qos_data_frames: u32,
+    pub dmac_rx_protected_data_frames: u32,
     /// Frames reaching the final vendor host-RX boundary.
     pub vendor_rx_frames: u32,
     /// Valid Ethernet frames delivered by the vendor RX callback.
@@ -405,6 +413,12 @@ impl WifiDevice {
             vendor_tx_frames,
             tx_completions,
             dmac_rx_prepares,
+            dmac_rx_prepare_zero,
+            dmac_rx_prepare_nonzero,
+            dmac_rx_prepare_last_result,
+            dmac_rx_data_frames,
+            dmac_rx_qos_data_frames,
+            dmac_rx_protected_data_frames,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -421,6 +435,12 @@ impl WifiDevice {
                 vendor.bridge_xmit_calls,
                 vendor.tx_complete_calls,
                 vendor.dmac_rx_calls,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 vendor.netif_rx_calls,
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
@@ -436,6 +456,12 @@ impl WifiDevice {
             vendor_tx_frames,
             tx_completions,
             dmac_rx_prepares,
+            dmac_rx_prepare_zero,
+            dmac_rx_prepare_nonzero,
+            dmac_rx_prepare_last_result,
+            dmac_rx_data_frames,
+            dmac_rx_qos_data_frames,
+            dmac_rx_protected_data_frames,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -446,11 +472,18 @@ impl WifiDevice {
         ) = {
             let mac = crate::wlmac_diag::snapshot();
             let station_address = self.station_mac_address();
+            let rx_prepare = crate::data_path_diag::rx_prepare_results();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 crate::netif::tx_submitted(),
                 crate::data_path_diag::tx_completions(),
                 crate::data_path_diag::rx_prepares(),
+                rx_prepare[0],
+                rx_prepare[1],
+                rx_prepare[2],
+                rx_prepare[3],
+                rx_prepare[4],
+                rx_prepare[5],
                 crate::netif::rx_received(),
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
@@ -466,6 +499,12 @@ impl WifiDevice {
             vendor_tx_frames,
             tx_completions,
             dmac_rx_prepares,
+            dmac_rx_prepare_zero,
+            dmac_rx_prepare_nonzero,
+            dmac_rx_prepare_last_result,
+            dmac_rx_data_frames,
+            dmac_rx_qos_data_frames,
+            dmac_rx_protected_data_frames,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -473,7 +512,7 @@ impl WifiDevice {
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
-        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
+        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
@@ -481,6 +520,12 @@ impl WifiDevice {
             vendor_tx_frames,
             tx_completions,
             dmac_rx_prepares,
+            dmac_rx_prepare_zero,
+            dmac_rx_prepare_nonzero,
+            dmac_rx_prepare_last_result,
+            dmac_rx_data_frames,
+            dmac_rx_qos_data_frames,
+            dmac_rx_protected_data_frames,
             vendor_rx_frames,
             rx_frames: crate::netif::rx_received(),
             mac_rx_successful_mpdu,
