@@ -182,6 +182,7 @@ impl IncrementalWorkerState {
         })
     }
 
+    #[cfg(feature = "incremental-late-completion-profile")]
     pub(crate) fn diagnostics(&self) -> (u32, u32) {
         critical_section::with(|cs| {
             let mailbox = self.mailbox.borrow_ref(cs);

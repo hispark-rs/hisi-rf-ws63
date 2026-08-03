@@ -596,6 +596,7 @@ pub struct IncrementalRadioParts<const EVENTS: usize> {
 pub struct IncrementalRadioRunner<const EVENTS: usize> {
     inner: hisi_rf_core::IncrementalRadioRunner<ActiveIncrementalBackend, EVENTS>,
     platform: Ws63IncrementalWaitPlatform,
+    #[cfg_attr(not(feature = "incremental-late-completion-profile"), allow(dead_code))]
     worker: &'static IncrementalWorkerState,
 }
 
