@@ -16,7 +16,13 @@ static TASK_RESERVATION: Mutex<Cell<Option<&'static TaskReservation>>> =
         feature = "net",
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
     ),
-    feature = "upstream-authenticator-wpa2"
+    all(
+        target_arch = "riscv32",
+        any(
+            feature = "upstream-authenticator-wpa2",
+            feature = "upstream-authenticator-wpa3"
+        )
+    )
 ))]
 pub(crate) fn install_task_reservation(reservation: &'static TaskReservation) -> Result<(), Error> {
     critical_section::with(|cs| {

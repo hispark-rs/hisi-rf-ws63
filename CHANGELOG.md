@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.69] - 2026-08-03
+
+### Added
+
+- Add a pure WPA3-SAE SoftAP profile backed by the pinned upstream
+  authenticator artifact. Its typed resource constructor requires the WS63
+  PKE token, and initialization runs the bounded P-256 hardware self-test.
+- Add independent WPA2/WPA3 SoftAP host, clippy, and RV32 CI lanes.
+
+### Fixed
+
+- Update the exact radio artifact dependency to `ws63-radio-sys
+  0.1.0-alpha.11` and share the SAE crypto ABI between STA and AP roles
+  without selecting both target archives.
+
 ## [0.1.0-alpha.68] - 2026-08-03
 
 ### Added

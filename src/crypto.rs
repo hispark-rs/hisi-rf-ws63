@@ -11,11 +11,12 @@ pub(crate) use hisi_crypto::CryptoError;
     any(
         feature = "wifi-wpa2-personal",
         feature = "upstream-supplicant-port",
-        feature = "upstream-authenticator-wpa2"
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
     )
 ))]
 use hisi_crypto::Pbkdf2HmacSha1;
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto::sae::{
     P256AffinePoint, P256FieldElement, P256PointResult, TryP256ComputeYSquared, TryP256FieldMul,
     TryP256FieldPow, TryP256PointAdd, TryP256PointInvert, TryP256PointMul, TryP256PointValidate,
@@ -23,7 +24,7 @@ use hisi_crypto::sae::{
 #[cfg(target_arch = "riscv32")]
 use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac};
 use hisi_crypto_ws63::Ws63CryptoStorage;
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto_ws63::Ws63P256;
 #[cfg(target_arch = "riscv32")]
 use hisi_crypto_ws63::{Ws63Crypto, Ws63CryptoResources};
@@ -37,14 +38,14 @@ use static_cell::StaticCell;
 #[cfg(target_arch = "riscv32")]
 use zeroize::Zeroize;
 
-#[cfg(feature = "upstream-supplicant-wpa3")]
+#[cfg(feature = "wpa3-crypto")]
 #[path = "crypto_sae.rs"]
 mod crypto_sae;
 
 #[cfg(target_arch = "riscv32")]
 struct CryptoService {
     backend: Ws63Crypto<'static>,
-    #[cfg(feature = "upstream-supplicant-wpa3")]
+    #[cfg(feature = "wpa3-crypto")]
     p256: Ws63P256<'static>,
     mutex: MutexHandle,
 }
@@ -99,61 +100,61 @@ static CIPHER_MAX_MS: AtomicU32 = AtomicU32::new(0);
 static CIPHER_RECOVERY_TESTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 static CIPHER_RECOVERY_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_MAX_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_ADD_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_ADD_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_ADD_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_ADD_MAX_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_MAX_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_MUL_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_SQUARE_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_POW_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_MUL_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_SQUARE_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_FIELD_POW_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_MAX_MS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_INVERT_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_VALIDATE_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_Y2_REQUESTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_INVERT_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_VALIDATE_FAILURES: AtomicU32 = AtomicU32::new(0);
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_CURVE_Y2_FAILURES: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(target_arch = "riscv32", feature = "rf-crypto-contention-diag"))]
 static CRYPTO_CONTENTION_CONTEXT: StaticCell<CryptoContentionContext> = StaticCell::new();
@@ -190,13 +191,13 @@ pub(crate) fn install_hardware_crypto(
 ) -> Result<(), CryptoError> {
     let mutex =
         hisi_rf_rtos_driver::mutex_create().map_err(|_| CryptoError::Backend(0xffff_1002))?;
-    #[cfg(feature = "upstream-supplicant-wpa3")]
+    #[cfg(feature = "wpa3-crypto")]
     let pke = pke.ok_or(CryptoError::InvalidValue)?;
-    #[cfg(not(feature = "upstream-supplicant-wpa3"))]
+    #[cfg(not(feature = "wpa3-crypto"))]
     let _ = pke;
     let Some(service) = CRYPTO_CELL.try_init(CryptoService {
         backend: Ws63Crypto::new(Ws63CryptoResources::new(km, spacc, trng, storage)),
-        #[cfg(feature = "upstream-supplicant-wpa3")]
+        #[cfg(feature = "wpa3-crypto")]
         p256: Ws63P256::new(pke),
         mutex,
     }) else {
@@ -268,7 +269,7 @@ fn record_crypto_timing(started: Option<u64>, total: &AtomicU32, maximum: &Atomi
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_point_mul_hardware(
     point: &P256AffinePoint,
     scalar: &[u8; 32],
@@ -289,7 +290,7 @@ pub(super) fn p256_point_mul_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_point_add_hardware(
     a: &P256AffinePoint,
     b: &P256AffinePoint,
@@ -317,14 +318,14 @@ pub(super) fn p256_point_add_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 enum P256FieldOperation {
     Multiply,
     Square,
     Pow,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 fn record_p256_field_result(
     started: Option<u64>,
     operation: P256FieldOperation,
@@ -347,7 +348,7 @@ fn record_p256_field_result(
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_field_mul_hardware(
     a: &P256FieldElement,
     b: &P256FieldElement,
@@ -366,7 +367,7 @@ pub(super) fn p256_field_mul_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_field_square_hardware(
     value: &P256FieldElement,
     output: &mut P256FieldElement,
@@ -384,7 +385,7 @@ pub(super) fn p256_field_square_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_field_pow_hardware(
     base: &P256FieldElement,
     exponent: &[u8; 32],
@@ -403,14 +404,14 @@ pub(super) fn p256_field_pow_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 enum P256CurveOperation {
     Invert,
     Validate,
     YSquared,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 fn record_p256_curve_result(started: Option<u64>, operation: P256CurveOperation, failed: bool) {
     record_crypto_timing(started, &P256_CURVE_TOTAL_MS, &P256_CURVE_MAX_MS);
     if failed {
@@ -429,7 +430,7 @@ fn record_p256_curve_result(started: Option<u64>, operation: P256CurveOperation,
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_compute_y_squared_hardware(
     x: &P256FieldElement,
     output: &mut P256FieldElement,
@@ -447,7 +448,7 @@ pub(super) fn p256_compute_y_squared_hardware(
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_point_validate_hardware(point: &P256AffinePoint) -> Result<bool, CryptoError> {
     P256_CURVE_REQUESTS.fetch_add(1, Ordering::Relaxed);
     P256_CURVE_VALIDATE_REQUESTS.fetch_add(1, Ordering::Relaxed);
@@ -462,7 +463,7 @@ pub(super) fn p256_point_validate_hardware(point: &P256AffinePoint) -> Result<bo
     result
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(super) fn p256_point_invert_hardware(
     point: &P256AffinePoint,
     output: &mut P256AffinePoint,
@@ -626,7 +627,7 @@ pub(crate) fn hardware_cipher_diagnostic_snapshot() -> [u32; 6] {
 }
 
 /// Return non-secret PKE P-256 point-operation counters.
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
     [
         P256_REQUESTS.load(Ordering::Relaxed),
@@ -641,7 +642,7 @@ pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
 }
 
 /// Return non-secret PKE P-256 fixed-field-operation counters.
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
     [
         P256_FIELD_REQUESTS.load(Ordering::Relaxed),
@@ -658,7 +659,7 @@ pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
 }
 
 /// Return non-secret fixed P-256 curve-composition counters.
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
     [
         P256_CURVE_REQUESTS.load(Ordering::Relaxed),
@@ -677,7 +678,7 @@ pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
 /// P-256 is not part of the selected firmware profile.
 #[cfg(all(
     target_arch = "riscv32",
-    not(feature = "upstream-supplicant-wpa3"),
+    not(feature = "wpa3-crypto"),
     any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
 ))]
 pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
@@ -687,7 +688,7 @@ pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
 /// P-256 is not part of the selected firmware profile.
 #[cfg(all(
     target_arch = "riscv32",
-    not(feature = "upstream-supplicant-wpa3"),
+    not(feature = "wpa3-crypto"),
     any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
 ))]
 pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
@@ -697,7 +698,7 @@ pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
 /// P-256 is not part of the selected firmware profile.
 #[cfg(all(
     target_arch = "riscv32",
-    not(feature = "upstream-supplicant-wpa3"),
+    not(feature = "wpa3-crypto"),
     any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")
 ))]
 pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
@@ -717,6 +718,7 @@ pub(crate) fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
 }
 
 #[cfg(not(target_arch = "riscv32"))]
+#[allow(dead_code)]
 pub(crate) fn install_hardware_crypto(
     _km: Km<'static>,
     _spacc: Spacc<'static>,
@@ -761,16 +763,19 @@ pub(crate) fn hardware_cipher_diagnostic_snapshot() -> [u32; 6] {
 }
 
 #[cfg(not(target_arch = "riscv32"))]
+#[allow(dead_code)]
 pub(crate) fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
     [0; 8]
 }
 
 #[cfg(not(target_arch = "riscv32"))]
+#[allow(dead_code)]
 pub(crate) fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
     [0; 10]
 }
 
 #[cfg(not(target_arch = "riscv32"))]
+#[allow(dead_code)]
 pub(crate) fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
     [0; 10]
 }
@@ -840,7 +845,7 @@ pub(crate) fn ws63_hash_self_test() -> Result<(), CryptoError> {
     Ok(())
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-wpa3"))]
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 pub(crate) fn ws63_p256_self_test() -> Result<(), CryptoError> {
     const GENERATOR: P256AffinePoint = P256AffinePoint::new(
         [

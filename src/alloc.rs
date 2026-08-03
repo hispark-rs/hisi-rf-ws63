@@ -182,7 +182,10 @@ pub(crate) fn install_arena<P: Profile>(arena: RadioArena<P>) -> Result<(), Aren
     unsafe { HEAP.init(arena.start, arena.len) }.map_err(|_| ArenaAdmissionError::InvalidArena)
 }
 
-#[cfg(feature = "upstream-authenticator-wpa2")]
+#[cfg(any(
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
+))]
 pub(crate) unsafe fn install_raw_arena(start: *mut u8, len: usize) -> Result<(), ()> {
     // SAFETY: the AP storage capability provides a unique, static, aligned
     // region and consumes its one-shot claim before reaching this function.

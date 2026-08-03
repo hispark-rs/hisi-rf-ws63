@@ -12,7 +12,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use core::ptr::NonNull;
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
-use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
+use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
 use portable_atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering};
 use static_cell::StaticCell;
@@ -411,6 +411,7 @@ pub struct AccessPointConfig<'a> {
     pub channel: u8,
     pub hidden: bool,
     pub max_stations: u8,
+    sae_pwe: u8,
 }
 
 /// Uniquely owned hardware and storage consumed by one SoftAP instance.
@@ -418,11 +419,13 @@ pub struct AccessPointResources<const N: usize> {
     efuse: Efuse<'static>,
     km: Km<'static>,
     spacc: Spacc<'static>,
+    pke: Option<Pke<'static>>,
     trng: Trng<'static>,
     storage: InstalledAccessPointStorage<N>,
 }
 
 impl<const N: usize> AccessPointResources<N> {
+    #[cfg(feature = "upstream-authenticator-wpa2")]
     pub fn new(
         efuse: Efuse<'static>,
         km: Km<'static>,
@@ -434,6 +437,26 @@ impl<const N: usize> AccessPointResources<N> {
             efuse,
             km,
             spacc,
+            pke: None,
+            trng,
+            storage,
+        }
+    }
+
+    #[cfg(feature = "upstream-authenticator-wpa3")]
+    pub fn new(
+        efuse: Efuse<'static>,
+        km: Km<'static>,
+        spacc: Spacc<'static>,
+        pke: Pke<'static>,
+        trng: Trng<'static>,
+        storage: InstalledAccessPointStorage<N>,
+    ) -> Self {
+        Self {
+            efuse,
+            km,
+            spacc,
+            pke: Some(pke),
             trng,
             storage,
         }
@@ -518,6 +541,7 @@ pub struct AccessPointNetworkDevice {
 }
 
 impl<'a> AccessPointConfig<'a> {
+    #[cfg(feature = "upstream-authenticator-wpa2")]
     pub const fn wpa2_personal(ssid: &'a [u8], passphrase: &'a [u8], channel: u8) -> Self {
         Self {
             ssid,
@@ -525,6 +549,22 @@ impl<'a> AccessPointConfig<'a> {
             channel,
             hidden: false,
             max_stations: 4,
+            sae_pwe: 0,
+        }
+    }
+
+    /// Construct a pure WPA3-SAE AP with protected management frames required.
+    #[cfg(feature = "upstream-authenticator-wpa3")]
+    pub const fn wpa3_sae(ssid: &'a [u8], passphrase: &'a [u8], channel: u8) -> Self {
+        Self {
+            ssid,
+            passphrase,
+            channel,
+            hidden: false,
+            max_stations: 4,
+            // Accept both hunting-and-pecking and hash-to-element peers while
+            // the profile remains WPA3-only and PMF-required.
+            sae_pwe: 2,
         }
     }
 
@@ -537,12 +577,16 @@ impl<'a> AccessPointConfig<'a> {
         {
             return Err(NativeAuthenticatorError::InvalidConfig);
         }
+        #[cfg(feature = "upstream-authenticator-wpa2")]
+        let (security, pmf, sae_pwe) = (Security::Wpa2Psk as u8, 0, 0);
+        #[cfg(feature = "upstream-authenticator-wpa3")]
+        let (security, pmf, sae_pwe) = (Security::Wpa3Sae as u8, 2, self.sae_pwe);
         let mut raw = Config {
             abi_version: AP_ABI_VERSION,
-            security: Security::Wpa2Psk as u8,
-            pmf: 0,
+            security,
+            pmf,
             ssid_len: self.ssid.len() as u8,
-            sae_pwe: 0,
+            sae_pwe,
             channel: self.channel,
             hidden_ssid: u8::from(self.hidden),
             beacon_interval: 100,
@@ -833,7 +877,7 @@ pub fn init_access_point<const N: usize>(
     #[cfg(not(target_arch = "riscv32"))]
     {
         let _ = (config, resources);
-        return Err(AccessPointInitError::UnsupportedTarget);
+        Err(AccessPointInitError::UnsupportedTarget)
     }
     #[cfg(target_arch = "riscv32")]
     {
@@ -876,11 +920,14 @@ pub fn init_access_point<const N: usize>(
         crate::crypto::install_hardware_crypto(
             resources.km,
             resources.spacc,
-            None,
+            resources.pke,
             resources.trng,
             crypto,
         )
         .map_err(|_| AccessPointInitError::Crypto(0xffff_2001))?;
+        #[cfg(feature = "upstream-authenticator-wpa3")]
+        crate::crypto::ws63_p256_self_test()
+            .map_err(|_| AccessPointInitError::Crypto(0xffff_2002))?;
 
         let init = unsafe { uapi_wifi_init(2, 7) };
         if init != 0 {
@@ -1633,6 +1680,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "upstream-authenticator-wpa2")]
     fn validates_bounded_wpa2_config() {
         assert!(
             AccessPointConfig::wpa2_personal(b"ws63-test", b"test-only-pass", 6)
@@ -1645,6 +1693,21 @@ mod tests {
         ));
         assert!(matches!(
             AccessPointConfig::wpa2_personal(b"ws63-test", b"short", 6).as_raw(),
+            Err(NativeAuthenticatorError::InvalidConfig)
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "upstream-authenticator-wpa3")]
+    fn emits_pure_wpa3_sae_with_required_pmf() {
+        let raw = AccessPointConfig::wpa3_sae(b"ws63-test", b"test-only-pass", 6)
+            .as_raw()
+            .unwrap();
+        assert_eq!(raw.security, Security::Wpa3Sae as u8);
+        assert_eq!(raw.pmf, 2);
+        assert_eq!(raw.sae_pwe, 2);
+        assert!(matches!(
+            AccessPointConfig::wpa3_sae(b"ws63-test", b"short", 6).as_raw(),
             Err(NativeAuthenticatorError::InvalidConfig)
         ));
     }

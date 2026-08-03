@@ -90,10 +90,19 @@ compile_error!("incremental-backend-experiment requires the upstream supplicant 
 compile_error!("select either a vendor supplicant profile or an upstream supplicant profile");
 
 #[cfg(all(
-    feature = "upstream-authenticator-wpa2",
+    any(
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
+    ),
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 compile_error!("select either the AP authenticator or a STA supplicant profile");
+
+#[cfg(all(
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
+))]
+compile_error!("select exactly one AP authenticator security profile");
 
 #[cfg(all(feature = "wpa2-personal", feature = "wpa3-personal"))]
 compile_error!("select exactly one WS63 Personal profile");
@@ -128,7 +137,8 @@ use critical_section::Mutex;
     any(
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
-        feature = "upstream-authenticator-wpa2"
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
     )
 ))]
 mod link_contract {
@@ -168,7 +178,8 @@ mod compiler_rt;
 #[cfg(any(
     feature = "wifi-wpa2-personal",
     feature = "upstream-supplicant-port",
-    feature = "upstream-authenticator-wpa2"
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
 ))]
 mod crypto;
 #[cfg(feature = "rf-eloop-diag")]
@@ -202,7 +213,10 @@ pub mod rf_init_diag;
 mod station_pm_diag;
 pub mod timer;
 pub mod uapi;
-#[cfg(feature = "upstream-authenticator-wpa2")]
+#[cfg(any(
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
+))]
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code, unused_imports))]
 mod upstream_authenticator;
 #[cfg(feature = "upstream-supplicant-port")]
@@ -238,7 +252,13 @@ pub fn upstream_supplicant_diagnostic_snapshot() -> [u32; 11] {
 }
 
 /// Return secret-free crypto counters for the native AP HIL fixture.
-#[cfg(all(target_arch = "riscv32", feature = "upstream-authenticator-wpa2"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
+    )
+))]
 #[doc(hidden)]
 pub fn upstream_authenticator_crypto_diagnostic_snapshot() -> [u32; 25] {
     let entropy = crypto::hardware_entropy_diagnostic_snapshot();
@@ -461,25 +481,42 @@ pub fn hardware_hash_diagnostic_snapshot() -> [u32; 10] {
 }
 
 /// Return non-secret SPACC AES request, failure, timing, and recovery counters.
-#[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    feature = "wifi-wpa2-personal",
+    feature = "upstream-supplicant-port",
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
+))]
 pub fn hardware_cipher_diagnostic_snapshot() -> [u32; 6] {
     crypto::hardware_cipher_diagnostic_snapshot()
 }
 
 /// Return non-secret WS63 PKE P-256 point-operation counters.
-#[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    feature = "wifi-wpa2-personal",
+    feature = "upstream-supplicant-port",
+    feature = "wpa3-crypto"
+))]
 pub fn hardware_p256_diagnostic_snapshot() -> [u32; 8] {
     crypto::hardware_p256_diagnostic_snapshot()
 }
 
 /// Return non-secret WS63 PKE P-256 fixed-field-operation counters.
-#[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    feature = "wifi-wpa2-personal",
+    feature = "upstream-supplicant-port",
+    feature = "wpa3-crypto"
+))]
 pub fn hardware_p256_field_diagnostic_snapshot() -> [u32; 10] {
     crypto::hardware_p256_field_diagnostic_snapshot()
 }
 
 /// Return non-secret fixed P-256 curve-composition counters.
-#[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+#[cfg(any(
+    feature = "wifi-wpa2-personal",
+    feature = "upstream-supplicant-port",
+    feature = "wpa3-crypto"
+))]
 pub fn hardware_p256_curve_diagnostic_snapshot() -> [u32; 10] {
     crypto::hardware_p256_curve_diagnostic_snapshot()
 }
@@ -495,7 +532,8 @@ pub fn hardware_crypto_contention_diagnostic_snapshot() -> [u32; 5] {
     target_arch = "riscv32",
     feature = "wifi-personal",
     feature = "upstream-supplicant-port",
-    feature = "upstream-authenticator-wpa2"
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
 ))]
 mod wal;
 pub mod wifi;
@@ -529,8 +567,7 @@ pub use station_pm_diag::{
     all(
         feature = "net",
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
-    ),
-    feature = "upstream-authenticator-wpa2"
+    )
 ))]
 pub(crate) const WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED: usize = 7;
 
@@ -548,7 +585,10 @@ mod wpa_compat;
 mod ws63_runtime_compat;
 
 pub use pmp::prepare_vendor_memory;
-#[cfg(feature = "upstream-authenticator-wpa2")]
+#[cfg(any(
+    feature = "upstream-authenticator-wpa2",
+    feature = "upstream-authenticator-wpa3"
+))]
 #[doc(hidden)]
 pub use upstream_authenticator::{
     ACCESS_POINT_ARENA_BYTES, AccessPoint, AccessPointArenaStorage, AccessPointConfig,
