@@ -387,6 +387,7 @@ async fn scan_profile(
     } else {
         uart.write(b"RFDBG_A5B_WAIT_ERR reason=missing_snapshot\r\n");
     }
+    write_worker_rtos_diagnostics(uart);
 
     #[cfg(feature = "incremental-cancel-profile")]
     match runner {
@@ -426,6 +427,66 @@ async fn scan_profile(
     uart.write(b"\r\nRFDBG_A5B_CANCEL_PROFILE_OK\r\n");
 
     halt()
+}
+
+fn write_worker_rtos_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    let mut tasks = [hisi_rtos::TaskDiagnostic::default(); 17];
+    let count = hisi_rtos::task_diagnostics(&mut tasks);
+    let mut worker = None;
+    let mut matches = 0_u32;
+    for task in &tasks[..count] {
+        let hisi_rtos::RunPolicy::Budgeted(budget) = task.run_policy else {
+            continue;
+        };
+        if task.stack_size == 8 * 1024
+            && budget.capacity().get() == 100
+            && budget.replenishment_period().get() == 200
+        {
+            matches = matches.saturating_add(1);
+            worker = Some(*task);
+        }
+    }
+
+    let Some(worker) = worker.filter(|_| matches == 1) else {
+        uart.write(b"RFDBG_A5B_WORKER_RTOS_ERR reason=identity count=0x");
+        uart.write(&hex8(matches));
+        uart.write(b"\r\n");
+        halt()
+    };
+    let scheduler = hisi_rtos::diagnostics();
+    uart.write(b"RFDBG_A5B_WORKER_RTOS stack=0x");
+    uart.write(&hex8(worker.stack_size as u32));
+    uart.write(b" cpu_ms=0x");
+    uart.write(&hex8(worker.cpu_time_ms.min(u64::from(u32::MAX)) as u32));
+    uart.write(b" irq_ms=0x");
+    uart.write(&hex8(worker.irq_time_ms.min(u64::from(u32::MAX)) as u32));
+    uart.write(b" dispatches=0x");
+    uart.write(&hex8(worker.dispatches));
+    uart.write(b" exhausted=0x");
+    uart.write(&hex8(worker.budget_exhaustions));
+    uart.write(b" max_run_ms=0x");
+    uart.write(&hex8(
+        worker.max_continuous_run_ms.min(u64::from(u32::MAX)) as u32
+    ));
+    uart.write(b" max_ready_ms=0x");
+    uart.write(&hex8(
+        worker.max_ready_latency_ms.min(u64::from(u32::MAX)) as u32
+    ));
+    uart.write(b" lock_entries=0x");
+    uart.write(&hex8(worker.scheduler_lock_entries));
+    uart.write(b" max_lock_ms=0x");
+    uart.write(&hex8(
+        worker.max_scheduler_lock_ms.min(u64::from(u32::MAX)) as u32
+    ));
+    uart.write(b" lock_overruns=0x");
+    uart.write(&hex8(scheduler.budget_lock_overruns));
+    uart.write(b"\r\n");
+
+    if worker.max_continuous_run_ms > 100 || scheduler.budget_lock_overruns != 0 {
+        uart.write(b"RFDBG_A5B_WORKER_RTOS_ERR reason=quota_contract\r\n");
+        halt()
+    }
+    uart.write(b"RFDBG_A5B_WORKER_RTOS_OK\r\n");
 }
 
 #[cfg(feature = "incremental-cancel-profile")]
