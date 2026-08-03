@@ -9,6 +9,9 @@ static RX_PREPARES: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_ZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_NONZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_LAST_RESULT: AtomicU32 = AtomicU32::new(0);
+static HMAC_DATA_EVENT_ADAPT_CALLS: AtomicU32 = AtomicU32::new(0);
+static HMAC_PROCESS_DATA_MSG_CALLS: AtomicU32 = AtomicU32::new(0);
+static HMAC_RX_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -22,6 +25,12 @@ unsafe extern "C" {
         rx_status: *mut c_void,
         process_flag: *mut c_void,
     ) -> u32;
+    #[link_name = "__real_hmac_rx_data_event_adapt"]
+    fn vendor_hmac_rx_data_event_adapt(vap: *mut c_void, message: *mut c_void) -> i32;
+    #[link_name = "__real_hmac_rx_process_data_msg"]
+    fn vendor_hmac_rx_process_data_msg(vap: *mut c_void, message: *mut c_void) -> i32;
+    #[link_name = "__real_hmac_rx_data"]
+    fn vendor_hmac_rx_data(vap: *mut c_void, netbuf: *mut c_void) -> u32;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -37,6 +46,14 @@ pub(crate) fn rx_prepare_results() -> [u32; 3] {
         RX_PREPARE_ZERO.load(Ordering::Relaxed),
         RX_PREPARE_NONZERO.load(Ordering::Relaxed),
         RX_PREPARE_LAST_RESULT.load(Ordering::Relaxed),
+    ]
+}
+
+pub(crate) fn rx_pipeline_stages() -> [u32; 3] {
+    [
+        HMAC_DATA_EVENT_ADAPT_CALLS.load(Ordering::Relaxed),
+        HMAC_PROCESS_DATA_MSG_CALLS.load(Ordering::Relaxed),
+        HMAC_RX_DATA_CALLS.load(Ordering::Relaxed),
     ]
 }
 
@@ -83,6 +100,36 @@ pub unsafe extern "C" fn dmac_rx_prepare_data_patch(
         RX_PREPARE_NONZERO.fetch_add(1, Ordering::Relaxed);
     }
     result
+}
+
+/// Count host-side RX event adaptation without inspecting the message.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_hmac_rx_data_event_adapt")]
+pub unsafe extern "C" fn hmac_rx_data_event_adapt(vap: *mut c_void, message: *mut c_void) -> i32 {
+    HMAC_DATA_EVENT_ADAPT_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the wrapper preserves the vendor declaration from
+    // `hmac_rx_data_event.h` and forwards both opaque pointers unchanged.
+    unsafe { vendor_hmac_rx_data_event_adapt(vap, message) }
+}
+
+/// Count host-side data-message processing without inspecting the message.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_hmac_rx_process_data_msg")]
+pub unsafe extern "C" fn hmac_rx_process_data_msg(vap: *mut c_void, message: *mut c_void) -> i32 {
+    HMAC_PROCESS_DATA_MSG_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the wrapper preserves the vendor declaration from
+    // `hmac_rx_data_event.h` and forwards both opaque pointers unchanged.
+    unsafe { vendor_hmac_rx_process_data_msg(vap, message) }
+}
+
+/// Count host-side data-frame processing without inspecting the netbuf.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_hmac_rx_data")]
+pub unsafe extern "C" fn hmac_rx_data(vap: *mut c_void, netbuf: *mut c_void) -> u32 {
+    HMAC_RX_DATA_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the wrapper preserves the vendor declaration from
+    // `hmac_rx_data.h` and forwards both opaque pointers unchanged.
+    unsafe { vendor_hmac_rx_data(vap, netbuf) }
 }
 
 #[cfg(test)]

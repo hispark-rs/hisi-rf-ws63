@@ -462,6 +462,9 @@ fn main() {
         for symbol in [
             "dmac_rx_prepare_data_patch",
             "dmac_tx_complete_event_handler",
+            "hmac_rx_data_event_adapt",
+            "hmac_rx_process_data_msg",
+            "hmac_rx_data",
         ] {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }
