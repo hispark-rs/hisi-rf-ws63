@@ -1376,6 +1376,10 @@ fn key_request(key: &Key, material: *mut u8, material_len: usize) -> Option<KeyE
     })
 }
 
+fn should_select_default_key(key: &Key) -> bool {
+    key.flags & key_flag::PAIRWISE == 0 && key.flags & key_flag::TX != 0
+}
+
 unsafe extern "C" fn install_key(
     driver: *mut c_void,
     key: *const Key,
@@ -1403,7 +1407,9 @@ unsafe extern "C" fn install_key(
     AP_DIAGNOSTICS
         .last_key_status
         .store(status, Ordering::Release);
-    if status != 0 || key.flags & key_flag::TX == 0 {
+    // The WS63 AP driver installs pairwise keys with NEW_KEY only. SET_KEY
+    // selects the interface default TX key and is reserved for group keys.
+    if status != 0 || !should_select_default_key(key) {
         return status;
     }
     let status = crate::wal::ioctl(
@@ -1678,6 +1684,30 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_key(flags: u32) -> Key {
+        Key {
+            abi_version: HOSTAP_ABI_VERSION,
+            cipher: cipher::CCMP,
+            key_index: 0,
+            flags,
+            peer_present: 1,
+            sequence_len: 0,
+            peer: [0; 6],
+            sequence: [0; 16],
+        }
+    }
+
+    #[test]
+    fn selects_only_group_tx_keys_as_interface_default() {
+        assert!(!should_select_default_key(&test_key(
+            key_flag::PAIRWISE | key_flag::TX
+        )));
+        assert!(should_select_default_key(&test_key(
+            key_flag::GROUP | key_flag::TX
+        )));
+        assert!(!should_select_default_key(&test_key(key_flag::GROUP)));
+    }
 
     #[test]
     #[cfg(feature = "upstream-authenticator-wpa2")]
