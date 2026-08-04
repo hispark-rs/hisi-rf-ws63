@@ -523,9 +523,7 @@ impl WifiDevice {
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
-        ) = (
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false,
-        );
+        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
         #[cfg(any(feature = "rf-eloop-diag", feature = "data-path-diag"))]
         let mac_security = crate::wlmac_diag::snapshot().security;
         #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
