@@ -302,6 +302,9 @@ pub struct DataPathDiagnostics {
     pub tx_failed: u32,
     /// Frames converted by the vendor host bridge for MAC transmission.
     pub vendor_tx_frames: u32,
+    /// Pbuf reference calls, TX submissions that took a driver reference, and
+    /// TX submissions that returned without taking one.
+    pub tx_reference_diagnostics: [u32; 3],
     /// DMAC transmit completions observed after vendor submission.
     pub tx_completions: u32,
     /// DMAC completion counts indexed by `hal_tx_dscr_status_enum`.
@@ -351,6 +354,8 @@ pub struct DataPathDiagnostics {
     pub wlphy_irqs: u32,
     /// WLAN MAC interrupt dispatches.
     pub wlmac_irqs: u32,
+    /// WLMAC IRQ lifecycle as enable/disable/clear/dispatch/enabled/pending.
+    pub wlmac_irq_lifecycle: [u32; 6],
 }
 
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
@@ -568,6 +573,16 @@ impl WifiDevice {
             tx_frames: crate::netif_smoltcp::tx_count(),
             tx_failed: crate::netif::tx_failed(),
             vendor_tx_frames,
+            tx_reference_diagnostics: {
+                #[cfg(feature = "data-path-diag")]
+                {
+                    crate::netif::tx_reference_diagnostics()
+                }
+                #[cfg(not(feature = "data-path-diag"))]
+                {
+                    [0; 3]
+                }
+            },
             tx_completions,
             tx_completion_status: {
                 #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
@@ -602,6 +617,7 @@ impl WifiDevice {
             coex_wlan_irqs: crate::osal::irq_dispatch_count(40),
             wlphy_irqs: crate::osal::irq_dispatch_count(44),
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
+            wlmac_irq_lifecycle: crate::osal::irq_lifecycle_diagnostics(45),
         }
     }
 }

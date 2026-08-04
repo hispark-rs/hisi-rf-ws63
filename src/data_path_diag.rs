@@ -48,6 +48,7 @@ pub(crate) fn tx_completion_status() -> [u32; 16] {
     core::array::from_fn(|status| TX_COMPLETION_STATUS[status].load(Ordering::Relaxed))
 }
 
+#[allow(dead_code)]
 pub(crate) fn tx_completion_trace() -> (
     u32,
     [u32; TX_COMPLETION_TRACE_SLOTS],

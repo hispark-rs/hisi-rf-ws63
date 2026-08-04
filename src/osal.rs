@@ -14,6 +14,7 @@ use core::cell::Cell;
 use core::ffi::{c_char, c_int, c_ulong, c_void};
 use critical_section::Mutex;
 use hisi_hal::interrupt::{self, Interrupt, Priority};
+use portable_atomic::{AtomicU32, Ordering};
 
 #[cfg(feature = "rf-queue-guard")]
 static mut FRW_QUEUE_GUARD_ARMED: bool = false;
@@ -122,6 +123,9 @@ impl IrqSlot {
 const IRQ_COUNT: usize = 73;
 static IRQ_SLOTS: [Mutex<Cell<IrqSlot>>; IRQ_COUNT] =
     [const { Mutex::new(Cell::new(IrqSlot::EMPTY)) }; IRQ_COUNT];
+static IRQ_ENABLE_CALLS: [AtomicU32; IRQ_COUNT] = [const { AtomicU32::new(0) }; IRQ_COUNT];
+static IRQ_DISABLE_CALLS: [AtomicU32; IRQ_COUNT] = [const { AtomicU32::new(0) }; IRQ_COUNT];
+static IRQ_CLEAR_CALLS: [AtomicU32; IRQ_COUNT] = [const { AtomicU32::new(0) }; IRQ_COUNT];
 
 fn radio_interrupt(irq: u32) -> Option<Interrupt> {
     Some(match irq {
@@ -195,6 +199,7 @@ pub extern "C" fn osal_irq_enable(irq: u32) -> c_int {
     let Some(interrupt) = radio_interrupt(irq) else {
         return OSAL_NOK;
     };
+    IRQ_ENABLE_CALLS[irq as usize].fetch_add(1, Ordering::Relaxed);
     unsafe { interrupt::enable(interrupt) };
     // SAFETY: `osal_irq_request` has already installed this line's vendor
     // handler before the SDK calls `osal_irq_enable`, and the controller line
@@ -211,6 +216,7 @@ pub extern "C" fn osal_irq_disable(irq: u32) -> c_int {
     let Some(interrupt) = radio_interrupt(irq) else {
         return OSAL_NOK;
     };
+    IRQ_DISABLE_CALLS[irq as usize].fetch_add(1, Ordering::Relaxed);
     unsafe { interrupt::disable(interrupt) };
     OSAL_OK
 }
@@ -221,6 +227,7 @@ pub extern "C" fn osal_irq_clear(irq: u32) -> c_int {
     let Some(interrupt) = radio_interrupt(irq) else {
         return OSAL_NOK;
     };
+    IRQ_CLEAR_CALLS[irq as usize].fetch_add(1, Ordering::Relaxed);
     interrupt::clear_pending(interrupt);
     OSAL_OK
 }
@@ -407,6 +414,25 @@ pub fn irq_dispatch_count(irq: u32) -> u32 {
         return 0;
     }
     critical_section::with(|cs| IRQ_SLOTS[irq as usize].borrow(cs).get().dispatch_count)
+}
+
+/// Snapshot IRQ lifecycle calls and local-controller state.
+///
+/// The result is `[enable_calls, disable_calls, clear_calls, dispatches,
+/// enabled, pending]`. This is an on-silicon bring-up probe, not public RF API.
+#[doc(hidden)]
+pub fn irq_lifecycle_diagnostics(irq: u32) -> [u32; 6] {
+    let Some(interrupt) = radio_interrupt(irq) else {
+        return [0; 6];
+    };
+    [
+        IRQ_ENABLE_CALLS[irq as usize].load(Ordering::Relaxed),
+        IRQ_DISABLE_CALLS[irq as usize].load(Ordering::Relaxed),
+        IRQ_CLEAR_CALLS[irq as usize].load(Ordering::Relaxed),
+        irq_dispatch_count(irq),
+        u32::from(interrupt::is_enabled(interrupt)),
+        u32::from(interrupt::is_pending(interrupt)),
+    ]
 }
 
 macro_rules! radio_irq_entry {

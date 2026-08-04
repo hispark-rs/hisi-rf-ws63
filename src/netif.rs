@@ -45,6 +45,12 @@ static RX_RECEIVED: AtomicU32 = AtomicU32::new(0);
 static TX_FAILED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "data-path-diag")]
 static TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "data-path-diag")]
+static PBUF_REF_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "data-path-diag")]
+static TX_DRIVER_REF_TAKEN: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "data-path-diag")]
+static TX_DRIVER_REF_MISSING: AtomicU32 = AtomicU32::new(0);
 /// Single STA netif registered by the vendor WAL. Scan bring-up has no TCP/IP
 /// stack yet, but WAL still expects lwIP to preserve this opaque identity.
 static REGISTERED_NETIF: AtomicUsize = AtomicUsize::new(0);
@@ -68,6 +74,15 @@ pub fn tx_failed() -> u32 {
 #[cfg(feature = "data-path-diag")]
 pub(crate) fn tx_submitted() -> u32 {
     TX_SUBMITTED.load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "data-path-diag")]
+pub(crate) fn tx_reference_diagnostics() -> [u32; 3] {
+    [
+        PBUF_REF_CALLS.load(Ordering::Relaxed),
+        TX_DRIVER_REF_TAKEN.load(Ordering::Relaxed),
+        TX_DRIVER_REF_MISSING.load(Ordering::Relaxed),
+    ]
 }
 
 /// Read-only snapshot of the vendor-created lwIP interface.
@@ -239,6 +254,8 @@ pub extern "C" fn pbuf_free(p: *mut c_void) -> u8 {
 pub extern "C" fn pbuf_ref(p: *mut c_void) {
     let p = p as *mut Pbuf;
     if !p.is_null() {
+        #[cfg(feature = "data-path-diag")]
+        PBUF_REF_CALLS.fetch_add(1, Ordering::Relaxed);
         critical_section::with(|_| {
             // SAFETY: valid pbuf; this short update is serialized with free.
             unsafe { (*p).ref_count += 1 };
@@ -322,8 +339,16 @@ pub fn transmit(frame: &[u8]) -> Result<(), TxError> {
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), (*pbuf).payload.cast(), frame.len());
         #[cfg(feature = "data-path-diag")]
+        let refs_before = PBUF_REF_CALLS.load(Ordering::Relaxed);
+        #[cfg(feature = "data-path-diag")]
         TX_SUBMITTED.fetch_add(1, Ordering::Relaxed);
         send(netif.cast(), pbuf.cast());
+        #[cfg(feature = "data-path-diag")]
+        if PBUF_REF_CALLS.load(Ordering::Relaxed) != refs_before {
+            TX_DRIVER_REF_TAKEN.fetch_add(1, Ordering::Relaxed);
+        } else {
+            TX_DRIVER_REF_MISSING.fetch_add(1, Ordering::Relaxed);
+        }
     }
     // `drv_send` takes its own asynchronous reference. Match lwIP's caller
     // ownership by releasing the reference created by pbuf_alloc.

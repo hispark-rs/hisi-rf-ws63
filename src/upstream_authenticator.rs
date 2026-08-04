@@ -159,6 +159,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_vendor_tx_frames: crate::netif::tx_submitted(),
             #[cfg(feature = "data-path-diag")]
+            data_tx_reference_diagnostics: crate::netif::tx_reference_diagnostics(),
+            #[cfg(feature = "data-path-diag")]
             data_tx_completions: crate::data_path_diag::tx_completions(),
             #[cfg(feature = "data-path-diag")]
             data_tx_completion_status: crate::data_path_diag::tx_completion_status(),
@@ -182,6 +184,8 @@ impl AccessPointDiagnosticCounters {
             mac_key_search_failures: u32::from(mac.security.key_search_failures),
             #[cfg(feature = "data-path-diag")]
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
+            #[cfg(feature = "data-path-diag")]
+            wlmac_irq_lifecycle: crate::osal::irq_lifecycle_diagnostics(45),
             #[cfg(feature = "data-path-diag")]
             mac_tx_high_priority_mpdu: mac.tx.high_priority_mpdu,
             #[cfg(feature = "data-path-diag")]
@@ -227,6 +231,8 @@ pub struct AccessPointDiagnostics {
     #[cfg(feature = "data-path-diag")]
     pub data_vendor_tx_frames: u32,
     #[cfg(feature = "data-path-diag")]
+    pub data_tx_reference_diagnostics: [u32; 3],
+    #[cfg(feature = "data-path-diag")]
     pub data_tx_completions: u32,
     #[cfg(feature = "data-path-diag")]
     pub data_tx_completion_status: [u32; 16],
@@ -253,6 +259,8 @@ pub struct AccessPointDiagnostics {
     pub mac_key_search_failures: u32,
     #[cfg(feature = "data-path-diag")]
     pub wlmac_irqs: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub wlmac_irq_lifecycle: [u32; 6],
     #[cfg(feature = "data-path-diag")]
     pub mac_tx_high_priority_mpdu: u32,
     #[cfg(feature = "data-path-diag")]
