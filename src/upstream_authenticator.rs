@@ -161,6 +161,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_tx_completions: crate::data_path_diag::tx_completions(),
             #[cfg(feature = "data-path-diag")]
+            data_tx_completion_status: crate::data_path_diag::tx_completion_status(),
+            #[cfg(feature = "data-path-diag")]
             data_dmac_rx_prepares: crate::data_path_diag::rx_prepares(),
             #[cfg(feature = "data-path-diag")]
             data_hmac_rx_event_calls: crate::data_path_diag::rx_pipeline_stages()[0],
@@ -214,6 +216,8 @@ pub struct AccessPointDiagnostics {
     pub data_vendor_tx_frames: u32,
     #[cfg(feature = "data-path-diag")]
     pub data_tx_completions: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_tx_completion_status: [u32; 16],
     #[cfg(feature = "data-path-diag")]
     pub data_dmac_rx_prepares: u32,
     #[cfg(feature = "data-path-diag")]
