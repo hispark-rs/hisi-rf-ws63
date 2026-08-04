@@ -129,7 +129,7 @@ impl AccessPointDiagnosticCounters {
 
     fn snapshot(&self) -> AccessPointDiagnostics {
         #[cfg(feature = "data-path-diag")]
-        let mac_security = crate::wlmac_diag::snapshot().security;
+        let mac = crate::wlmac_diag::snapshot();
         AccessPointDiagnostics {
             events: self.events.load(Ordering::Acquire),
             last_event: self.last_event.load(Ordering::Acquire),
@@ -173,13 +173,23 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_vendor_rx_frames: crate::netif::rx_received(),
             #[cfg(feature = "data-path-diag")]
-            mac_ccmp_replay_failures: u32::from(mac_security.ccmp_replay_failures),
+            mac_ccmp_replay_failures: u32::from(mac.security.ccmp_replay_failures),
             #[cfg(feature = "data-path-diag")]
-            mac_ccmp_mic_failures: u32::from(mac_security.ccmp_mic_failures),
+            mac_ccmp_mic_failures: u32::from(mac.security.ccmp_mic_failures),
             #[cfg(feature = "data-path-diag")]
-            mac_key_search_failures: u32::from(mac_security.key_search_failures),
+            mac_key_search_failures: u32::from(mac.security.key_search_failures),
             #[cfg(feature = "data-path-diag")]
             wlmac_irqs: crate::osal::irq_dispatch_count(45),
+            #[cfg(feature = "data-path-diag")]
+            mac_tx_high_priority_mpdu: mac.tx.high_priority_mpdu,
+            #[cfg(feature = "data-path-diag")]
+            mac_tx_normal_priority_mpdu: mac.tx.normal_priority_mpdu,
+            #[cfg(feature = "data-path-diag")]
+            mac_tx_mpdu_in_ampdu: mac.tx.mpdu_in_ampdu,
+            #[cfg(feature = "data-path-diag")]
+            mac_tx_ampdu: mac.tx.ampdu,
+            #[cfg(feature = "data-path-diag")]
+            mac_tx_complete_interrupts: mac.tx.complete_interrupts,
         }
     }
 }
@@ -236,6 +246,16 @@ pub struct AccessPointDiagnostics {
     pub mac_key_search_failures: u32,
     #[cfg(feature = "data-path-diag")]
     pub wlmac_irqs: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_tx_high_priority_mpdu: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_tx_normal_priority_mpdu: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_tx_mpdu_in_ampdu: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_tx_ampdu: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_tx_complete_interrupts: u32,
 }
 
 struct MgmtFrame {
