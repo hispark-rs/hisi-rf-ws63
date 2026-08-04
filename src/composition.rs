@@ -317,9 +317,6 @@ pub struct DataPathDiagnostics {
     pub hmac_rx_data_event_adapt_calls: u32,
     pub hmac_rx_process_data_msg_calls: u32,
     pub hmac_rx_data_calls: u32,
-    /// Descriptor outcomes at the DMAC ingress: success, duplicate, key
-    /// failure, CCMP MIC failure, CCMP replay failure, and all other statuses.
-    pub dmac_rx_status_counts: [u32; 6],
     /// Frames reaching the final vendor host-RX boundary.
     pub vendor_rx_frames: u32,
     /// Valid Ethernet frames delivered by the vendor RX callback.
@@ -422,7 +419,6 @@ impl WifiDevice {
             hmac_rx_data_event_adapt_calls,
             hmac_rx_process_data_msg_calls,
             hmac_rx_data_calls,
-            dmac_rx_status_counts,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -445,7 +441,6 @@ impl WifiDevice {
                 0,
                 0,
                 0,
-                [0; 6],
                 vendor.netif_rx_calls,
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
@@ -467,7 +462,6 @@ impl WifiDevice {
             hmac_rx_data_event_adapt_calls,
             hmac_rx_process_data_msg_calls,
             hmac_rx_data_calls,
-            dmac_rx_status_counts,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -480,7 +474,6 @@ impl WifiDevice {
             let station_address = self.station_mac_address();
             let rx_prepare = crate::data_path_diag::rx_prepare_results();
             let rx_pipeline = crate::data_path_diag::rx_pipeline_stages();
-            let rx_status = crate::data_path_diag::rx_status_counts();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 crate::netif::tx_submitted(),
@@ -492,7 +485,6 @@ impl WifiDevice {
                 rx_pipeline[0],
                 rx_pipeline[1],
                 rx_pipeline[2],
-                rx_status,
                 crate::netif::rx_received(),
                 mac.rx.rx_success_mpdu,
                 mac.rx.rx_failed_mpdu,
@@ -514,7 +506,6 @@ impl WifiDevice {
             hmac_rx_data_event_adapt_calls,
             hmac_rx_process_data_msg_calls,
             hmac_rx_data_calls,
-            dmac_rx_status_counts,
             vendor_rx_frames,
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
@@ -522,9 +513,7 @@ impl WifiDevice {
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
-        ) = (
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [0; 6], 0, 0, 0, 0, 0, false, false,
-        );
+        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
@@ -538,7 +527,6 @@ impl WifiDevice {
             hmac_rx_data_event_adapt_calls,
             hmac_rx_process_data_msg_calls,
             hmac_rx_data_calls,
-            dmac_rx_status_counts,
             vendor_rx_frames,
             rx_frames: crate::netif::rx_received(),
             mac_rx_successful_mpdu,
