@@ -6,6 +6,7 @@ use portable_atomic::{AtomicU32, Ordering};
 
 static TX_COMPLETIONS: AtomicU32 = AtomicU32::new(0);
 static TX_COMPLETION_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static DATA_TX_COMPLETION_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 static RX_PREPARES: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_ZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_NONZERO: AtomicU32 = AtomicU32::new(0);
@@ -32,6 +33,7 @@ unsafe extern "C" {
     fn vendor_hmac_rx_process_data_msg(vap: *mut c_void, message: *mut c_void) -> i32;
     #[link_name = "__real_hmac_rx_data"]
     fn vendor_hmac_rx_data(vap: *mut c_void, netbuf: *mut c_void) -> u32;
+    fn oal_netbuf_mac_header(netbuf: *const c_void) -> *const u8;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -40,6 +42,10 @@ pub(crate) fn tx_completions() -> u32 {
 
 pub(crate) fn tx_completion_status() -> [u32; 16] {
     core::array::from_fn(|status| TX_COMPLETION_STATUS[status].load(Ordering::Relaxed))
+}
+
+pub(crate) fn data_tx_completion_status() -> [u32; 16] {
+    core::array::from_fn(|status| DATA_TX_COMPLETION_STATUS[status].load(Ordering::Relaxed))
 }
 
 fn record_tx_completion_status(status: u8) {
@@ -88,7 +94,19 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
             let descriptor = unsafe { data.read_unaligned() } as *const u32;
             if !descriptor.is_null() {
                 let control = unsafe { descriptor.add(4).read_unaligned() };
-                record_tx_completion_status((control >> 28) as u8);
+                let status = (control >> 28) as u8;
+                record_tx_completion_status(status);
+                let skb = unsafe { descriptor.add(2).read_unaligned() } as *const c_void;
+                if !skb.is_null() {
+                    let frame = unsafe { oal_netbuf_mac_header(skb) };
+                    if !frame.is_null() {
+                        let frame_control = unsafe { frame.cast::<u16>().read_unaligned() };
+                        if frame_control & 0x000c == 0x0008 {
+                            DATA_TX_COMPLETION_STATUS[usize::from(status & 0x0f)]
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
             }
         }
     }
@@ -165,9 +183,11 @@ mod tests {
         let rx_before = rx_prepares();
         TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
         record_tx_completion_status(1);
+        DATA_TX_COMPLETION_STATUS[1].fetch_add(1, Ordering::Relaxed);
         RX_PREPARES.fetch_add(1, Ordering::Relaxed);
         assert!(tx_completions() >= tx_before.saturating_add(1));
         assert_ne!(tx_completion_status()[1], 0);
+        assert_ne!(data_tx_completion_status()[1], 0);
         assert!(rx_prepares() >= rx_before.saturating_add(1));
     }
 }
