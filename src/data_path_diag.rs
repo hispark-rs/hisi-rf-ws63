@@ -5,6 +5,7 @@ use core::ffi::c_void;
 use portable_atomic::{AtomicU32, Ordering};
 
 static TX_COMPLETIONS: AtomicU32 = AtomicU32::new(0);
+static TX_COMPLETION_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 static RX_PREPARES: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_ZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_NONZERO: AtomicU32 = AtomicU32::new(0);
@@ -35,6 +36,14 @@ unsafe extern "C" {
 
 pub(crate) fn tx_completions() -> u32 {
     TX_COMPLETIONS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn tx_completion_status() -> [u32; 16] {
+    core::array::from_fn(|status| TX_COMPLETION_STATUS[status].load(Ordering::Relaxed))
+}
+
+fn record_tx_completion_status(status: u8) {
+    TX_COMPLETION_STATUS[usize::from(status & 0x0f)].fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn rx_prepares() -> u32 {
@@ -70,6 +79,19 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     message: *mut c_void,
 ) -> i32 {
     TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+    if !message.is_null() {
+        // `frw_msg.data` points at a completion record whose first word is the
+        // hardware descriptor. Descriptor word 0 starts 16 bytes later; its
+        // high nibble is `hal_tx_dscr_status_enum`.
+        let data = unsafe { message.cast::<*const u32>().read_unaligned() };
+        if !data.is_null() {
+            let descriptor = unsafe { data.read_unaligned() } as *const u32;
+            if !descriptor.is_null() {
+                let control = unsafe { descriptor.add(4).read_unaligned() };
+                record_tx_completion_status((control >> 28) as u8);
+            }
+        }
+    }
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // `__real_*` resolves to the original mask-ROM implementation.
     unsafe { vendor_dmac_tx_complete_event_handler(vap, message) }
@@ -142,8 +164,10 @@ mod tests {
         let tx_before = tx_completions();
         let rx_before = rx_prepares();
         TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+        record_tx_completion_status(1);
         RX_PREPARES.fetch_add(1, Ordering::Relaxed);
         assert!(tx_completions() >= tx_before.saturating_add(1));
+        assert_ne!(tx_completion_status()[1], 0);
         assert!(rx_prepares() >= rx_before.saturating_add(1));
     }
 }
