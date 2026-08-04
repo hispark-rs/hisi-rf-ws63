@@ -420,6 +420,12 @@ impl WifiDevice {
         crate::netif_smoltcp::last_tx(out)
     }
 
+    /// Copy the prefix of the most recently received frame.
+    #[doc(hidden)]
+    pub fn last_received_frame(&self, out: &mut [u8]) -> usize {
+        crate::netif_smoltcp::last_rx(out)
+    }
+
     /// Snapshot aggregate data-path and radio-interrupt counters.
     #[doc(hidden)]
     pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
