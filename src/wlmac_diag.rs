@@ -1,5 +1,6 @@
 //! Bounded WLMAC snapshots shared by RF diagnostic profiles.
 
+#[allow(dead_code)]
 pub(crate) struct Snapshot {
     pub(crate) rx: hisi_hal::wlmac::WlmacRxCounters,
     pub(crate) security: hisi_hal::wlmac::WlmacRxSecurityCounters,

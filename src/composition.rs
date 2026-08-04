@@ -414,9 +414,16 @@ impl WifiDevice {
         crate::netif_smoltcp::dhcp_diagnostics()
     }
 
+    /// Copy the prefix of the most recently transmitted frame.
+    #[doc(hidden)]
+    pub fn last_transmitted_frame(&self, out: &mut [u8]) -> usize {
+        crate::netif_smoltcp::last_tx(out)
+    }
+
     /// Snapshot aggregate data-path and radio-interrupt counters.
     #[doc(hidden)]
     pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
+        let station_address = self.station_mac_address();
         #[cfg(feature = "rf-eloop-diag")]
         let (
             instrumented_capabilities,
@@ -439,7 +446,6 @@ impl WifiDevice {
         ) = {
             let vendor = crate::eloop_diag::auth();
             let mac = crate::wlmac_diag::snapshot();
-            let station_address = self.station_mac_address();
             (
                 DATA_PATH_DIAG_CAPABILITIES,
                 vendor.bridge_xmit_calls,
@@ -481,7 +487,6 @@ impl WifiDevice {
             mac_bssid_programmed,
         ) = {
             let mac = crate::wlmac_diag::snapshot();
-            let station_address = self.station_mac_address();
             let rx_prepare = crate::data_path_diag::rx_prepare_results();
             let rx_pipeline = crate::data_path_diag::rx_pipeline_stages();
             (

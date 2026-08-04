@@ -128,6 +128,8 @@ impl AccessPointDiagnosticCounters {
     }
 
     fn snapshot(&self) -> AccessPointDiagnostics {
+        #[cfg(feature = "data-path-diag")]
+        let mac_security = crate::wlmac_diag::snapshot().security;
         AccessPointDiagnostics {
             events: self.events.load(Ordering::Acquire),
             last_event: self.last_event.load(Ordering::Acquire),
@@ -150,6 +152,32 @@ impl AccessPointDiagnosticCounters {
             last_eapol_status: self.last_eapol_status.load(Ordering::Acquire),
             key_installs: self.key_installs.load(Ordering::Acquire),
             last_key_status: self.last_key_status.load(Ordering::Acquire),
+            #[cfg(feature = "data-path-diag")]
+            data_tx_frames: crate::netif_smoltcp::tx_count(),
+            #[cfg(feature = "data-path-diag")]
+            data_tx_failed: crate::netif::tx_failed(),
+            #[cfg(feature = "data-path-diag")]
+            data_vendor_tx_frames: crate::netif::tx_submitted(),
+            #[cfg(feature = "data-path-diag")]
+            data_tx_completions: crate::data_path_diag::tx_completions(),
+            #[cfg(feature = "data-path-diag")]
+            data_dmac_rx_prepares: crate::data_path_diag::rx_prepares(),
+            #[cfg(feature = "data-path-diag")]
+            data_hmac_rx_event_calls: crate::data_path_diag::rx_pipeline_stages()[0],
+            #[cfg(feature = "data-path-diag")]
+            data_hmac_rx_msg_calls: crate::data_path_diag::rx_pipeline_stages()[1],
+            #[cfg(feature = "data-path-diag")]
+            data_hmac_rx_calls: crate::data_path_diag::rx_pipeline_stages()[2],
+            #[cfg(feature = "data-path-diag")]
+            data_vendor_rx_frames: crate::netif::rx_received(),
+            #[cfg(feature = "data-path-diag")]
+            mac_ccmp_replay_failures: u32::from(mac_security.ccmp_replay_failures),
+            #[cfg(feature = "data-path-diag")]
+            mac_ccmp_mic_failures: u32::from(mac_security.ccmp_mic_failures),
+            #[cfg(feature = "data-path-diag")]
+            mac_key_search_failures: u32::from(mac_security.key_search_failures),
+            #[cfg(feature = "data-path-diag")]
+            wlmac_irqs: crate::osal::irq_dispatch_count(45),
         }
     }
 }
@@ -178,6 +206,32 @@ pub struct AccessPointDiagnostics {
     pub last_eapol_status: i32,
     pub key_installs: u32,
     pub last_key_status: i32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_tx_frames: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_tx_failed: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_vendor_tx_frames: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_tx_completions: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_dmac_rx_prepares: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_hmac_rx_event_calls: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_hmac_rx_msg_calls: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_hmac_rx_calls: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_vendor_rx_frames: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_ccmp_replay_failures: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_ccmp_mic_failures: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub mac_key_search_failures: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub wlmac_irqs: u32,
 }
 
 struct MgmtFrame {

@@ -41,6 +41,7 @@ pub(crate) fn rx_prepares() -> u32 {
     RX_PREPARES.load(Ordering::Relaxed)
 }
 
+#[allow(dead_code)]
 pub(crate) fn rx_prepare_results() -> [u32; 3] {
     [
         RX_PREPARE_ZERO.load(Ordering::Relaxed),
