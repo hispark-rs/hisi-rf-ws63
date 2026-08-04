@@ -2,6 +2,7 @@
 
 pub(crate) struct Snapshot {
     pub(crate) rx: hisi_hal::wlmac::WlmacRxCounters,
+    pub(crate) security: hisi_hal::wlmac::WlmacRxSecurityCounters,
     pub(crate) filter: hisi_hal::wlmac::WlmacFilterState,
 }
 
@@ -15,6 +16,7 @@ pub(crate) fn snapshot() -> Snapshot {
         let diagnostics = unsafe { hisi_hal::wlmac::WlmacDiagnostics::assume_radio_ready() };
         Snapshot {
             rx: diagnostics.snapshot_rx(),
+            security: diagnostics.snapshot_rx_security(),
             filter: diagnostics.snapshot_filter_state(),
         }
     }
@@ -23,6 +25,7 @@ pub(crate) fn snapshot() -> Snapshot {
     {
         Snapshot {
             rx: hisi_hal::wlmac::WlmacRxCounters::default(),
+            security: hisi_hal::wlmac::WlmacRxSecurityCounters::default(),
             filter: hisi_hal::wlmac::WlmacFilterState::default(),
         }
     }

@@ -327,6 +327,16 @@ pub struct DataPathDiagnostics {
     pub mac_rx_failed_mpdu: u32,
     /// MPDUs rejected by the MAC receive filter.
     pub mac_rx_filtered_mpdu: u32,
+    /// CCMP replay failures rejected by the MAC security engine.
+    pub mac_ccmp_replay_failures: u32,
+    /// TKIP replay failures rejected by the MAC security engine.
+    pub mac_tkip_replay_failures: u32,
+    /// CCMP MIC failures rejected by the MAC security engine.
+    pub mac_ccmp_mic_failures: u32,
+    /// TKIP MIC failures rejected by the MAC security engine.
+    pub mac_tkip_mic_failures: u32,
+    /// Receive frames rejected because no matching key was found.
+    pub mac_key_search_failures: u32,
     /// Packed receive-filter control state active when this snapshot was taken.
     pub mac_rx_filter_control: u32,
     /// Whether the VAP0 station address matches this L2 device's identity.
@@ -513,7 +523,13 @@ impl WifiDevice {
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
-        ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
+        ) = (
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false,
+        );
+        #[cfg(any(feature = "rf-eloop-diag", feature = "data-path-diag"))]
+        let mac_security = crate::wlmac_diag::snapshot().security;
+        #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
+        let mac_security = hisi_hal::wlmac::WlmacRxSecurityCounters::default();
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
@@ -532,6 +548,11 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
+            mac_ccmp_replay_failures: u32::from(mac_security.ccmp_replay_failures),
+            mac_tkip_replay_failures: u32::from(mac_security.tkip_replay_failures),
+            mac_ccmp_mic_failures: u32::from(mac_security.ccmp_mic_failures),
+            mac_tkip_mic_failures: u32::from(mac_security.tkip_mic_failures),
+            mac_key_search_failures: u32::from(mac_security.key_search_failures),
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
