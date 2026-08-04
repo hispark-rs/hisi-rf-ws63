@@ -431,6 +431,7 @@ impl WifiDevice {
     /// Snapshot aggregate data-path and radio-interrupt counters.
     #[doc(hidden)]
     pub fn data_path_diagnostics(&self) -> DataPathDiagnostics {
+        #[cfg(any(feature = "rf-eloop-diag", feature = "data-path-diag"))]
         let station_address = self.station_mac_address();
         #[cfg(feature = "rf-eloop-diag")]
         let (
@@ -538,9 +539,30 @@ impl WifiDevice {
             mac_bssid_programmed,
         ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
         #[cfg(any(feature = "rf-eloop-diag", feature = "data-path-diag"))]
-        let mac_security = crate::wlmac_diag::snapshot().security;
+        let (
+            mac_ccmp_replay_failures,
+            mac_tkip_replay_failures,
+            mac_ccmp_mic_failures,
+            mac_tkip_mic_failures,
+            mac_key_search_failures,
+        ) = {
+            let security = crate::wlmac_diag::snapshot().security;
+            (
+                u32::from(security.ccmp_replay_failures),
+                u32::from(security.tkip_replay_failures),
+                u32::from(security.ccmp_mic_failures),
+                u32::from(security.tkip_mic_failures),
+                u32::from(security.key_search_failures),
+            )
+        };
         #[cfg(not(any(feature = "rf-eloop-diag", feature = "data-path-diag")))]
-        let mac_security = hisi_hal::wlmac::WlmacRxSecurityCounters::default();
+        let (
+            mac_ccmp_replay_failures,
+            mac_tkip_replay_failures,
+            mac_ccmp_mic_failures,
+            mac_tkip_mic_failures,
+            mac_key_search_failures,
+        ) = (0, 0, 0, 0, 0);
         DataPathDiagnostics {
             instrumented_capabilities,
             tx_frames: crate::netif_smoltcp::tx_count(),
@@ -569,11 +591,11 @@ impl WifiDevice {
             mac_rx_successful_mpdu,
             mac_rx_failed_mpdu,
             mac_rx_filtered_mpdu,
-            mac_ccmp_replay_failures: u32::from(mac_security.ccmp_replay_failures),
-            mac_tkip_replay_failures: u32::from(mac_security.tkip_replay_failures),
-            mac_ccmp_mic_failures: u32::from(mac_security.ccmp_mic_failures),
-            mac_tkip_mic_failures: u32::from(mac_security.tkip_mic_failures),
-            mac_key_search_failures: u32::from(mac_security.key_search_failures),
+            mac_ccmp_replay_failures,
+            mac_tkip_replay_failures,
+            mac_ccmp_mic_failures,
+            mac_tkip_mic_failures,
+            mac_key_search_failures,
             mac_rx_filter_control,
             mac_station_address_matches_device,
             mac_bssid_programmed,
