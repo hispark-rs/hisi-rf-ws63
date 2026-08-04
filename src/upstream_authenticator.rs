@@ -163,6 +163,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_tx_completion_status: crate::data_path_diag::tx_completion_status(),
             #[cfg(feature = "data-path-diag")]
+            data_tx_completion_trace: crate::data_path_diag::tx_completion_trace(),
+            #[cfg(feature = "data-path-diag")]
             data_dmac_rx_prepares: crate::data_path_diag::rx_prepares(),
             #[cfg(feature = "data-path-diag")]
             data_hmac_rx_event_calls: crate::data_path_diag::rx_pipeline_stages()[0],
@@ -228,6 +230,11 @@ pub struct AccessPointDiagnostics {
     pub data_tx_completions: u32,
     #[cfg(feature = "data-path-diag")]
     pub data_tx_completion_status: [u32; 16],
+    /// Bounded `(total, packed entries)` completion ring. Each entry stores
+    /// status in bits 31:28, sequence-valid in bit 27, TID in bits 26:23,
+    /// queue in bits 22:20, and the 12-bit MAC sequence in bits 11:0.
+    #[cfg(feature = "data-path-diag")]
+    pub data_tx_completion_trace: (u32, [u32; 32], [u32; 32]),
     #[cfg(feature = "data-path-diag")]
     pub data_dmac_rx_prepares: u32,
     #[cfg(feature = "data-path-diag")]
@@ -987,6 +994,7 @@ pub fn init_access_point<const N: usize>(
             return Err(AccessPointInitError::Runtime(error));
         }
 
+        crate::force_link_contract();
         unsafe { crate::prepare_vendor_memory() };
         let timebase = crate::uapi::initialize_rom_timebases();
         if timebase != 0 {
