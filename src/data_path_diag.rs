@@ -53,6 +53,11 @@ static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_QUEUE_SNAPSHOT_STAGE: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
 
+// `FRD_ROM_TX_SCH` in the WS63 powersave-off `frw_rom_cb_enum`. The shipped
+// firmware confirms this layout by registering IDs 237, 239, 242, and 243 in
+// `dmac_forward_init`. Keep the conditional enum's numeric ABI explicit here.
+const FRD_ROM_TX_SCH: u32 = 242;
+
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
     #[link_name = "__real_dmac_tx_complete_event_handler"]
@@ -401,7 +406,6 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
 
 #[cfg(target_arch = "riscv32")]
 unsafe fn snapshot_dmac_tx_completion_queues(vap: *mut c_void) {
-    const DMAC_TX_SCHEDULE_FEATURE_ID: u32 = 238;
     unsafe {
         snapshot_dmac_tx_queue_state(
             vap,
@@ -412,7 +416,7 @@ unsafe fn snapshot_dmac_tx_completion_queues(vap: *mut c_void) {
         )
     };
     DMAC_TX_SCHEDULE_HOOK.store(
-        unsafe { frw_get_rom_cb(DMAC_TX_SCHEDULE_FEATURE_ID) } as usize as u32,
+        unsafe { frw_get_rom_cb(FRD_ROM_TX_SCH) } as usize as u32,
         Ordering::Release,
     );
     DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(2, Ordering::Release);
@@ -730,5 +734,14 @@ mod tests {
             pack_dmac_tx_queue(true, false, 0xff, 0xfe, 0xfd),
             0x80ff_fefd
         );
+    }
+
+    #[test]
+    fn uses_the_powersave_off_tx_scheduler_callback_id() {
+        // The powersave-enabled enum inserts `FRW_ROM_CB_DMAC_STA_PM_WAKEUP_HOST`
+        // and would shift this value to 243. WS63's released app registers the
+        // powersave-off callback IDs, so silently using either 238 or 243 would
+        // inspect a different callback.
+        assert_eq!(FRD_ROM_TX_SCH, 242);
     }
 }
