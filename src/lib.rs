@@ -919,10 +919,6 @@ pub fn force_link_contract() {
     ))]
     {
         keep!(
-            data_path_diag::hmac_bridge_vap_xmit_etc
-                as unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32
-        );
-        keep!(
             data_path_diag::dmac_tx_complete_event_handler
                 as unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32
         );

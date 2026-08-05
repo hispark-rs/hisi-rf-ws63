@@ -33,8 +33,6 @@ static HMAC_RX_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
-    #[link_name = "__real_hmac_bridge_vap_xmit_etc"]
-    fn vendor_hmac_bridge_vap_xmit_etc(vap: *mut c_void, message: *mut c_void) -> i32;
     #[link_name = "__real_dmac_tx_complete_event_handler"]
     fn vendor_dmac_tx_complete_event_handler(vap: *mut c_void, message: *mut c_void) -> i32;
     fn oal_netbuf_mac_header(netbuf: *const c_void) -> *const u8;
@@ -135,6 +133,14 @@ fn record_tx_submission(skb: usize, echo: u32, timestamp_ms: u32) {
     TX_SUBMISSION_SKB_TRACE[slot].store(skb as u32, Ordering::Release);
 }
 
+pub(crate) fn record_tx_frame_submission(skb: usize, frame: &[u8]) {
+    record_tx_submission(
+        skb,
+        classify_udp_echo(frame).unwrap_or(0),
+        crate::uapi::monotonic_ms() as u32,
+    );
+}
+
 fn submission_for_skb(skb: usize) -> u32 {
     let total = TX_SUBMISSION_TRACE_TOTAL.load(Ordering::Acquire);
     let retained = total.min(TX_COMPLETION_TRACE_SLOTS as u32);
@@ -179,42 +185,6 @@ fn classify_udp_echo(frame: &[u8]) -> Option<u32> {
         return None;
     };
     Some(0x8000_0000 | (direction << 28) | u32::from(frame[udp + UDP_HEADER]))
-}
-
-#[cfg(target_arch = "riscv32")]
-unsafe fn host_skb(message: *mut c_void) -> *const u8 {
-    if message.is_null() {
-        return core::ptr::null();
-    }
-    let data = unsafe { message.cast::<*const usize>().read_unaligned() };
-    if data.is_null() {
-        core::ptr::null()
-    } else {
-        unsafe { data.read_unaligned() as *const u8 }
-    }
-}
-
-/// Record the one-byte UDP echo identity before vendor encapsulation.
-#[cfg(target_arch = "riscv32")]
-#[unsafe(export_name = "__wrap_hmac_bridge_vap_xmit_etc")]
-pub unsafe extern "C" fn hmac_bridge_vap_xmit_etc(vap: *mut c_void, message: *mut c_void) -> i32 {
-    let skb = unsafe { host_skb(message) };
-    let echo = if skb.is_null() {
-        0
-    } else {
-        let length = unsafe { skb.add(12).cast::<u32>().read_unaligned() } as usize;
-        let frame = unsafe { skb.add(84).cast::<*const u8>().read_unaligned() };
-        if frame.is_null() || length > u16::MAX as usize {
-            0
-        } else {
-            // SAFETY: the vendor owns a live skb with `length` bytes for the
-            // duration of this synchronous bridge call.
-            classify_udp_echo(unsafe { core::slice::from_raw_parts(frame, length) }).unwrap_or(0)
-        }
-    };
-    record_tx_submission(skb as usize, echo, crate::uapi::monotonic_ms() as u32);
-    // SAFETY: the linker wraps this exact vendor ABI and forwards unchanged.
-    unsafe { vendor_hmac_bridge_vap_xmit_etc(vap, message) }
 }
 
 pub(crate) fn rx_prepares() -> u32 {

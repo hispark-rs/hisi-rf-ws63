@@ -339,6 +339,8 @@ pub fn transmit(frame: &[u8]) -> Result<(), TxError> {
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), (*pbuf).payload.cast(), frame.len());
         #[cfg(feature = "data-path-diag")]
+        crate::data_path_diag::record_tx_frame_submission(pbuf as usize, frame);
+        #[cfg(feature = "data-path-diag")]
         let refs_before = PBUF_REF_CALLS.load(Ordering::Relaxed);
         #[cfg(feature = "data-path-diag")]
         TX_SUBMITTED.fetch_add(1, Ordering::Relaxed);
