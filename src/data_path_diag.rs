@@ -98,6 +98,10 @@ fn record_tx_completion_status(status: u8) {
     TX_COMPLETION_STATUS[usize::from(status & 0x0f)].fetch_add(1, Ordering::Relaxed);
 }
 
+fn is_normal_data_queue(queue: u8) -> bool {
+    queue & 0x07 == 0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record_tx_completion_trace(
     status: u8,
@@ -239,7 +243,7 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
                 // intentionally retains the normal data queue. Rust submits
                 // this queue in FIFO order, so the matching identity can be
                 // consumed without following a vendor-private packet pointer.
-                if queue == 0 {
+                if is_normal_data_queue(queue) {
                     record_tx_completion_trace(
                         status,
                         sequence_word & (1 << 17) != 0,
@@ -371,5 +375,13 @@ mod tests {
         assert_eq!(classify_udp_echo(&frame), Some(0xa000_0007));
         frame[38..40].copy_from_slice(&10_u16.to_be_bytes());
         assert_eq!(classify_udp_echo(&frame), None);
+    }
+
+    #[test]
+    fn normal_data_queue_ignores_descriptor_flag_bits() {
+        assert!(is_normal_data_queue(0));
+        assert!(is_normal_data_queue(0x80));
+        assert!(!is_normal_data_queue(4));
+        assert!(!is_normal_data_queue(0x84));
     }
 }
