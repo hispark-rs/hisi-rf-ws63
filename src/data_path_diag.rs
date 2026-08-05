@@ -40,6 +40,9 @@ static HMAC_TX_DATA_SEND_RETURNS: AtomicU32 = AtomicU32::new(0);
 static FRW_HMAC_SEND_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
 static FRW_HMAC_SEND_DATA_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
 static FRW_HMAC_SEND_DATA_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static DMAC_TX_DATA_EVENT_CALLS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_DATA_EVENT_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_DATA_EVENT_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -71,6 +74,8 @@ unsafe extern "C" {
     fn vendor_hmac_tx_data_send(tx_data: *mut c_void, buffers: *mut c_void);
     #[link_name = "__real_frw_hmac_send_data"]
     fn vendor_frw_hmac_send_data(netbuf: *mut c_void, vap_id: u8, data_type: u8) -> u32;
+    #[link_name = "__real_dmac_tx_process_data_event"]
+    fn vendor_dmac_tx_process_data_event(vap: *mut c_void, message: *mut c_void) -> i32;
     fn mac_res_get_hmac_vap(index: u8) -> *mut c_void;
     fn mac_vap_get_hmac_user_by_addr_etc(vap: *mut c_void, address: *const u8) -> *mut c_void;
     fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
@@ -266,6 +271,14 @@ pub(crate) fn frw_hmac_send_data_diagnostics() -> (u32, u32, [u32; 16]) {
     )
 }
 
+pub(crate) fn dmac_tx_data_event_diagnostics() -> (u32, u32, [u32; 16]) {
+    (
+        DMAC_TX_DATA_EVENT_CALLS.load(Ordering::Relaxed),
+        DMAC_TX_DATA_EVENT_LAST_STATUS.load(Ordering::Relaxed),
+        core::array::from_fn(|status| DMAC_TX_DATA_EVENT_STATUS[status].load(Ordering::Relaxed)),
+    )
+}
+
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -319,6 +332,24 @@ pub unsafe extern "C" fn frw_hmac_send_data(netbuf: *mut c_void, vap_id: u8, dat
     let status = unsafe { vendor_frw_hmac_send_data(netbuf, vap_id, data_type) };
     FRW_HMAC_SEND_DATA_LAST_STATUS.store(status, Ordering::Relaxed);
     FRW_HMAC_SEND_DATA_STATUS[usize::from((status & 0x0f) as u8)].fetch_add(1, Ordering::Relaxed);
+    status
+}
+
+/// Observe the registered host-to-device data event without changing dispatch.
+///
+/// The vendor `g_msg_entry` table registers `dmac_tx_process_data_event` for
+/// message `0x42` through `frw_dmac_msg_hook_register`. Its callback type is
+/// `osal_s32 (*)(dmac_vap_stru *, frw_msg *)` in `frw_dmac_rom.h`.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_dmac_tx_process_data_event")]
+pub unsafe extern "C" fn dmac_tx_process_data_event(vap: *mut c_void, message: *mut c_void) -> i32 {
+    DMAC_TX_DATA_EVENT_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the signature is the registered `dmac_frw_msg_callback` ABI;
+    // both opaque pointers are forwarded unchanged to the vendor callback.
+    let status = unsafe { vendor_dmac_tx_process_data_event(vap, message) };
+    DMAC_TX_DATA_EVENT_LAST_STATUS.store(status as u32, Ordering::Relaxed);
+    DMAC_TX_DATA_EVENT_STATUS[usize::from((status as u32 & 0x0f) as u8)]
+        .fetch_add(1, Ordering::Relaxed);
     status
 }
 
