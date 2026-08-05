@@ -104,6 +104,8 @@ static EXTERNAL_AUTH_QUEUE: ExternalAuthQueue = ExternalAuthQueue::new();
 static DIAG_SCAN_STARTS: AtomicU32 = AtomicU32::new(0);
 static DIAG_SCAN_RESULTS: AtomicU32 = AtomicU32::new(0);
 static DIAG_SCAN_DONE: AtomicU32 = AtomicU32::new(0);
+static DIAG_SCAN_START_MS: AtomicU32 = AtomicU32::new(0);
+static DIAG_SCAN_DONE_MS: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATE_CALLS: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATE_RETRIES: AtomicU32 = AtomicU32::new(0);
 static DIAG_ASSOCIATE_EVENTS: AtomicU32 = AtomicU32::new(0);
@@ -1531,6 +1533,8 @@ impl NativeSupplicant {
         {
             return Err(NativeSupplicantError::InvalidResult);
         }
+        DIAG_SCAN_START_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
+        DIAG_SCAN_DONE_MS.store(0, Ordering::Release);
         SCAN_EVENT_QUEUE.begin_transaction();
         Ok(())
     }
@@ -2084,6 +2088,7 @@ pub(crate) fn enqueue_scan_done(status: i32) -> bool {
     {
         return false;
     }
+    DIAG_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
     let queued = SCAN_EVENT_QUEUE.enqueue_done(status);
     if queued {
         DIAG_SCAN_DONE.fetch_add(1, Ordering::Relaxed);
@@ -2893,7 +2898,7 @@ pub(crate) fn external_auth_retry_diagnostic_snapshot() -> [u32; 2] {
 }
 
 #[cfg(target_arch = "riscv32")]
-pub(crate) fn scan_diagnostic_snapshot() -> [u32; 6] {
+pub(crate) fn scan_diagnostic_snapshot() -> [u32; 8] {
     [
         DIAG_SCAN_STARTS.load(Ordering::Acquire),
         DIAG_SCAN_RESULTS.load(Ordering::Acquire),
@@ -2901,6 +2906,8 @@ pub(crate) fn scan_diagnostic_snapshot() -> [u32; 6] {
         u32::from(NATIVE_SCAN_ACTIVE.load(Ordering::Acquire)),
         u32::from(SCAN_EVENT_QUEUE.has_pending()),
         SCAN_EVENT_QUEUE.dropped.load(Ordering::Acquire),
+        DIAG_SCAN_START_MS.load(Ordering::Acquire),
+        DIAG_SCAN_DONE_MS.load(Ordering::Acquire),
     ]
 }
 

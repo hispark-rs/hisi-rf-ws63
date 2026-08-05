@@ -50,6 +50,13 @@ static DMAC_TX_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
     [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
 static DMAC_TX_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_COMPLETION_SOFTWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
+    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
+static DMAC_TX_COMPLETION_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
+    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
+static DMAC_TX_COMPLETION_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -89,6 +96,7 @@ unsafe extern "C" {
     fn hmac_psm_is_psm_empty(user: *mut c_void) -> u8;
     fn hmac_psm_tid_mpdu_num(user: *const c_void) -> u32;
     fn hal_chip_get_hal_device() -> *mut c_void;
+    fn frw_get_rom_cb(function_id: u32) -> *mut c_void;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -302,6 +310,26 @@ pub(crate) fn dmac_tx_mac_queue_status() -> [u32; 2] {
     ]
 }
 
+pub(crate) fn dmac_tx_completion_queue_diagnostics()
+-> ([u32; DMAC_TX_QUEUE_COUNT], [u32; DMAC_TX_QUEUE_COUNT]) {
+    (
+        core::array::from_fn(|queue| {
+            DMAC_TX_COMPLETION_SOFTWARE_QUEUES[queue].load(Ordering::Acquire)
+        }),
+        core::array::from_fn(|queue| {
+            DMAC_TX_COMPLETION_HARDWARE_QUEUES[queue].load(Ordering::Acquire)
+        }),
+    )
+}
+
+pub(crate) fn dmac_tx_completion_mac_queue_status() -> [u32; 3] {
+    [
+        DMAC_TX_COMPLETION_MAC_QUEUE_STATUS.load(Ordering::Acquire),
+        DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS.load(Ordering::Acquire),
+        DMAC_TX_SCHEDULE_HOOK.load(Ordering::Acquire),
+    ]
+}
+
 fn pack_dmac_tx_queue(valid: bool, list_empty: bool, status: u8, ppdu: u8, mpdu: u8) -> u32 {
     (u32::from(valid) << 31)
         | (u32::from(list_empty) << 30)
@@ -311,7 +339,13 @@ fn pack_dmac_tx_queue(valid: bool, list_empty: bool, status: u8, ppdu: u8, mpdu:
 }
 
 #[cfg(target_arch = "riscv32")]
-unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
+unsafe fn snapshot_dmac_tx_queue_state(
+    vap: *mut c_void,
+    software_values: &[AtomicU32; DMAC_TX_QUEUE_COUNT],
+    hardware_values: &[AtomicU32; DMAC_TX_QUEUE_COUNT],
+    mac_status: &AtomicU32,
+    mac_ext_status: &AtomicU32,
+) {
     const SOFTWARE_QUEUE_OFFSET: usize = 456;
     const HARDWARE_QUEUE_OFFSET: usize = 40;
     const QUEUE_SIZE: usize = 12;
@@ -340,7 +374,7 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
 
     if !vap.is_null() {
         let software = unsafe { vap.cast::<u8>().add(SOFTWARE_QUEUE_OFFSET) };
-        for (queue, value) in DMAC_TX_SOFTWARE_QUEUES.iter().enumerate() {
+        for (queue, value) in software_values.iter().enumerate() {
             value.store(unsafe { snapshot(software, queue) }, Ordering::Release);
         }
     }
@@ -349,11 +383,11 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
     // scheduling dequeues a DMAC software queue. Keep the raw words so a
     // stalled software queue can be distinguished from a scheduler decision
     // that was blocked by hardware state.
-    DMAC_TX_MAC_QUEUE_STATUS.store(
+    mac_status.store(
         unsafe { MAC_TX_QUEUE_STATUS.read_volatile() },
         Ordering::Release,
     );
-    DMAC_TX_MAC_EXT_QUEUE_STATUS.store(
+    mac_ext_status.store(
         unsafe { MAC_TX_EXT_QUEUE_STATUS.read_volatile() },
         Ordering::Release,
     );
@@ -363,10 +397,41 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
     let device = unsafe { hal_chip_get_hal_device() };
     if !device.is_null() {
         let hardware = unsafe { device.cast::<u8>().add(HARDWARE_QUEUE_OFFSET) };
-        for (queue, value) in DMAC_TX_HARDWARE_QUEUES.iter().enumerate() {
+        for (queue, value) in hardware_values.iter().enumerate() {
             value.store(unsafe { snapshot(hardware, queue) }, Ordering::Release);
         }
     }
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
+    unsafe {
+        snapshot_dmac_tx_queue_state(
+            vap,
+            &DMAC_TX_SOFTWARE_QUEUES,
+            &DMAC_TX_HARDWARE_QUEUES,
+            &DMAC_TX_MAC_QUEUE_STATUS,
+            &DMAC_TX_MAC_EXT_QUEUE_STATUS,
+        )
+    };
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn snapshot_dmac_tx_completion_queues(vap: *mut c_void) {
+    const DMAC_TX_SCHEDULE_FEATURE_ID: u32 = 238;
+    unsafe {
+        snapshot_dmac_tx_queue_state(
+            vap,
+            &DMAC_TX_COMPLETION_SOFTWARE_QUEUES,
+            &DMAC_TX_COMPLETION_HARDWARE_QUEUES,
+            &DMAC_TX_COMPLETION_MAC_QUEUE_STATUS,
+            &DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS,
+        )
+    };
+    DMAC_TX_SCHEDULE_HOOK.store(
+        unsafe { frw_get_rom_cb(DMAC_TX_SCHEDULE_FEATURE_ID) } as usize as u32,
+        Ordering::Release,
+    );
 }
 
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
@@ -539,7 +604,11 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     }
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // `__real_*` resolves to the original mask-ROM implementation.
-    unsafe { vendor_dmac_tx_complete_event_handler(vap, message) }
+    let status = unsafe { vendor_dmac_tx_complete_event_handler(vap, message) };
+    // The vendor handler reclaims the completed descriptor and then attempts
+    // to schedule the next queued descriptor. Observe that postcondition.
+    unsafe { snapshot_dmac_tx_completion_queues(vap) };
+    status
 }
 
 /// Count a call entering the DMAC RX preparation path and forward it.

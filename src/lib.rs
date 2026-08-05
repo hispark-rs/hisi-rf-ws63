@@ -325,12 +325,12 @@ pub fn upstream_supplicant_external_auth_retry_diagnostic_snapshot() -> [u32; 2]
 /// Return secret-free scan queue and callback diagnostics.
 #[cfg(all(feature = "upstream-supplicant-port", target_arch = "riscv32"))]
 #[doc(hidden)]
-pub fn upstream_supplicant_scan_diagnostic_snapshot() -> [u32; 10] {
+pub fn upstream_supplicant_scan_diagnostic_snapshot() -> [u32; 13] {
     let native = upstream_supplicant::scan_diagnostic_snapshot();
     let wifi = wifi::scan_diagnostic_snapshot();
     [
-        native[0], native[1], native[2], native[3], native[4], native[5], wifi[0], wifi[1],
-        wifi[2], wifi[3],
+        native[0], native[1], native[2], native[3], native[4], native[5], native[6], native[7],
+        wifi[0], wifi[1], wifi[2], wifi[3], wifi[4],
     ]
 }
 
@@ -351,6 +351,10 @@ pub struct ScanDiagnostics {
     pub queue_pending: bool,
     /// Native scan events dropped because the bounded queue was full.
     pub queue_dropped: u32,
+    /// Monotonic millisecond timestamp when the scan transaction started.
+    pub native_start_ms: u32,
+    /// Monotonic millisecond timestamp when native scan completion was published.
+    pub native_done_ms: u32,
     /// Whether the vendor driver scan state remains active.
     pub driver_active: bool,
     /// Whether the vendor driver published scan completion.
@@ -359,6 +363,8 @@ pub struct ScanDiagnostics {
     pub driver_results: u32,
     /// Raw vendor scan completion status.
     pub driver_status: u32,
+    /// Monotonic millisecond timestamp when the driver scan-done event arrived.
+    pub driver_done_ms: u32,
 }
 
 /// Return a typed, secret-free scan diagnostic snapshot.
@@ -375,10 +381,13 @@ pub fn upstream_supplicant_scan_diagnostics() -> ScanDiagnostics {
             native_active: values[3] != 0,
             queue_pending: values[4] != 0,
             queue_dropped: values[5],
-            driver_active: values[6] != 0,
-            driver_done: values[7] != 0,
-            driver_results: values[8],
-            driver_status: values[9],
+            native_start_ms: values[6],
+            native_done_ms: values[7],
+            driver_active: values[8] != 0,
+            driver_done: values[9] != 0,
+            driver_results: values[10],
+            driver_status: values[11],
+            driver_done_ms: values[12],
         }
     }
     #[cfg(not(target_arch = "riscv32"))]

@@ -992,6 +992,9 @@ impl<'d> Wifi<'d> {
                 return Err(Error::Busy);
             }
 
+            #[cfg(feature = "upstream-supplicant-port")]
+            DRIVER_SCAN_DONE_MS.store(0, Ordering::Release);
+
             let mut wildcard = VendorScanSsid::zeroed();
             let mut params = VendorScan {
                 ssids: &mut wildcard,
@@ -1453,6 +1456,8 @@ static DRIVER_CONNECT_RESULT_CALLS: AtomicU32 = AtomicU32::new(0);
 static DRIVER_CONNECT_RESULT_REJECT: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
 static DRIVER_CONNECT_RESULT_QUEUED: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
+static DRIVER_SCAN_DONE_MS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
 pub(crate) fn driver_event_diagnostic_snapshot() -> [u32; 6] {
@@ -1513,7 +1518,7 @@ fn finish_scan() {
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
-pub(crate) fn scan_diagnostic_snapshot() -> [u32; 4] {
+pub(crate) fn scan_diagnostic_snapshot() -> [u32; 5] {
     critical_section::with(|cs| {
         let state = SCAN_STATE.borrow(cs);
         let status = match state.status.get() {
@@ -1528,6 +1533,7 @@ pub(crate) fn scan_diagnostic_snapshot() -> [u32; 4] {
             u32::from(state.done.get()),
             state.count.get() as u32,
             status,
+            DRIVER_SCAN_DONE_MS.load(Ordering::Acquire),
         ]
     })
 }
@@ -1779,6 +1785,8 @@ unsafe extern "C" fn scan_event(
         // reports a one-byte payload (`-fshort-enums` vendor ABI).
         // SAFETY: the callback reports at least one readable status byte.
         let raw = unsafe { data.read() } as u32;
+        #[cfg(feature = "upstream-supplicant-port")]
+        DRIVER_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
         #[cfg(feature = "upstream-supplicant-port")]
         let _ = crate::upstream_supplicant::enqueue_scan_done(raw as i32);
         critical_section::with(|cs| {
