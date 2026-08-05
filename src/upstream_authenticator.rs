@@ -235,6 +235,7 @@ impl AccessPointDiagnosticCounters {
                 .compare_exchange(packed, 0, Ordering::AcqRel, Ordering::Acquire);
     }
 
+    #[cfg(any(feature = "data-path-diag", test))]
     fn station_address(&self) -> Option<[u8; 6]> {
         let packed = self.station_address.load(Ordering::Acquire);
         if packed & STATION_ADDRESS_VALID == 0 {
