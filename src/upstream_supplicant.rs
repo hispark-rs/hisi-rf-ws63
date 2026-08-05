@@ -1568,6 +1568,17 @@ impl NativeSupplicant {
         observed
     }
 
+    /// Atomically claim an expired scan before its completion callback does.
+    ///
+    /// Returning `false` means the callback already linearized completion by
+    /// clearing `NATIVE_SCAN_ACTIVE`, so the bounded runner must retain the
+    /// operation and drain the completion instead of reporting a timeout.
+    pub(crate) fn try_claim_scan_timeout(&self) -> bool {
+        NATIVE_SCAN_ACTIVE
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     /// Abort a failed vendor scan without leaking events into the next scan.
     pub(crate) fn cancel_scan_cache_capture(&mut self) {
         NATIVE_SCAN_ACTIVE.store(false, Ordering::Release);

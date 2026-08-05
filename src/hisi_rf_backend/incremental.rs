@@ -310,6 +310,9 @@ pub(crate) trait SupplicantPort {
     fn scan_cache_completion_observed(&self) -> bool {
         false
     }
+    fn try_claim_scan_timeout(&mut self) -> bool {
+        !self.scan_cache_completion_observed()
+    }
     fn cancel_scan(&mut self);
     fn configure(&mut self, config: &StationConfig) -> Result<(), BackendError>;
     fn connect(&mut self) -> Result<(), BackendError>;
@@ -351,6 +354,10 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
 
     fn scan_cache_completion_observed(&self) -> bool {
         (**self).scan_cache_completion_observed()
+    }
+
+    fn try_claim_scan_timeout(&mut self) -> bool {
+        (**self).try_claim_scan_timeout()
     }
 
     fn cancel_scan(&mut self) {
@@ -441,6 +448,12 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
         self.supplicant
             .as_ref()
             .is_some_and(NativeSupplicant::scan_cache_completion_observed)
+    }
+
+    fn try_claim_scan_timeout(&mut self) -> bool {
+        self.supplicant
+            .as_ref()
+            .is_none_or(|supplicant| supplicant.try_claim_scan_timeout())
     }
 
     fn cancel_scan(&mut self) {
@@ -983,6 +996,20 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
         } else {
             (false, false)
         };
+        // Completion and timeout must compete for the same transaction state.
+        // A read-only precheck leaves a TOCTOU window where the callback can
+        // publish completion after the check but before the timeout is
+        // committed. The atomic claim makes exactly one side win.
+        let scan_timeout_claimed = if is_scan
+            && matches!(outcome, OperationOutcome::Continue)
+            && finished_us >= self.active_mut(id)?.deadline_us
+            && self.active_mut(id)?.scan_total.is_none()
+            && !scan_completion_observed
+        {
+            self.port.try_claim_scan_timeout()
+        } else {
+            false
+        };
         let timeout = {
             let active = self.active_mut(id)?;
             active.backend_deadline_us = (result.next_deadline_ms != u64::MAX)
@@ -994,7 +1021,8 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
                 // result copy are already-owned work and must not be turned
                 // into a timeout merely because one runner turn made no
                 // progress.
-                && !(is_scan && scan_completion_observed && scan_work_pending)
+                && !(is_scan
+                    && (active.scan_total.is_some() || !scan_timeout_claimed))
             {
                 Some(timeout_error(active))
             } else {
@@ -1450,6 +1478,8 @@ mod tests {
         scan_complete_on_poll: u8,
         scan_cache_pending: bool,
         scan_cache_completion_observed: bool,
+        scan_completion_on_timeout_claim: bool,
+        scan_timeout_claim_calls: u8,
         scan_start_calls: u8,
         scan_cancel_calls: u8,
         connect_calls: u8,
@@ -1475,6 +1505,8 @@ mod tests {
                 scan_complete_on_poll: 0,
                 scan_cache_pending: false,
                 scan_cache_completion_observed: false,
+                scan_completion_on_timeout_claim: false,
+                scan_timeout_claim_calls: 0,
                 scan_start_calls: 0,
                 scan_cancel_calls: 0,
                 connect_calls: 0,
@@ -1514,6 +1546,15 @@ mod tests {
 
         fn scan_cache_completion_observed(&self) -> bool {
             self.scan_cache_completion_observed
+        }
+
+        fn try_claim_scan_timeout(&mut self) -> bool {
+            self.scan_timeout_claim_calls += 1;
+            if self.scan_completion_on_timeout_claim {
+                self.scan_cache_completion_observed = true;
+                return false;
+            }
+            !self.scan_cache_completion_observed
         }
 
         fn cancel_scan(&mut self) {
@@ -2481,6 +2522,53 @@ mod tests {
             }))
         );
         assert_eq!(output[0].ssid.as_bytes(), b"native-first");
+    }
+
+    #[test]
+    fn native_scan_completion_wins_after_last_observation_before_timeout_claim() {
+        let id = operation_id();
+        let mut port = FakePort::new(poll_result(0, false), [None, None]);
+        port.scan_complete_on_poll = u8::MAX;
+        port.scan_completion_on_timeout_claim = true;
+        port.scan_results = [Some(scan_result(b"claim-race", 1)), None, None];
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+        backend
+            .start(
+                id,
+                IncrementalRequest::Scan(ScanConfig::new(
+                    hisi_rf_core::OperationTimeout::try_from_millis(1).unwrap(),
+                )),
+            )
+            .unwrap();
+        let budget = WorkBudget::try_new(2, 100).unwrap();
+        advance_start(&mut backend, id, budget);
+        backend.clock.0 = 1_000;
+        let mut output = [ScanResult::empty(); 1];
+
+        let retained = backend
+            .poll(id, WakeReason::Timer, budget, &mut output)
+            .unwrap();
+        assert!(matches!(
+            retained.disposition(),
+            PollDisposition::Pending(wait) if wait == WaitSet::BACKEND.union(WaitSet::TIMER)
+        ));
+        assert_eq!(backend.port.scan_timeout_claim_calls, 1);
+        assert_eq!(backend.port.scan_cancel_calls, 0);
+
+        backend.port.scan_complete_on_poll = 0;
+        backend.port.scan_total = Some(1);
+        backend.clock.0 = 1_001;
+        let completed = backend
+            .poll(id, WakeReason::Backend, budget, &mut output)
+            .unwrap();
+        assert_eq!(
+            completed.disposition(),
+            PollDisposition::Complete(IncrementalCompletion::Scan(ScanOutcome {
+                count: 1,
+                truncated: false,
+            }))
+        );
+        assert_eq!(output[0].ssid.as_bytes(), b"claim-race");
     }
 
     #[test]
