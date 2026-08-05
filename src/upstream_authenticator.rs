@@ -197,8 +197,6 @@ impl AccessPointDiagnosticCounters {
             data_dmac_tx_queue_snapshot_metadata:
                 crate::data_path_diag::dmac_tx_queue_snapshot_metadata(),
             #[cfg(feature = "data-path-diag")]
-            data_dmac_tx_schedule: crate::data_path_diag::dmac_tx_schedule_diagnostics(),
-            #[cfg(feature = "data-path-diag")]
             data_psm: crate::data_path_diag::associated_station_ps(self.station_address()),
             #[cfg(feature = "data-path-diag")]
             data_vendor_rx_frames: crate::netif::rx_received(),
@@ -324,9 +322,6 @@ pub struct AccessPointDiagnostics {
     /// Latest queue snapshot stage (1=submit, 2=completion) and scheduling hook.
     #[cfg(feature = "data-path-diag")]
     pub data_dmac_tx_queue_snapshot_metadata: [u32; 2],
-    /// need-schedule calls/true results, schedule calls, and latest queue.
-    #[cfg(feature = "data-path-diag")]
-    pub data_dmac_tx_schedule: [u32; 4],
     #[cfg(feature = "data-path-diag")]
     pub data_psm: [u32; 5],
     #[cfg(feature = "data-path-diag")]
