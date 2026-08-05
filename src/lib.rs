@@ -353,7 +353,7 @@ pub struct ScanDiagnostics {
     pub queue_dropped: u32,
     /// Monotonic millisecond timestamp when the scan transaction started.
     pub native_start_ms: u32,
-    /// Monotonic millisecond timestamp when native scan completion was published.
+    /// Monotonic millisecond timestamp when the runner first observed native completion.
     pub native_done_ms: u32,
     /// Whether the vendor driver scan state remains active.
     pub driver_active: bool,
@@ -363,7 +363,7 @@ pub struct ScanDiagnostics {
     pub driver_results: u32,
     /// Raw vendor scan completion status.
     pub driver_status: u32,
-    /// Monotonic millisecond timestamp when the driver scan-done event arrived.
+    /// Monotonic millisecond timestamp when the runner first observed driver completion.
     pub driver_done_ms: u32,
 }
 

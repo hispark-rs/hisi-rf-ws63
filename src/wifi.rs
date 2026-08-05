@@ -1039,6 +1039,10 @@ impl<'d> Wifi<'d> {
             if !done {
                 return Ok(None);
             }
+            #[cfg(feature = "upstream-supplicant-port")]
+            if DRIVER_SCAN_DONE_MS.load(Ordering::Acquire) == 0 {
+                DRIVER_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
+            }
             finish_scan();
             if status != ScanStatus::Success {
                 return Err(Error::ScanFailed(status));
@@ -1785,8 +1789,6 @@ unsafe extern "C" fn scan_event(
         // reports a one-byte payload (`-fshort-enums` vendor ABI).
         // SAFETY: the callback reports at least one readable status byte.
         let raw = unsafe { data.read() } as u32;
-        #[cfg(feature = "upstream-supplicant-port")]
-        DRIVER_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
         #[cfg(feature = "upstream-supplicant-port")]
         let _ = crate::upstream_supplicant::enqueue_scan_done(raw as i32);
         critical_section::with(|cs| {

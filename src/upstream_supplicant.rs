@@ -1561,7 +1561,11 @@ impl NativeSupplicant {
     /// scan-done event and before the parallel Rust scan state is updated.
     /// This edge is therefore the earliest completion linearization point.
     pub(crate) fn scan_cache_completion_observed(&self) -> bool {
-        !NATIVE_SCAN_ACTIVE.load(Ordering::Acquire)
+        let observed = !NATIVE_SCAN_ACTIVE.load(Ordering::Acquire);
+        if observed && DIAG_SCAN_DONE_MS.load(Ordering::Acquire) == 0 {
+            DIAG_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
+        }
+        observed
     }
 
     /// Abort a failed vendor scan without leaking events into the next scan.
@@ -2088,7 +2092,6 @@ pub(crate) fn enqueue_scan_done(status: i32) -> bool {
     {
         return false;
     }
-    DIAG_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
     let queued = SCAN_EVENT_QUEUE.enqueue_done(status);
     if queued {
         DIAG_SCAN_DONE.fetch_add(1, Ordering::Relaxed);
