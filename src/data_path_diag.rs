@@ -21,8 +21,7 @@ static TX_SUBMISSION_TRACE: [AtomicU32; TX_COMPLETION_TRACE_SLOTS] =
     [const { AtomicU32::new(0) }; TX_COMPLETION_TRACE_SLOTS];
 static TX_SUBMISSION_TIME_TRACE: [AtomicU32; TX_COMPLETION_TRACE_SLOTS] =
     [const { AtomicU32::new(0) }; TX_COMPLETION_TRACE_SLOTS];
-static TX_SUBMISSION_SKB_TRACE: [AtomicU32; TX_COMPLETION_TRACE_SLOTS] =
-    [const { AtomicU32::new(0) }; TX_COMPLETION_TRACE_SLOTS];
+static TX_SUBMISSION_TRACE_CONSUMED: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARES: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_ZERO: AtomicU32 = AtomicU32::new(0);
 static RX_PREPARE_NONZERO: AtomicU32 = AtomicU32::new(0);
@@ -35,8 +34,6 @@ static HMAC_RX_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
 unsafe extern "C" {
     #[link_name = "__real_dmac_tx_complete_event_handler"]
     fn vendor_dmac_tx_complete_event_handler(vap: *mut c_void, message: *mut c_void) -> i32;
-    fn oal_netbuf_mac_header(netbuf: *const c_void) -> *const u8;
-    fn oal_netbuf_skb(netbuf: *const c_void) -> *const u8;
     #[link_name = "__real_dmac_rx_prepare_data_patch"]
     fn vendor_dmac_rx_prepare_data_patch(
         netbuf: *mut c_void,
@@ -125,33 +122,31 @@ fn record_tx_completion_trace(
     TX_COMPLETION_ECHO_TRACE[slot].store(echo, Ordering::Release);
 }
 
-fn record_tx_submission(skb: usize, echo: u32, timestamp_ms: u32) {
+fn record_tx_submission(echo: u32, timestamp_ms: u32) {
     let total = TX_SUBMISSION_TRACE_TOTAL.fetch_add(1, Ordering::AcqRel);
     let slot = total as usize % TX_COMPLETION_TRACE_SLOTS;
     TX_SUBMISSION_TRACE[slot].store(echo, Ordering::Release);
     TX_SUBMISSION_TIME_TRACE[slot].store(timestamp_ms, Ordering::Release);
-    TX_SUBMISSION_SKB_TRACE[slot].store(skb as u32, Ordering::Release);
 }
 
-pub(crate) fn record_tx_frame_submission(skb: usize, frame: &[u8]) {
+pub(crate) fn record_tx_frame_submission(frame: &[u8]) {
     record_tx_submission(
-        skb,
         classify_udp_echo(frame).unwrap_or(0),
         crate::uapi::monotonic_ms() as u32,
     );
 }
 
-fn submission_for_skb(skb: usize) -> u32 {
+fn consume_tx_submission() -> u32 {
     let total = TX_SUBMISSION_TRACE_TOTAL.load(Ordering::Acquire);
-    let retained = total.min(TX_COMPLETION_TRACE_SLOTS as u32);
-    for age in 0..retained {
-        let sequence = total.wrapping_sub(age + 1);
-        let slot = sequence as usize % TX_COMPLETION_TRACE_SLOTS;
-        if TX_SUBMISSION_SKB_TRACE[slot].load(Ordering::Acquire) == skb as u32 {
-            return TX_SUBMISSION_TRACE[slot].load(Ordering::Acquire);
-        }
+    let oldest = total.saturating_sub(TX_COMPLETION_TRACE_SLOTS as u32);
+    let consumed = TX_SUBMISSION_TRACE_CONSUMED
+        .fetch_max(oldest, Ordering::AcqRel)
+        .max(oldest);
+    if consumed >= total {
+        return 0;
     }
-    0
+    let sequence = TX_SUBMISSION_TRACE_CONSUMED.fetch_add(1, Ordering::AcqRel);
+    TX_SUBMISSION_TRACE[sequence as usize % TX_COMPLETION_TRACE_SLOTS].load(Ordering::Acquire)
 }
 
 // Bit 31 marks a one-byte UDP echo payload. Bits 29:28 encode request (1) or
@@ -228,7 +223,6 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
         if !data.is_null() {
             let descriptor = unsafe { data.read_unaligned() } as *const u32;
             if !descriptor.is_null() {
-                let descriptor_skb = unsafe { descriptor.add(2).read_unaligned() } as usize;
                 let control = unsafe { descriptor.add(4).read_unaligned() };
                 let status = (control >> 28) as u8;
                 record_tx_completion_status(status);
@@ -239,16 +233,13 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
                 let sequence_word = unsafe { descriptor.add(8).read_unaligned() };
                 let flags = unsafe { descriptor.cast::<u8>().add(15).read() };
                 let queue = unsafe { descriptor.cast::<u8>().add(14).read() };
-                let frame = if descriptor_skb == 0 {
-                    core::ptr::null()
-                } else {
-                    unsafe { oal_netbuf_mac_header(descriptor_skb as *const c_void) }
-                };
                 // Beacon and management completions would evict the ten-packet
                 // local probe before it can be printed. The aggregate callback
                 // and status counters still include them; the bounded timeline
-                // intentionally retains data MPDUs only.
-                if !frame.is_null() && unsafe { frame.read() } & 0x0c == 0x08 {
+                // intentionally retains the normal data queue. Rust submits
+                // this queue in FIFO order, so the matching identity can be
+                // consumed without following a vendor-private packet pointer.
+                if queue == 0 {
                     record_tx_completion_trace(
                         status,
                         sequence_word & (1 << 17) != 0,
@@ -257,12 +248,7 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
                         (sequence_word >> 20) as u16,
                         unsafe { descriptor.add(9).read_unaligned() },
                         crate::uapi::monotonic_ms() as u32,
-                        {
-                            // `oal_netbuf_skb` maps the packet-RAM descriptor
-                            // back to the host skb observed before encapsulation.
-                            let skb = unsafe { oal_netbuf_skb(descriptor_skb as *const c_void) };
-                            submission_for_skb(skb as usize)
-                        },
+                        consume_tx_submission(),
                     );
                 }
             }
@@ -341,7 +327,7 @@ mod tests {
         let rx_before = rx_prepares();
         TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
         record_tx_completion_status(1);
-        record_tx_submission(0x1234, 0xa000_0007, 0x42);
+        record_tx_submission(0xa000_0007, 0x42);
         record_tx_completion_trace(
             1,
             true,
@@ -350,7 +336,7 @@ mod tests {
             0x123,
             0x4567_89ab,
             0x43,
-            submission_for_skb(0x1234),
+            consume_tx_submission(),
         );
         RX_PREPARES.fetch_add(1, Ordering::Relaxed);
         assert!(tx_completions() >= tx_before.saturating_add(1));
