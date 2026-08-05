@@ -205,6 +205,7 @@ pub struct FrwSyncPostMetrics {
     pub last_wait_ready_checks: u32,
 }
 
+#[cfg_attr(not(feature = "legacy-blocking-backend"), allow(dead_code))]
 pub(crate) enum Operation {
     Initialize,
     Scan,
@@ -546,10 +547,12 @@ fn hex8(value: u32) -> [u8; 8] {
     output
 }
 
+#[cfg_attr(not(feature = "legacy-blocking-backend"), allow(dead_code))]
 pub(crate) fn record_internal_sleep() {
     saturating_increment(&INTERNAL_SLEEP_CALLS);
 }
 
+#[cfg_attr(not(feature = "legacy-blocking-backend"), allow(dead_code))]
 pub(crate) fn record_supplicant_poll() {
     saturating_increment(&SUPPLICANT_POLL_CALLS);
 }

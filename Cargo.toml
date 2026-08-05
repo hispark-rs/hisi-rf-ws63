@@ -185,6 +185,10 @@ incremental-backend-experiment = [
     "upstream-supplicant-port",
     "hisi-rf-core/incremental-backend-experiment",
 ]
+# Explicit migration-only adapter for the pre-A5 synchronous runner. Public
+# profile builds do not enable this feature; maintainer oracle fixtures may do
+# so until the documented migration window closes.
+legacy-blocking-backend = []
 # Firmware-only diagnostic fixtures. Runtime selection belongs to each example
 # or application and is therefore never part of this library feature.
 firmware-example = []

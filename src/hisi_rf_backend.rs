@@ -2,10 +2,11 @@
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
+use hisi_rf_core::{BackendError, BackendErrorClass, DiagnosticStage, DiagnosticTraceKind};
+#[cfg(feature = "legacy-blocking-backend")]
 use hisi_rf_core::{
-    BackendError, BackendErrorClass, ConnectionInfo, DiagnosticStage, DiagnosticTraceKind,
-    ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig, WifiBackend,
-    WifiL2Capabilities,
+    ConnectionInfo, ScanConfig, ScanOutcome, ScanResult, Security, Ssid, StationConfig,
+    WifiBackend, WifiL2Capabilities,
 };
 
 #[cfg(all(
@@ -65,9 +66,9 @@ const fn classify_native_connect_event(kind: u8) -> NativeConnectEvent {
 use crate::netif_smoltcp::Ws63Device;
 #[cfg(not(feature = "upstream-supplicant-port"))]
 use crate::wifi::{ConnectionInfo as Ws63ConnectionInfo, PersonalNetwork, WpaWifi as ActiveWifi};
-use crate::wifi::{
-    Error as Ws63Error, MAX_SCAN_RESULTS, ScanResult as Ws63ScanResult, ScanSecurity,
-};
+use crate::wifi::{Error as Ws63Error, ScanResult as Ws63ScanResult};
+#[cfg(feature = "legacy-blocking-backend")]
+use crate::wifi::{MAX_SCAN_RESULTS, ScanSecurity};
 #[cfg(feature = "upstream-supplicant-port")]
 use crate::{
     upstream_supplicant::{NativeSupplicant, NativeSupplicantError},
@@ -87,7 +88,9 @@ pub struct Ws63WifiBackend<'d> {
     wifi: Option<ActiveWifi<'d>>,
     #[cfg(feature = "upstream-supplicant-port")]
     supplicant: Option<NativeSupplicant>,
+    #[cfg(feature = "legacy-blocking-backend")]
     scans: [Ws63ScanResult; MAX_SCAN_RESULTS],
+    #[cfg(feature = "legacy-blocking-backend")]
     scan_count: usize,
 }
 
@@ -111,14 +114,21 @@ impl<'d> Ws63WifiBackend<'d> {
             wifi: None,
             #[cfg(feature = "upstream-supplicant-port")]
             supplicant: None,
+            #[cfg(feature = "legacy-blocking-backend")]
             scans: [Ws63ScanResult::empty(); MAX_SCAN_RESULTS],
+            #[cfg(feature = "legacy-blocking-backend")]
             scan_count: 0,
         }
     }
 }
 
-impl WifiBackend for Ws63WifiBackend<'static> {
-    fn initialize(&mut self, _: &hisi_rf_core::WifiConfig) -> Result<(), BackendError> {
+impl Ws63WifiBackend<'static> {
+    /// Complete the one-shot vendor and upstream-supplicant bootstrap.
+    ///
+    /// This prerequisite is shared by the bounded runner and the migration
+    /// oracle. Runtime operations must use the incremental backend after this
+    /// method returns.
+    pub(crate) fn bootstrap(&mut self) -> Result<(), BackendError> {
         let _operation = crate::blocking_diagnostics::OperationTimer::start(
             crate::blocking_diagnostics::Operation::Initialize,
         );
@@ -205,6 +215,13 @@ impl WifiBackend for Ws63WifiBackend<'static> {
         }
         self.wifi = Some(wifi);
         Ok(())
+    }
+}
+
+#[cfg(feature = "legacy-blocking-backend")]
+impl WifiBackend for Ws63WifiBackend<'static> {
+    fn initialize(&mut self, _: &hisi_rf_core::WifiConfig) -> Result<(), BackendError> {
+        self.bootstrap()
     }
 
     fn scan(
@@ -497,6 +514,7 @@ impl WifiBackend for Ws63WifiBackend<'static> {
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
+#[cfg(feature = "legacy-blocking-backend")]
 fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> BackendError {
     let context_diagnostic = supplicant.context_diagnostic_word();
     let port_diagnostic = crate::upstream_supplicant::diagnostic_word();
@@ -514,6 +532,7 @@ fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> BackendEr
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
+#[cfg(any(test, feature = "legacy-blocking-backend"))]
 fn backend_failure_error(
     status: i32,
     context_diagnostic: u32,
@@ -530,6 +549,7 @@ fn backend_failure_error(
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
+#[cfg(any(test, feature = "legacy-blocking-backend"))]
 const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
     if status == 30 {
         // IEEE 802.11 status 30 is a temporary association rejection. On the
@@ -541,6 +561,7 @@ const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
+#[cfg(any(test, feature = "legacy-blocking-backend"))]
 fn classify_connect_timeout_stage(
     latest: Option<crate::upstream_supplicant::AssociationAttemptDiagnostic>,
     eapol_received: u32,
@@ -553,6 +574,7 @@ fn classify_connect_timeout_stage(
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
+#[cfg(any(test, feature = "legacy-blocking-backend"))]
 fn connect_timeout_error(
     last_event_kind: u8,
     context_diagnostic: u32,

@@ -86,6 +86,12 @@
 ))]
 compile_error!("incremental-backend-experiment requires the upstream supplicant profile");
 
+#[cfg(all(
+    feature = "legacy-blocking-backend",
+    feature = "incremental-backend-experiment"
+))]
+compile_error!("select either the bounded backend or the legacy blocking backend");
+
 #[cfg(all(feature = "wifi-personal", feature = "upstream-supplicant-port"))]
 compile_error!("select either a vendor supplicant profile or an upstream supplicant profile");
 
@@ -679,9 +685,8 @@ pub use composition::IncrementalWorkerDiagnostics;
 ))]
 pub use composition::{
     CryptoReady, DataPathDiagnostics, DhcpDiagnostics, InitError, InitErrorKind,
-    L2ProtocolDiagnostics, MissingCrypto, MissingPke, PkeNotRequired, PkeReady, RadioController,
-    Resources, ResourcesBuilder, RxQueueDiagnostics, WifiDevice, WifiParts, WifiRxToken,
-    WifiTxToken, init,
+    L2ProtocolDiagnostics, MissingCrypto, MissingPke, PkeNotRequired, PkeReady, Resources,
+    ResourcesBuilder, RxQueueDiagnostics, WifiDevice, WifiParts, WifiRxToken, WifiTxToken,
 };
 #[cfg(all(
     feature = "net",
@@ -698,6 +703,12 @@ pub use composition::{
     feature = "upstream-supplicant-port"
 ))]
 pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
+#[cfg(all(
+    feature = "net",
+    feature = "legacy-blocking-backend",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+))]
+pub use composition::{RadioController, init};
 pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",

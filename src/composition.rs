@@ -1,3 +1,4 @@
+#[cfg(feature = "legacy-blocking-backend")]
 use core::ffi::c_void;
 use core::fmt;
 use core::num::{NonZeroU32, NonZeroUsize};
@@ -7,19 +8,20 @@ use hisi_rf_core::{
     RadioConfig,
 };
 
+#[cfg(feature = "incremental-backend-experiment")]
+use hisi_rf_core::RadioResources;
 #[cfg(feature = "incremental-embassy-wait")]
 use hisi_rf_core::{
     IncrementalDriverEvent, IncrementalRadioRunnerError, IncrementalRunnerDiagnostics,
     IncrementalWaitError, IncrementalWaitIntent, IncrementalWaitPlatform, WaitSet, WorkBudget,
 };
-#[cfg(feature = "incremental-backend-experiment")]
-use hisi_rf_core::{RadioResources, WifiBackend};
 
 #[cfg(all(
     feature = "incremental-backend-experiment",
     not(feature = "incremental-embassy-wait")
 ))]
 use crate::hisi_rf_backend::OwnedIncrementalSupplicantBackend;
+#[cfg(feature = "legacy-blocking-backend")]
 use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
@@ -260,9 +262,12 @@ impl fmt::Display for InitError {
     }
 }
 
+#[cfg(feature = "legacy-blocking-backend")]
 const RADIO_RUNNER_STACK_BYTES: usize = 8 * 1024;
+#[cfg(feature = "legacy-blocking-backend")]
 const RADIO_RUNNER_PRIORITY: u8 = 10;
 
+#[cfg(feature = "legacy-blocking-backend")]
 type CoreRadioController<const EVENTS: usize> =
     hisi_rf_core::RadioController<Ws63WifiBackend<'static>, Ws63Device, EVENTS>;
 
@@ -280,6 +285,7 @@ type CoreIncrementalRadioController<const EVENTS: usize> =
     hisi_rf_core::RadioController<ActiveIncrementalBackend, Ws63Device, EVENTS>;
 
 /// WS63 controller bound to the caller-owned storage that will hold its runner.
+#[cfg(feature = "legacy-blocking-backend")]
 pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
     inner: CoreRadioController<EVENTS>,
     storage: &'static Storage<P, EVENTS>,
@@ -826,6 +832,7 @@ impl<const EVENTS: usize> IncrementalRadioRunner<EVENTS> {
     }
 }
 
+#[cfg(feature = "legacy-blocking-backend")]
 impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
     /// Start the mandatory bounded-work runner and return Wi-Fi control/L2 handles.
     pub fn start_runner(self) -> Result<WifiParts<EVENTS>, InitError> {
@@ -843,6 +850,7 @@ impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
 }
 
 /// Claim one WS63 radio instance using caller-owned state and resources.
+#[cfg(feature = "legacy-blocking-backend")]
 pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
     resources: Resources<P>,
@@ -903,7 +911,7 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     );
     #[cfg(feature = "incremental-embassy-wait")]
     let worker_reservation = claimed.worker;
-    if let Err(error) = backend.initialize(&config.wifi) {
+    if let Err(error) = backend.bootstrap() {
         // The vendor bootstrap may already have spawned tasks through this
         // reservation. It is installed in the process-wide compatibility
         // adapter and cannot be safely detached or reused after a partial
@@ -1083,6 +1091,7 @@ fn release_profile_reservation(
     hisi_rf_rtos_driver::release_task_reservation(reservation).map_err(InitError::runtime)
 }
 
+#[cfg(feature = "legacy-blocking-backend")]
 extern "C" fn radio_runner_task<const EVENTS: usize>(argument: *mut c_void) -> *mut c_void {
     // SAFETY: `start_runner` passes the unique runner stored for the entire
     // firmware lifetime. The task is the only code that mutates it.

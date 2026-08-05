@@ -4,14 +4,17 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
+#[cfg(feature = "legacy-blocking-backend")]
+use hisi_rf_core::RadioRunner;
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioRunner, RadioState,
+    RadioState,
 };
 use hisi_rf_rtos_driver::TaskReservation;
 use portable_atomic::{AtomicBool, Ordering};
 use static_cell::StaticCell;
 
+#[cfg(feature = "legacy-blocking-backend")]
 use crate::hisi_rf_backend::Ws63WifiBackend;
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_worker::IncrementalWorkerState;
@@ -39,17 +42,20 @@ const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
 // a payload whose size is itself 64-byte aligned occupies one extra cache line.
 // Account for that physical object overhead in the shared-section budget.
 const RADIO_ARENA_STORAGE_OVERHEAD_BYTES: usize = 64;
-const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361
-    + if cfg!(feature = "incremental-embassy-wait") {
-        // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
-        // and alignment. The 32-bit layout assertion below keeps this honest.
-        // The adjacent worker reservation occupies padding that was already
-        // present in the 32-byte-aligned target layout, so the measured total
-        // remains unchanged.
-        3_856
-    } else {
-        0
-    };
+const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocking-backend") {
+    6_361
+} else {
+    2_640
+} + if cfg!(feature = "incremental-embassy-wait") {
+    // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
+    // and alignment. The 32-bit layout assertion below keeps this honest.
+    // The adjacent worker reservation occupies padding that was already
+    // present in the 32-byte-aligned target layout, so the measured total
+    // remains unchanged.
+    3_856
+} else {
+    0
+};
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
     // The incremental profile adds 18 instance-owned counters published by the
@@ -477,13 +483,15 @@ impl fmt::Display for ArenaAdmissionError {
 
 /// Caller-owned static storage for one WS63 radio instance.
 ///
-/// This currently owns the bounded control/event state, mandatory radio runner,
-/// and SPACC DMA scratch. Packet RAM remains linker-owned. Task stacks are
+/// This owns bounded control/event state and SPACC DMA scratch. The bounded
+/// worker is present only in the incremental profile; the synchronous runner
+/// cell exists only for the explicit legacy migration feature. Packet RAM remains linker-owned. Task stacks are
 /// atomically reserved through the runtime capability before hardware startup;
 /// the shared RF arena is installed separately from caller-owned storage.
 #[cfg_attr(feature = "incremental-embassy-wait", repr(C, align(32)))]
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
+    #[cfg(feature = "legacy-blocking-backend")]
     runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
     crypto: StaticCell<Ws63CryptoStorage>,
     task_reservation: StaticCell<TaskReservation>,
@@ -513,6 +521,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         assert!(EVENTS > 0, "radio event queue must not be empty");
         Self {
             state: RadioState::new(),
+            #[cfg(feature = "legacy-blocking-backend")]
             runner: StaticCell::new(),
             crypto: StaticCell::new(),
             task_reservation: StaticCell::new(),
@@ -560,6 +569,7 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         })
     }
 
+    #[cfg(feature = "legacy-blocking-backend")]
     pub(crate) fn store_runner(
         &'static self,
         runner: RadioRunner<Ws63WifiBackend<'static>, EVENTS>,
@@ -1128,11 +1138,13 @@ mod tests {
         assert_eq!(
             report.control_storage_bytes,
             if cfg!(feature = "incremental-embassy-wait") {
-                0x3020
-            } else if cfg!(feature = "incremental-backend-experiment") {
-                0x2100
-            } else {
+                0x2180
+            } else if cfg!(feature = "legacy-blocking-backend") {
                 0x20c0
+            } else if cfg!(feature = "incremental-backend-experiment") {
+                0x1280
+            } else {
+                0x1240
             }
         );
         assert_eq!(
