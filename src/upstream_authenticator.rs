@@ -194,11 +194,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_dmac_tx_mac_queue_status: crate::data_path_diag::dmac_tx_mac_queue_status(),
             #[cfg(feature = "data-path-diag")]
-            data_dmac_tx_completion_queues:
-                crate::data_path_diag::dmac_tx_completion_queue_diagnostics(),
-            #[cfg(feature = "data-path-diag")]
-            data_dmac_tx_completion_mac_queue_status:
-                crate::data_path_diag::dmac_tx_completion_mac_queue_status(),
+            data_dmac_tx_queue_snapshot_metadata:
+                crate::data_path_diag::dmac_tx_queue_snapshot_metadata(),
             #[cfg(feature = "data-path-diag")]
             data_psm: crate::data_path_diag::associated_station_ps(self.station_address()),
             #[cfg(feature = "data-path-diag")]
@@ -322,12 +319,9 @@ pub struct AccessPointDiagnostics {
     /// Raw MAC queue-status registers used by `hal_get_tx_q_status()`.
     #[cfg(feature = "data-path-diag")]
     pub data_dmac_tx_mac_queue_status: [u32; 2],
-    /// DMAC queue snapshots after the vendor completion handler returns.
+    /// Latest queue snapshot stage (1=submit, 2=completion) and scheduling hook.
     #[cfg(feature = "data-path-diag")]
-    pub data_dmac_tx_completion_queues: ([u32; 6], [u32; 6]),
-    /// Completion-time MAC status words and scheduling-hook pointer.
-    #[cfg(feature = "data-path-diag")]
-    pub data_dmac_tx_completion_mac_queue_status: [u32; 3],
+    pub data_dmac_tx_queue_snapshot_metadata: [u32; 2],
     #[cfg(feature = "data-path-diag")]
     pub data_psm: [u32; 5],
     #[cfg(feature = "data-path-diag")]

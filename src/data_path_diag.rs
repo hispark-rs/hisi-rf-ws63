@@ -50,12 +50,7 @@ static DMAC_TX_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
     [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
 static DMAC_TX_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
-static DMAC_TX_COMPLETION_SOFTWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
-    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
-static DMAC_TX_COMPLETION_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
-    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
-static DMAC_TX_COMPLETION_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
-static DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_QUEUE_SNAPSHOT_STAGE: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
@@ -310,22 +305,9 @@ pub(crate) fn dmac_tx_mac_queue_status() -> [u32; 2] {
     ]
 }
 
-pub(crate) fn dmac_tx_completion_queue_diagnostics()
--> ([u32; DMAC_TX_QUEUE_COUNT], [u32; DMAC_TX_QUEUE_COUNT]) {
-    (
-        core::array::from_fn(|queue| {
-            DMAC_TX_COMPLETION_SOFTWARE_QUEUES[queue].load(Ordering::Acquire)
-        }),
-        core::array::from_fn(|queue| {
-            DMAC_TX_COMPLETION_HARDWARE_QUEUES[queue].load(Ordering::Acquire)
-        }),
-    )
-}
-
-pub(crate) fn dmac_tx_completion_mac_queue_status() -> [u32; 3] {
+pub(crate) fn dmac_tx_queue_snapshot_metadata() -> [u32; 2] {
     [
-        DMAC_TX_COMPLETION_MAC_QUEUE_STATUS.load(Ordering::Acquire),
-        DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS.load(Ordering::Acquire),
+        DMAC_TX_QUEUE_SNAPSHOT_STAGE.load(Ordering::Acquire),
         DMAC_TX_SCHEDULE_HOOK.load(Ordering::Acquire),
     ]
 }
@@ -414,6 +396,7 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
             &DMAC_TX_MAC_EXT_QUEUE_STATUS,
         )
     };
+    DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(1, Ordering::Release);
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -422,16 +405,17 @@ unsafe fn snapshot_dmac_tx_completion_queues(vap: *mut c_void) {
     unsafe {
         snapshot_dmac_tx_queue_state(
             vap,
-            &DMAC_TX_COMPLETION_SOFTWARE_QUEUES,
-            &DMAC_TX_COMPLETION_HARDWARE_QUEUES,
-            &DMAC_TX_COMPLETION_MAC_QUEUE_STATUS,
-            &DMAC_TX_COMPLETION_MAC_EXT_QUEUE_STATUS,
+            &DMAC_TX_SOFTWARE_QUEUES,
+            &DMAC_TX_HARDWARE_QUEUES,
+            &DMAC_TX_MAC_QUEUE_STATUS,
+            &DMAC_TX_MAC_EXT_QUEUE_STATUS,
         )
     };
     DMAC_TX_SCHEDULE_HOOK.store(
         unsafe { frw_get_rom_cb(DMAC_TX_SCHEDULE_FEATURE_ID) } as usize as u32,
         Ordering::Release,
     );
+    DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(2, Ordering::Release);
 }
 
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
