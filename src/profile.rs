@@ -35,6 +35,10 @@ const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "incremental-embassy
 };
 const TASK_STACK_ALLOCATOR_OVERHEAD_BYTES: usize = 512;
 const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
+// `RadioArenaStorage<N>` carries one claim byte and has 64-byte alignment, so
+// a payload whose size is itself 64-byte aligned occupies one extra cache line.
+// Account for that physical object overhead in the shared-section budget.
+const RADIO_ARENA_STORAGE_OVERHEAD_BYTES: usize = 64;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = 6_361
     + if cfg!(feature = "incremental-embassy-wait") {
         // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
@@ -248,7 +252,8 @@ impl sealed::Sealed for WifiWpa2Smoltcp {}
 impl Profile for WifiWpa2Smoltcp {
     const ID: &'static str = "wifi-wpa2-smoltcp";
     const SECURITY: &'static str = "wpa2-personal";
-    const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RF_ARENA_BYTES: usize =
+        PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES - RADIO_ARENA_STORAGE_OVERHEAD_BYTES;
     const RUNTIME_RESOURCES_CALIBRATED: bool = !cfg!(feature = "incremental-embassy-wait");
 }
 
@@ -259,7 +264,8 @@ impl sealed::Sealed for WifiWpa3Smoltcp {}
 impl Profile for WifiWpa3Smoltcp {
     const ID: &'static str = "wifi-wpa3-smoltcp";
     const SECURITY: &'static str = "wpa3-personal";
-    const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES;
+    const RF_ARENA_BYTES: usize =
+        PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES - RADIO_ARENA_STORAGE_OVERHEAD_BYTES;
     const RUNTIME_RESOURCES_CALIBRATED: bool = false;
 }
 
@@ -1090,9 +1096,9 @@ mod tests {
             output
                 .as_str()
                 .contains(if cfg!(feature = "incremental-embassy-wait") {
-                    "\"shared_rf_arena_bytes\":101888"
+                    "\"shared_rf_arena_bytes\":101824"
                 } else {
-                    "\"shared_rf_arena_bytes\":114176"
+                    "\"shared_rf_arena_bytes\":114112"
                 })
         );
         assert!(
