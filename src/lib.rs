@@ -947,6 +947,10 @@ pub fn force_link_contract() {
             data_path_diag::hmac_tx_lan_to_wlan_no_tcp_opt_etc
                 as unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32
         );
+        keep!(
+            data_path_diag::hmac_tx_process_data
+                as unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> u32
+        );
     }
 
     keep!(libc::malloc as extern "C" fn(c_ulong) -> *mut c_void);

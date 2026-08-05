@@ -182,6 +182,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_hmac_tx: crate::data_path_diag::hmac_tx_diagnostics(),
             #[cfg(feature = "data-path-diag")]
+            data_hmac_tx_process: crate::data_path_diag::hmac_tx_process_diagnostics(),
+            #[cfg(feature = "data-path-diag")]
             data_psm: crate::data_path_diag::associated_station_ps(self.station_address()),
             #[cfg(feature = "data-path-diag")]
             data_vendor_rx_frames: crate::netif::rx_received(),
@@ -288,6 +290,8 @@ pub struct AccessPointDiagnostics {
     pub data_hmac_rx_calls: u32,
     #[cfg(feature = "data-path-diag")]
     pub data_hmac_tx: (u32, u32, [u32; 16]),
+    #[cfg(feature = "data-path-diag")]
+    pub data_hmac_tx_process: (u32, u32, [u32; 16]),
     #[cfg(feature = "data-path-diag")]
     pub data_psm: [u32; 5],
     #[cfg(feature = "data-path-diag")]

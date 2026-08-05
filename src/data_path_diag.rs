@@ -32,6 +32,9 @@ static HMAC_RX_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static HMAC_TX_PROCESS_CALLS: AtomicU32 = AtomicU32::new(0);
+static HMAC_TX_PROCESS_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
+static HMAC_TX_PROCESS_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -53,6 +56,12 @@ unsafe extern "C" {
     fn vendor_hmac_rx_data(vap: *mut c_void, netbuf: *mut c_void) -> u32;
     #[link_name = "__real_hmac_tx_lan_to_wlan_no_tcp_opt_etc"]
     fn vendor_hmac_tx_lan_to_wlan_no_tcp_opt_etc(vap: *mut c_void, netbuf: *mut c_void) -> u32;
+    #[link_name = "__real_hmac_tx_process_data"]
+    fn vendor_hmac_tx_process_data(
+        hal_device: *mut c_void,
+        vap: *mut c_void,
+        netbuf: *mut c_void,
+    ) -> u32;
     fn mac_res_get_hmac_vap(index: u8) -> *mut c_void;
     fn mac_vap_get_hmac_user_by_addr_etc(vap: *mut c_void, address: *const u8) -> *mut c_void;
     fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
@@ -225,6 +234,14 @@ pub(crate) fn hmac_tx_diagnostics() -> (u32, u32, [u32; 16]) {
     )
 }
 
+pub(crate) fn hmac_tx_process_diagnostics() -> (u32, u32, [u32; 16]) {
+    (
+        HMAC_TX_PROCESS_CALLS.load(Ordering::Relaxed),
+        HMAC_TX_PROCESS_LAST_STATUS.load(Ordering::Relaxed),
+        core::array::from_fn(|status| HMAC_TX_PROCESS_STATUS[status].load(Ordering::Relaxed)),
+    )
+}
+
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -237,6 +254,23 @@ pub unsafe extern "C" fn hmac_tx_lan_to_wlan_no_tcp_opt_etc(
     let status = unsafe { vendor_hmac_tx_lan_to_wlan_no_tcp_opt_etc(vap, netbuf) };
     HMAC_TX_LAST_STATUS.store(status, Ordering::Relaxed);
     HMAC_TX_STATUS[usize::from((status & 0x0f) as u8)].fetch_add(1, Ordering::Relaxed);
+    status
+}
+
+/// Observe the HMAC data-processing boundary and preserve its return status.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_hmac_tx_process_data")]
+pub unsafe extern "C" fn hmac_tx_process_data(
+    hal_device: *mut c_void,
+    vap: *mut c_void,
+    netbuf: *mut c_void,
+) -> u32 {
+    HMAC_TX_PROCESS_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the signature matches `hmac_tx_mpdu_adapt.h`, and the linker
+    // redirects the exact vendor implementation through `--wrap`.
+    let status = unsafe { vendor_hmac_tx_process_data(hal_device, vap, netbuf) };
+    HMAC_TX_PROCESS_LAST_STATUS.store(status, Ordering::Relaxed);
+    HMAC_TX_PROCESS_STATUS[usize::from((status & 0x0f) as u8)].fetch_add(1, Ordering::Relaxed);
     status
 }
 
