@@ -28,6 +28,10 @@ fn main() -> ! {
 
     uart.write(b"\r\nRFDBG_CONNECTIVITY_CONTRACT_FIXTURE scope=contract-only\r\n");
     uart.write(b"RF1_IMAGE_OK\r\n");
+    uart.write(
+        b"RFDBG_A5B_SCHED ready_owner_err=0x00000000 ready_dup=0x00000000 \
+ready_wrong_bucket=0x00000000 ready_bad_link=0x00000000\r\n",
+    );
     uart.write(b"RF2_INIT_OK ifname=hisi-rf\r\n");
     uart.write(b"A4_RADIO_EVENT kind=initialized\r\n");
     uart.write(b"RF3_SCAN_OK count=0x00000001 truncated=0x00000000\r\n");
