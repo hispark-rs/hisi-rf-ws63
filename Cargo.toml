@@ -165,7 +165,7 @@ rf-eloop-diag = ["hisi-crypto-ws63?/diagnostics"]
 # Packet progress only: no authentication-frame capture, crypto diagnostics,
 # or auth-state linker wrapping.
 data-path-diag = []
-# Diagnostic-only A/B switch for post-association STA power save. Normal radio
+# Diagnostic-only A/B switch for pre-association STA power save. Normal radio
 # profiles retain the vendor-selected policy.
 station-pm-diag = ["data-path-diag"]
 # Spawn two native RTOS tasks that contend for the one CryptoService mutex.
