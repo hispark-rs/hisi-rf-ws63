@@ -53,10 +53,8 @@ static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_QUEUE_SNAPSHOT_STAGE: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
 
-// `FRD_ROM_TX_SCH` in the WS63 CHBA-off, latency-stat-on, CSI-on,
-// powersave-off `frw_rom_cb_enum`. The shipped firmware confirms the layout:
-// IDs 237, 239, 241, and 242 resolve to enqueue, schedule, NOPS, and HAL TX
-// callbacks respectively. Keep the conditional enum's numeric ABI explicit.
+// This private callback ID is sampled only after a TX completion. Reading it
+// in the enqueue wrapper changes the verified RF text layout before init.
 const FRD_ROM_TX_SCH: u32 = 239;
 
 #[cfg(target_arch = "riscv32")]
@@ -402,10 +400,6 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
             &DMAC_TX_MAC_EXT_QUEUE_STATUS,
         )
     };
-    DMAC_TX_SCHEDULE_HOOK.store(
-        unsafe { frw_get_rom_cb(FRD_ROM_TX_SCH) } as usize as u32,
-        Ordering::Release,
-    );
     DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(1, Ordering::Release);
 }
 
@@ -743,8 +737,6 @@ mod tests {
 
     #[test]
     fn uses_the_powersave_off_tx_scheduler_callback_id() {
-        // Changing CHBA, latency-stat, CSI, or powersave shifts this private
-        // enum. The released app's callback registrations pin this profile.
         assert_eq!(FRD_ROM_TX_SCH, 239);
     }
 }
