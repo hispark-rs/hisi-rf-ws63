@@ -634,6 +634,7 @@ pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supp
 ))]
 mod composition;
 #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
+#[allow(dead_code)] // STA and AP diagnostic fixtures consume different counters.
 mod data_path_diag;
 #[cfg(all(
     feature = "net",
