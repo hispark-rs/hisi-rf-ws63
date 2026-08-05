@@ -35,6 +35,8 @@ static HMAC_TX_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 static HMAC_TX_PROCESS_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_PROCESS_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_PROCESS_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+static HMAC_TX_DATA_SEND_CALLS: AtomicU32 = AtomicU32::new(0);
+static HMAC_TX_DATA_SEND_RETURNS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -62,6 +64,8 @@ unsafe extern "C" {
         vap: *mut c_void,
         netbuf: *mut c_void,
     ) -> u32;
+    #[link_name = "__real_hmac_tx_data_send"]
+    fn vendor_hmac_tx_data_send(tx_data: *mut c_void, buffers: *mut c_void);
     fn mac_res_get_hmac_vap(index: u8) -> *mut c_void;
     fn mac_vap_get_hmac_user_by_addr_etc(vap: *mut c_void, address: *const u8) -> *mut c_void;
     fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
@@ -242,6 +246,13 @@ pub(crate) fn hmac_tx_process_diagnostics() -> (u32, u32, [u32; 16]) {
     )
 }
 
+pub(crate) fn hmac_tx_data_send_diagnostics() -> [u32; 2] {
+    [
+        HMAC_TX_DATA_SEND_CALLS.load(Ordering::Relaxed),
+        HMAC_TX_DATA_SEND_RETURNS.load(Ordering::Relaxed),
+    ]
+}
+
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -272,6 +283,17 @@ pub unsafe extern "C" fn hmac_tx_process_data(
     HMAC_TX_PROCESS_LAST_STATUS.store(status, Ordering::Relaxed);
     HMAC_TX_PROCESS_STATUS[usize::from((status & 0x0f) as u8)].fetch_add(1, Ordering::Relaxed);
     status
+}
+
+/// Observe entry and return at the final HMAC data-send boundary.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_hmac_tx_data_send")]
+pub unsafe extern "C" fn hmac_tx_data_send(tx_data: *mut c_void, buffers: *mut c_void) {
+    HMAC_TX_DATA_SEND_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the signature matches `hmac_tx_mpdu_adapt.h`, and both opaque
+    // pointers are forwarded unchanged to the vendor implementation.
+    unsafe { vendor_hmac_tx_data_send(tx_data, buffers) };
+    HMAC_TX_DATA_SEND_RETURNS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Read the associated station's vendor power-save state without modifying it.

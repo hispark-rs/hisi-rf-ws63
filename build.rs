@@ -467,6 +467,7 @@ fn main() {
             "hmac_rx_data",
             "hmac_tx_lan_to_wlan_no_tcp_opt_etc",
             "hmac_tx_process_data",
+            "hmac_tx_data_send",
         ] {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }
