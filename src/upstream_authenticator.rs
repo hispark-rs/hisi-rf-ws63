@@ -192,6 +192,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_dmac_tx_queues: crate::data_path_diag::dmac_tx_queue_diagnostics(),
             #[cfg(feature = "data-path-diag")]
+            data_dmac_tx_mac_queue_status: crate::data_path_diag::dmac_tx_mac_queue_status(),
+            #[cfg(feature = "data-path-diag")]
             data_psm: crate::data_path_diag::associated_station_ps(self.station_address()),
             #[cfg(feature = "data-path-diag")]
             data_vendor_rx_frames: crate::netif::rx_received(),
@@ -311,6 +313,9 @@ pub struct AccessPointDiagnostics {
     /// valid/list-empty in bits 31/30, status in 23:16, PPDU in 15:8, MPDU in 7:0.
     #[cfg(feature = "data-path-diag")]
     pub data_dmac_tx_queues: ([u32; 6], [u32; 6]),
+    /// Raw MAC queue-status registers used by `hal_get_tx_q_status()`.
+    #[cfg(feature = "data-path-diag")]
+    pub data_dmac_tx_mac_queue_status: [u32; 2],
     #[cfg(feature = "data-path-diag")]
     pub data_psm: [u32; 5],
     #[cfg(feature = "data-path-diag")]

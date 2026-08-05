@@ -48,6 +48,8 @@ static DMAC_TX_SOFTWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
     [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
 static DMAC_TX_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
     [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
+static DMAC_TX_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -293,6 +295,13 @@ pub(crate) fn dmac_tx_queue_diagnostics() -> ([u32; DMAC_TX_QUEUE_COUNT], [u32; 
     )
 }
 
+pub(crate) fn dmac_tx_mac_queue_status() -> [u32; 2] {
+    [
+        DMAC_TX_MAC_QUEUE_STATUS.load(Ordering::Acquire),
+        DMAC_TX_MAC_EXT_QUEUE_STATUS.load(Ordering::Acquire),
+    ]
+}
+
 fn pack_dmac_tx_queue(valid: bool, list_empty: bool, status: u8, ppdu: u8, mpdu: u8) -> u32 {
     (u32::from(valid) << 31)
         | (u32::from(list_empty) << 30)
@@ -306,6 +315,8 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
     const SOFTWARE_QUEUE_OFFSET: usize = 456;
     const HARDWARE_QUEUE_OFFSET: usize = 40;
     const QUEUE_SIZE: usize = 12;
+    const MAC_TX_QUEUE_STATUS: *const u32 = 0x4421_0850 as *const u32;
+    const MAC_TX_EXT_QUEUE_STATUS: *const u32 = 0x4421_084c as *const u32;
 
     unsafe fn snapshot(base: *const u8, queue: usize) -> u32 {
         if base.is_null() {
@@ -333,6 +344,19 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
             value.store(unsafe { snapshot(software, queue) }, Ordering::Release);
         }
     }
+
+    // `hal_get_tx_q_status()` reads these MAC status registers before ROM
+    // scheduling dequeues a DMAC software queue. Keep the raw words so a
+    // stalled software queue can be distinguished from a scheduler decision
+    // that was blocked by hardware state.
+    DMAC_TX_MAC_QUEUE_STATUS.store(
+        unsafe { MAC_TX_QUEUE_STATUS.read_volatile() },
+        Ordering::Release,
+    );
+    DMAC_TX_MAC_EXT_QUEUE_STATUS.store(
+        unsafe { MAC_TX_EXT_QUEUE_STATUS.read_volatile() },
+        Ordering::Release,
+    );
 
     // The original WS63 DWARF layout places `hal_to_dmac_device_stru::tx_dscr_queue`
     // at byte 40. The six entries use the same 12-byte queue-header layout.
