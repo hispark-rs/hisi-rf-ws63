@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.72] - 2026-08-06
+
+### Changed
+
+- Update the exact radio artifact dependency to `ws63-radio-sys
+  0.1.0-alpha.12`, preserving the existing Wi-Fi behavior while sharing the
+  newly published BLE B0 archive/ABI release contract.
+
 ## [0.1.0-alpha.71] - 2026-08-06
 
 ### Changed

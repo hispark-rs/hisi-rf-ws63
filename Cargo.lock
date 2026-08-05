@@ -604,9 +604,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-hal"
-version = "0.7.0-alpha.6"
+version = "0.7.0-alpha.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa948b076893aa7e24d6a48297b53d2cb7f2dac361b933cf87595b61e27a29cd"
+checksum = "b9848afd891f4bc8cfcf65ff087915d80faa613f388762d723db46b14f4ac1ee"
 dependencies = [
  "bs2x-pac",
  "cfg-if",
@@ -649,9 +649,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-link"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ba150579833f0f4e4c27214ba43ed13b3e791ccf3152f1500a0593fd684297f"
+checksum = "c158c3af61cee153abd0460cf7c749cab0520418dbfaebf59ffe9ee284b1f225"
 
 [[package]]
 name = "hisi-rf-rtos-driver"
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.71"
+version = "0.1.0-alpha.72"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
@@ -1448,9 +1448,9 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "ws63-pac"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9a4354ec80cc077cd8ed605f940776d63e8d5b34fb41a80893ebea12d38cee0"
+checksum = "af8cbb3cb137ab78b49cae308311b3dacc320f16fbe023db2c9779fa49d7313e"
 dependencies = [
  "critical-section",
  "riscv",
@@ -1459,9 +1459,9 @@ dependencies = [
 
 [[package]]
 name = "ws63-radio-blob"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6a20e1b34c5e9d78fca3f911f21b199f799abfb60717cb3c858f5b7c4a70557"
+checksum = "ddaf7cc45c2cbbbbf63f5770beac64495f4bb89fce742d95da6dc40a128229d7"
 dependencies = [
  "ruzstd",
  "serde",
@@ -1471,9 +1471,9 @@ dependencies = [
 
 [[package]]
 name = "ws63-radio-sys"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6136caebbd86b859aba270868740219aee38f9360088029b8e8e38c753684f9f"
+checksum = "3b6d33bd1f201d71f754bf95735f7271df41a1224b6dc2b5a2034a5c73d491a0"
 dependencies = [
  "hisi-rf-link",
  "hisi-rom-sys-ws63",
