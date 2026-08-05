@@ -532,7 +532,11 @@ fn emit_backend_failure(supplicant: &NativeSupplicant, status: i32) -> BackendEr
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
-#[cfg(any(test, feature = "legacy-blocking-backend"))]
+#[cfg(any(
+    test,
+    feature = "legacy-blocking-backend",
+    feature = "firmware-example"
+))]
 fn backend_failure_error(
     status: i32,
     context_diagnostic: u32,
@@ -549,7 +553,11 @@ fn backend_failure_error(
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
-#[cfg(any(test, feature = "legacy-blocking-backend"))]
+#[cfg(any(
+    test,
+    feature = "legacy-blocking-backend",
+    feature = "firmware-example"
+))]
 const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
     if status == 30 {
         // IEEE 802.11 status 30 is a temporary association rejection. On the
@@ -561,7 +569,11 @@ const fn terminal_connect_stage(status: i32) -> DiagnosticStage {
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
-#[cfg(any(test, feature = "legacy-blocking-backend"))]
+#[cfg(any(
+    test,
+    feature = "legacy-blocking-backend",
+    feature = "firmware-example"
+))]
 fn classify_connect_timeout_stage(
     latest: Option<crate::upstream_supplicant::AssociationAttemptDiagnostic>,
     eapol_received: u32,
@@ -574,7 +586,11 @@ fn classify_connect_timeout_stage(
 }
 
 #[cfg(feature = "upstream-supplicant-port")]
-#[cfg(any(test, feature = "legacy-blocking-backend"))]
+#[cfg(any(
+    test,
+    feature = "legacy-blocking-backend",
+    feature = "firmware-example"
+))]
 fn connect_timeout_error(
     last_event_kind: u8,
     context_diagnostic: u32,
