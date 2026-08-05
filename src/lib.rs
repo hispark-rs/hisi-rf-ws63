@@ -220,6 +220,26 @@ pub mod rf_init_diag;
 mod station_pm_diag;
 pub mod timer;
 pub mod uapi;
+
+/// Secret-free TX timeline used to bind one-byte HIL echo traffic to MAC
+/// completion sequence and CCMP packet numbers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct TxTimelineDiagnostics {
+    pub submission_total: u32,
+    pub completion_total: u32,
+    pub callback_total: u32,
+    /// Packed submission entries: bit 31 valid, bits 29:28 direction
+    /// (request=1, reply=2), low byte application sequence.
+    pub submissions: [u32; 18],
+    pub submission_time_ms: [u32; 18],
+    /// Packed completion status/TID/queue/MAC sequence entries.
+    pub completions: [u32; 18],
+    pub packet_number_lsb: [u32; 18],
+    pub completion_time_ms: [u32; 18],
+    /// Submission identity matched through the vendor skb mapping, or zero.
+    pub completion_echo: [u32; 18],
+}
 #[cfg(any(
     feature = "upstream-authenticator-wpa2",
     feature = "upstream-authenticator-wpa3"
@@ -898,6 +918,10 @@ pub fn force_link_contract() {
         target_arch = "riscv32"
     ))]
     {
+        keep!(
+            data_path_diag::hmac_bridge_vap_xmit_etc
+                as unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32
+        );
         keep!(
             data_path_diag::dmac_tx_complete_event_handler
                 as unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32

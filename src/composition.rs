@@ -309,6 +309,8 @@ pub struct DataPathDiagnostics {
     pub tx_completions: u32,
     /// DMAC completion counts indexed by `hal_tx_dscr_status_enum`.
     pub tx_completion_status: [u32; 16],
+    /// Bounded vendor submission and DMAC completion timeline.
+    pub tx_timeline: crate::TxTimelineDiagnostics,
     /// Calls entering the DMAC receive preparation path.
     ///
     /// This includes management and internal driver traffic; it is not a count
@@ -356,6 +358,17 @@ pub struct DataPathDiagnostics {
     pub wlmac_irqs: u32,
     /// WLMAC IRQ lifecycle as enable/disable/clear/dispatch/enabled/pending.
     pub wlmac_irq_lifecycle: [u32; 6],
+}
+
+pub(crate) fn tx_timeline_diagnostics() -> crate::TxTimelineDiagnostics {
+    #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
+    {
+        crate::data_path_diag::tx_timeline()
+    }
+    #[cfg(not(all(feature = "data-path-diag", not(feature = "rf-eloop-diag"))))]
+    {
+        crate::TxTimelineDiagnostics::default()
+    }
 }
 
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
@@ -594,6 +607,7 @@ impl WifiDevice {
                     [0; 16]
                 }
             },
+            tx_timeline: tx_timeline_diagnostics(),
             dmac_rx_prepares,
             dmac_rx_prepare_zero,
             dmac_rx_prepare_nonzero,

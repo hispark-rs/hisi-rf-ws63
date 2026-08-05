@@ -460,6 +460,7 @@ fn main() {
         }
     } else if env::var_os("CARGO_FEATURE_DATA_PATH_DIAG").is_some() {
         for symbol in [
+            "hmac_bridge_vap_xmit_etc",
             "dmac_rx_prepare_data_patch",
             "dmac_tx_complete_event_handler",
             "hmac_rx_data_event_adapt",
