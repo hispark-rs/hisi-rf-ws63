@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
-use portable_atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering};
+use portable_atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use static_cell::StaticCell;
 use ws63_radio_sys::authenticator::{
     ABI_VERSION as AP_ABI_VERSION, Beacon, Config, Context, DriverHooks, HardwareFeatures,
@@ -58,6 +58,7 @@ const VENDOR_TASK_OWNER: u32 = 1;
 const VENDOR_TASK_STACK_BYTES: usize = 24 * 1024;
 const MAX_MGMT_FRAME_LEN: usize = 2304;
 const MGMT_QUEUE_CAPACITY: usize = 2;
+const STATION_ADDRESS_VALID: u64 = 1 << 63;
 
 /// Caller-owned SRAM required by the initial WS63 WPA2 SoftAP profile.
 pub const ACCESS_POINT_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
@@ -87,6 +88,7 @@ struct AccessPointDiagnosticCounters {
     management_feed_errors: AtomicU32,
     stations_associated: AtomicU32,
     stations_disassociated: AtomicU32,
+    station_address: AtomicU64,
     station_feed_errors: AtomicU32,
     eapol_polls: AtomicU32,
     eapol_received: AtomicU32,
@@ -113,6 +115,7 @@ impl AccessPointDiagnosticCounters {
             management_feed_errors: AtomicU32::new(0),
             stations_associated: AtomicU32::new(0),
             stations_disassociated: AtomicU32::new(0),
+            station_address: AtomicU64::new(0),
             station_feed_errors: AtomicU32::new(0),
             eapol_polls: AtomicU32::new(0),
             eapol_received: AtomicU32::new(0),
@@ -177,6 +180,8 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             data_hmac_rx_calls: crate::data_path_diag::rx_pipeline_stages()[2],
             #[cfg(feature = "data-path-diag")]
+            data_psm: crate::data_path_diag::associated_station_ps(self.station_address()),
+            #[cfg(feature = "data-path-diag")]
             data_vendor_rx_frames: crate::netif::rx_received(),
             #[cfg(feature = "data-path-diag")]
             mac_ccmp_replay_failures: u32::from(mac.security.ccmp_replay_failures),
@@ -199,6 +204,32 @@ impl AccessPointDiagnosticCounters {
             #[cfg(feature = "data-path-diag")]
             mac_tx_complete_interrupts: mac.tx.complete_interrupts,
         }
+    }
+
+    fn set_station_address(&self, address: [u8; 6]) {
+        let packed = u64::from_le_bytes([
+            address[0], address[1], address[2], address[3], address[4], address[5], 0, 0,
+        ]);
+        self.station_address
+            .store(packed | STATION_ADDRESS_VALID, Ordering::Release);
+    }
+
+    fn clear_station_address(&self, address: [u8; 6]) {
+        let packed = u64::from_le_bytes([
+            address[0], address[1], address[2], address[3], address[4], address[5], 0, 0,
+        ]) | STATION_ADDRESS_VALID;
+        let _ =
+            self.station_address
+                .compare_exchange(packed, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    fn station_address(&self) -> Option<[u8; 6]> {
+        let packed = self.station_address.load(Ordering::Acquire);
+        if packed & STATION_ADDRESS_VALID == 0 {
+            return None;
+        }
+        let bytes = packed.to_le_bytes();
+        Some([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]])
     }
 }
 
@@ -253,6 +284,8 @@ pub struct AccessPointDiagnostics {
     pub data_hmac_rx_msg_calls: u32,
     #[cfg(feature = "data-path-diag")]
     pub data_hmac_rx_calls: u32,
+    #[cfg(feature = "data-path-diag")]
+    pub data_psm: [u32; 5],
     #[cfg(feature = "data-path-diag")]
     pub data_vendor_rx_frames: u32,
     #[cfg(feature = "data-path-diag")]
@@ -1663,6 +1696,7 @@ unsafe extern "C" fn ap_event(
     match event {
         EVENT_NEW_STATION if length as usize == core::mem::size_of::<VendorNewStation>() => {
             let input = unsafe { &*data.cast::<VendorNewStation>() };
+            AP_DIAGNOSTICS.set_station_address(input.address);
             let ies_len = input.information_elements_len;
             if ies_len > MAX_MGMT_FRAME_LEN
                 || (ies_len != 0 && input.information_elements.is_null())
@@ -1698,6 +1732,8 @@ unsafe extern "C" fn ap_event(
             slot.state.store(SLOT_READY, Ordering::Release);
         }
         EVENT_DEL_STATION if length == 6 => {
+            let address = unsafe { core::ptr::read_unaligned(data.cast::<[u8; 6]>()) };
+            AP_DIAGNOSTICS.clear_station_address(address);
             let Some(slot) = claim_driver_event_slot() else {
                 AP_DIAGNOSTICS
                     .station_feed_errors
@@ -1805,6 +1841,22 @@ mod tests {
             key_flag::GROUP | key_flag::TX
         )));
         assert!(!should_select_default_key(&test_key(key_flag::GROUP)));
+    }
+
+    #[test]
+    fn station_diagnostics_publish_and_clear_one_address_atomically() {
+        let diagnostics = AccessPointDiagnosticCounters::new();
+        let first = [0x02, 0, 0, 0, 0, 1];
+        let second = [0x02, 0, 0, 0, 0, 2];
+
+        assert_eq!(diagnostics.station_address(), None);
+        diagnostics.set_station_address(first);
+        assert_eq!(diagnostics.station_address(), Some(first));
+        diagnostics.set_station_address(second);
+        diagnostics.clear_station_address(first);
+        assert_eq!(diagnostics.station_address(), Some(second));
+        diagnostics.clear_station_address(second);
+        assert_eq!(diagnostics.station_address(), None);
     }
 
     #[test]

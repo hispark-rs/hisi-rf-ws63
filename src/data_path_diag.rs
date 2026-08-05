@@ -48,6 +48,11 @@ unsafe extern "C" {
     fn vendor_hmac_rx_process_data_msg(vap: *mut c_void, message: *mut c_void) -> i32;
     #[link_name = "__real_hmac_rx_data"]
     fn vendor_hmac_rx_data(vap: *mut c_void, netbuf: *mut c_void) -> u32;
+    fn mac_res_get_hmac_vap(index: u8) -> *mut c_void;
+    fn mac_vap_get_hmac_user_by_addr_etc(vap: *mut c_void, address: *const u8) -> *mut c_void;
+    fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
+    fn hmac_psm_is_psm_empty(user: *mut c_void) -> u8;
+    fn hmac_psm_tid_mpdu_num(user: *const c_void) -> u32;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -205,6 +210,46 @@ pub(crate) fn rx_pipeline_stages() -> [u32; 3] {
         HMAC_PROCESS_DATA_MSG_CALLS.load(Ordering::Relaxed),
         HMAC_RX_DATA_CALLS.load(Ordering::Relaxed),
     ]
+}
+
+/// Read the associated station's vendor power-save state without modifying it.
+///
+/// Returns `[found, vap_index, ps_mode, ps_queue_empty, tid_mpdu_count]`.
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn associated_station_ps(address: Option<[u8; 6]>) -> [u32; 5] {
+    let Some(address) = address else {
+        return [0, u32::MAX, u32::MAX, u32::MAX, 0];
+    };
+    // WS63 has one device with three service VAPs plus one configuration VAP.
+    for vap_index in 0..4 {
+        // SAFETY: these are read-only vendor resource lookups. The caller runs
+        // in thread context, and null handles are rejected before dereference.
+        let vap = unsafe { mac_res_get_hmac_vap(vap_index) };
+        if vap.is_null() {
+            continue;
+        }
+        // SAFETY: `address` remains live for the duration of the call.
+        let user = unsafe { mac_vap_get_hmac_user_by_addr_etc(vap, address.as_ptr()) };
+        if user.is_null() {
+            continue;
+        }
+        // SAFETY: the resource lookup returned the live user owned by this VAP.
+        return unsafe {
+            [
+                1,
+                u32::from(vap_index),
+                u32::from(hmac_user_get_ps_mode(user)),
+                u32::from(hmac_psm_is_psm_empty(user)),
+                hmac_psm_tid_mpdu_num(user),
+            ]
+        };
+    }
+    [0, u32::MAX, u32::MAX, u32::MAX, 0]
+}
+
+#[cfg(not(target_arch = "riscv32"))]
+pub(crate) fn associated_station_ps(_address: Option<[u8; 6]>) -> [u32; 5] {
+    [0, u32::MAX, u32::MAX, u32::MAX, 0]
 }
 
 /// Count a DMAC completion callback and preserve the vendor implementation.
