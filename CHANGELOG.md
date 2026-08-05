@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.71] - 2026-08-06
+
+### Changed
+
+- Move the one-shot vendor bootstrap behind an inherent backend operation so
+  the bounded runner no longer initializes through the synchronous
+  `WifiBackend` trait.
+- Compile the old synchronous runner, adapter, and storage only with the
+  explicit `legacy-blocking-backend` migration feature. Normal bounded builds
+  remove 3,744 bytes from the 32-bit caller-owned control storage.
+
 ## [0.1.0-alpha.70] - 2026-08-04
 
 ### Fixed

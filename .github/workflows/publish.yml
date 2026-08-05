@@ -35,5 +35,5 @@ jobs:
           DRY: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
         run: |
           set -euo pipefail
-          cargo package --locked
-          cargo publish --locked $DRY
+          cargo package -Zbuild-std=core,alloc --locked
+          cargo publish -Zbuild-std=core,alloc --locked $DRY
