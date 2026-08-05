@@ -52,6 +52,10 @@ static DMAC_TX_MAC_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_QUEUE_SNAPSHOT_STAGE: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_NEED_SCHEDULE_CALLS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_NEED_SCHEDULE_TRUE: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_SCHEDULE_CALLS: AtomicU32 = AtomicU32::new(0);
+static DMAC_TX_SCHEDULE_LAST_QUEUE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 // `FRD_ROM_TX_SCH` in the WS63 CHBA-off, latency-stat-on, CSI-on,
 // powersave-off `frw_rom_cb_enum`. The shipped firmware confirms the layout:
@@ -98,6 +102,10 @@ unsafe extern "C" {
     fn hmac_psm_tid_mpdu_num(user: *const c_void) -> u32;
     fn hal_chip_get_hal_device() -> *mut c_void;
     fn frw_get_rom_cb(function_id: u32) -> *mut c_void;
+    #[link_name = "__real_dmac_tx_need_schedule"]
+    fn vendor_dmac_tx_need_schedule(device: *mut c_void, queue: u8) -> u32;
+    #[link_name = "__real_dmac_tx_schedule"]
+    fn vendor_dmac_tx_schedule(device: *mut c_void, queue: u8);
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -318,6 +326,15 @@ pub(crate) fn dmac_tx_queue_snapshot_metadata() -> [u32; 2] {
     ]
 }
 
+pub(crate) fn dmac_tx_schedule_diagnostics() -> [u32; 4] {
+    [
+        DMAC_TX_NEED_SCHEDULE_CALLS.load(Ordering::Acquire),
+        DMAC_TX_NEED_SCHEDULE_TRUE.load(Ordering::Acquire),
+        DMAC_TX_SCHEDULE_CALLS.load(Ordering::Acquire),
+        DMAC_TX_SCHEDULE_LAST_QUEUE.load(Ordering::Acquire),
+    ]
+}
+
 fn pack_dmac_tx_queue(valid: bool, list_empty: bool, status: u8, ppdu: u8, mpdu: u8) -> u32 {
     (u32::from(valid) << 31)
         | (u32::from(list_empty) << 30)
@@ -502,6 +519,29 @@ pub unsafe extern "C" fn dmac_tx_process_data_event(vap: *mut c_void, message: *
     DMAC_TX_DATA_EVENT_STATUS[usize::from((status as u32 & 0x0f) as u8)]
         .fetch_add(1, Ordering::Relaxed);
     status
+}
+
+/// Observe the enqueue-time scheduler decision without changing it.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_dmac_tx_need_schedule")]
+pub unsafe extern "C" fn dmac_tx_need_schedule(device: *mut c_void, queue: u8) -> u32 {
+    DMAC_TX_NEED_SCHEDULE_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the linker redirects the exact two-argument ROM ABI.
+    let result = unsafe { vendor_dmac_tx_need_schedule(device, queue) };
+    if result != 0 {
+        DMAC_TX_NEED_SCHEDULE_TRUE.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Observe actual scheduler entry while preserving the ROM implementation.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_dmac_tx_schedule")]
+pub unsafe extern "C" fn dmac_tx_schedule(device: *mut c_void, queue: u8) {
+    DMAC_TX_SCHEDULE_CALLS.fetch_add(1, Ordering::Relaxed);
+    DMAC_TX_SCHEDULE_LAST_QUEUE.store(u32::from(queue), Ordering::Relaxed);
+    // SAFETY: the linker redirects the exact two-argument ROM ABI.
+    unsafe { vendor_dmac_tx_schedule(device, queue) };
 }
 
 /// Read the associated station's vendor power-save state without modifying it.

@@ -470,6 +470,8 @@ fn main() {
             "hmac_tx_data_send",
             "frw_hmac_send_data",
             "dmac_tx_process_data_event",
+            "dmac_tx_need_schedule",
+            "dmac_tx_schedule",
         ] {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }
