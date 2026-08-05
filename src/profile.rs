@@ -43,18 +43,16 @@ const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
 // Account for that physical object overhead in the shared-section budget.
 const RADIO_ARENA_STORAGE_OVERHEAD_BYTES: usize = 64;
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocking-backend") {
+    // Crypto storage, reservations, claim state, and the legacy runner cell.
     6_361
+} else if cfg!(feature = "incremental-embassy-wait") {
+    // Crypto storage, both reservations, claim state, and the bounded worker.
+    // The target-side layout assertion below keeps this measured RV32 value
+    // synchronized with the actual caller-owned object.
+    6_496
 } else {
-    2_640
-} + if cfg!(feature = "incremental-embassy-wait") {
-    // Target-side `StaticCell<IncrementalWorkerState>` including its claim byte
-    // and alignment. The 32-bit layout assertion below keeps this honest.
-    // The adjacent worker reservation occupies padding that was already
-    // present in the 32-byte-aligned target layout, so the measured total
-    // remains unchanged.
-    3_856
-} else {
-    0
+    // Crypto storage, the vendor reservation, and claim state.
+    4_425
 };
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
@@ -1142,9 +1140,9 @@ mod tests {
             } else if cfg!(feature = "legacy-blocking-backend") {
                 0x20c0
             } else if cfg!(feature = "incremental-backend-experiment") {
-                0x1280
+                0x1980
             } else {
-                0x1240
+                0x1940
             }
         );
         assert_eq!(

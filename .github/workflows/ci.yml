@@ -55,13 +55,15 @@ jobs:
       matrix:
         include:
           - profile: wpa2-smoltcp
-            features: wpa2-personal,smoltcp
+            features: wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait
           - profile: wpa3-smoltcp
-            features: wpa3-personal,smoltcp
+            features: wpa3-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait
           - profile: wpa2-incremental
             features: wpa2-personal,incremental-backend-experiment
           - profile: wpa3-incremental
             features: wpa3-personal,incremental-backend-experiment
+          - profile: wpa2-legacy-oracle
+            features: wpa2-personal,smoltcp,legacy-blocking-backend
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -142,8 +144,8 @@ jobs:
         with:
           toolchain: nightly-2026-07-09
           components: rust-src
-      - name: Link a complete upstream-WPA2 firmware with stock rust-lld
-        run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example plain_firmware --features wpa2-personal,smoltcp
+      - name: Link the explicit legacy WPA2 migration oracle with stock rust-lld
+        run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example plain_firmware --features wpa2-personal,smoltcp,legacy-blocking-backend
       - name: Link the no-AP bootstrap profiler with stock rust-lld
         run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,incremental-backend-experiment,bootstrap-stage-diag,firmware-example
       - name: Link the credential-free arena admission error fixture

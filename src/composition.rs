@@ -694,6 +694,10 @@ pub struct WifiParts<const EVENTS: usize> {
     pub device: WifiDevice,
 }
 
+#[cfg(any(
+    feature = "legacy-blocking-backend",
+    feature = "incremental-embassy-wait"
+))]
 fn wrap_wifi_parts<const EVENTS: usize>(
     parts: hisi_rf_core::WifiParts<Ws63Device, EVENTS>,
 ) -> WifiParts<EVENTS> {
@@ -1085,6 +1089,10 @@ fn task_resource_group(
     ))
 }
 
+#[cfg(any(
+    feature = "legacy-blocking-backend",
+    feature = "incremental-embassy-wait"
+))]
 fn release_profile_reservation(
     reservation: &'static hisi_rf_rtos_driver::TaskReservation,
 ) -> Result<(), InitError> {

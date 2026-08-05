@@ -31,7 +31,6 @@ PUBLIC_COMPOSITION_TYPES = (
     "hisi_rf_ws63::IncrementalRadioParts",
     "hisi_rf_ws63::IncrementalRadioRunner",
     "hisi_rf_ws63::InitError",
-    "hisi_rf_ws63::RadioController",
     "hisi_rf_ws63::WifiDevice",
     "hisi_rf_ws63::WifiParts",
     "hisi_rf_ws63::WifiRxToken",
@@ -43,9 +42,9 @@ FORBIDDEN_TOKENS = (
     "Ws63WifiBackend",
 )
 REQUIRED_SIGNATURES = (
-    "hisi_rf_ws63::RadioController<P, EVENTS>::start_runner(self) "
-    "-> core::result::Result<hisi_rf_ws63::WifiParts<EVENTS>, "
-    "hisi_rf_ws63::InitError>",
+    "hisi_rf_ws63::IncrementalRadioController<P, EVENTS>::split(self, "
+    "hisi_rf_core::incremental::WorkBudget) -> "
+    "hisi_rf_ws63::IncrementalRadioParts<EVENTS>",
     "hisi_rf_ws63::WifiDevice::RxToken<'a> = hisi_rf_ws63::WifiRxToken",
     "hisi_rf_ws63::WifiDevice::TxToken<'a> = hisi_rf_ws63::WifiTxToken",
 )
@@ -111,17 +110,6 @@ def main() -> int:
         raise RuntimeError(
             "facade-owned API exposes hidden backend/runtime types:\n  "
             + "\n  ".join(exposed)
-        )
-
-    blocking_split = [
-        line
-        for line in lines
-        if "hisi_rf_ws63::RadioController" in line and "::split(" in line
-    ]
-    if blocking_split:
-        raise RuntimeError(
-            "blocking composition root exposes the raw backend split escape hatch:\n  "
-            + "\n  ".join(blocking_split)
         )
 
     rendered = "\n".join(lines)
