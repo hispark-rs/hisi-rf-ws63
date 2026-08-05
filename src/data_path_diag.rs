@@ -37,6 +37,9 @@ static HMAC_TX_PROCESS_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_PROCESS_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 static HMAC_TX_DATA_SEND_CALLS: AtomicU32 = AtomicU32::new(0);
 static HMAC_TX_DATA_SEND_RETURNS: AtomicU32 = AtomicU32::new(0);
+static FRW_HMAC_SEND_DATA_CALLS: AtomicU32 = AtomicU32::new(0);
+static FRW_HMAC_SEND_DATA_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
+static FRW_HMAC_SEND_DATA_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -66,6 +69,8 @@ unsafe extern "C" {
     ) -> u32;
     #[link_name = "__real_hmac_tx_data_send"]
     fn vendor_hmac_tx_data_send(tx_data: *mut c_void, buffers: *mut c_void);
+    #[link_name = "__real_frw_hmac_send_data"]
+    fn vendor_frw_hmac_send_data(netbuf: *mut c_void, vap_id: u8, data_type: u8) -> u32;
     fn mac_res_get_hmac_vap(index: u8) -> *mut c_void;
     fn mac_vap_get_hmac_user_by_addr_etc(vap: *mut c_void, address: *const u8) -> *mut c_void;
     fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
@@ -253,6 +258,14 @@ pub(crate) fn hmac_tx_data_send_diagnostics() -> [u32; 2] {
     ]
 }
 
+pub(crate) fn frw_hmac_send_data_diagnostics() -> (u32, u32, [u32; 16]) {
+    (
+        FRW_HMAC_SEND_DATA_CALLS.load(Ordering::Relaxed),
+        FRW_HMAC_SEND_DATA_LAST_STATUS.load(Ordering::Relaxed),
+        core::array::from_fn(|status| FRW_HMAC_SEND_DATA_STATUS[status].load(Ordering::Relaxed)),
+    )
+}
+
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -294,6 +307,19 @@ pub unsafe extern "C" fn hmac_tx_data_send(tx_data: *mut c_void, buffers: *mut c
     // pointers are forwarded unchanged to the vendor implementation.
     unsafe { vendor_hmac_tx_data_send(tx_data, buffers) };
     HMAC_TX_DATA_SEND_RETURNS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Observe the HMAC-to-DMAC FRW submission boundary and preserve its status.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(export_name = "__wrap_frw_hmac_send_data")]
+pub unsafe extern "C" fn frw_hmac_send_data(netbuf: *mut c_void, vap_id: u8, data_type: u8) -> u32 {
+    FRW_HMAC_SEND_DATA_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the signature matches `frw_hmac_adapt.h`, and all arguments are
+    // forwarded unchanged to the vendor implementation.
+    let status = unsafe { vendor_frw_hmac_send_data(netbuf, vap_id, data_type) };
+    FRW_HMAC_SEND_DATA_LAST_STATUS.store(status, Ordering::Relaxed);
+    FRW_HMAC_SEND_DATA_STATUS[usize::from((status & 0x0f) as u8)].fetch_add(1, Ordering::Relaxed);
+    status
 }
 
 /// Read the associated station's vendor power-save state without modifying it.

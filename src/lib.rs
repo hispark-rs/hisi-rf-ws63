@@ -952,6 +952,9 @@ pub fn force_link_contract() {
                 as unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> u32
         );
         keep!(data_path_diag::hmac_tx_data_send as unsafe extern "C" fn(*mut c_void, *mut c_void));
+        keep!(
+            data_path_diag::frw_hmac_send_data as unsafe extern "C" fn(*mut c_void, u8, u8) -> u32
+        );
     }
 
     keep!(libc::malloc as extern "C" fn(c_ulong) -> *mut c_void);
