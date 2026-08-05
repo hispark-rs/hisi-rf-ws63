@@ -53,10 +53,6 @@ static DMAC_TX_MAC_EXT_QUEUE_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_QUEUE_SNAPSHOT_STAGE: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_SCHEDULE_HOOK: AtomicU32 = AtomicU32::new(0);
 
-// This private callback ID is sampled only after a TX completion. Reading it
-// in the enqueue wrapper changes the verified RF text layout before init.
-const FRD_ROM_TX_SCH: u32 = 239;
-
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
     #[link_name = "__real_dmac_tx_complete_event_handler"]
@@ -95,7 +91,6 @@ unsafe extern "C" {
     fn hmac_psm_is_psm_empty(user: *mut c_void) -> u8;
     fn hmac_psm_tid_mpdu_num(user: *const c_void) -> u32;
     fn hal_chip_get_hal_device() -> *mut c_void;
-    fn frw_get_rom_cb(function_id: u32) -> *mut c_void;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -146,8 +141,8 @@ fn record_tx_completion_status(status: u8) {
     TX_COMPLETION_STATUS[usize::from(status & 0x0f)].fetch_add(1, Ordering::Relaxed);
 }
 
-fn is_normal_data_queue(queue: u8) -> bool {
-    queue & 0x07 == 0
+fn is_unicast_data_queue(queue: u8) -> bool {
+    matches!(queue & 0x07, 0..=3)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -403,24 +398,6 @@ unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
     DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(1, Ordering::Release);
 }
 
-#[cfg(target_arch = "riscv32")]
-unsafe fn snapshot_dmac_tx_completion_queues(vap: *mut c_void) {
-    unsafe {
-        snapshot_dmac_tx_queue_state(
-            vap,
-            &DMAC_TX_SOFTWARE_QUEUES,
-            &DMAC_TX_HARDWARE_QUEUES,
-            &DMAC_TX_MAC_QUEUE_STATUS,
-            &DMAC_TX_MAC_EXT_QUEUE_STATUS,
-        )
-    };
-    DMAC_TX_SCHEDULE_HOOK.store(
-        unsafe { frw_get_rom_cb(FRD_ROM_TX_SCH) } as usize as u32,
-        Ordering::Release,
-    );
-    DMAC_TX_QUEUE_SNAPSHOT_STAGE.store(2, Ordering::Release);
-}
-
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -550,7 +527,6 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     message: *mut c_void,
 ) -> i32 {
     TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
-    let mut normal_data_completion = false;
     if !message.is_null() {
         // `frw_msg.data` points at a completion record whose first word is the
         // hardware descriptor. Descriptor word 0 starts 16 bytes later; its
@@ -572,11 +548,10 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
                 // Beacon and management completions would evict the ten-packet
                 // local probe before it can be printed. The aggregate callback
                 // and status counters still include them; the bounded timeline
-                // intentionally retains the normal data queue. Rust submits
-                // this queue in FIFO order, so the matching identity can be
+                // retains all four WMM data queues (BE/BK/VI/VO). Rust submits
+                // these queues in FIFO order, so the matching identity can be
                 // consumed without following a vendor-private packet pointer.
-                if is_normal_data_queue(queue) {
-                    normal_data_completion = true;
+                if is_unicast_data_queue(queue) {
                     record_tx_completion_trace(
                         status,
                         sequence_word & (1 << 17) != 0,
@@ -593,15 +568,7 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     }
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // `__real_*` resolves to the original mask-ROM implementation.
-    let status = unsafe { vendor_dmac_tx_complete_event_handler(vap, message) };
-    if normal_data_completion {
-        // Management/beacon completion callbacks do not promise the data-VAP
-        // layout used below. A normal data descriptor establishes that ABI;
-        // after the vendor handler returns it has also attempted to schedule
-        // the next queued data descriptor.
-        unsafe { snapshot_dmac_tx_completion_queues(vap) };
-    }
-    status
+    unsafe { vendor_dmac_tx_complete_event_handler(vap, message) }
 }
 
 /// Count a call entering the DMAC RX preparation path and forward it.
@@ -719,11 +686,14 @@ mod tests {
     }
 
     #[test]
-    fn normal_data_queue_ignores_descriptor_flag_bits() {
-        assert!(is_normal_data_queue(0));
-        assert!(is_normal_data_queue(0x80));
-        assert!(!is_normal_data_queue(4));
-        assert!(!is_normal_data_queue(0x84));
+    fn unicast_data_queue_covers_all_wmm_access_categories() {
+        for queue in 0..=3 {
+            assert!(is_unicast_data_queue(queue));
+            assert!(is_unicast_data_queue(queue | 0x80));
+        }
+        assert!(!is_unicast_data_queue(4));
+        assert!(!is_unicast_data_queue(5));
+        assert!(!is_unicast_data_queue(0x84));
     }
 
     #[test]
@@ -733,10 +703,5 @@ mod tests {
             pack_dmac_tx_queue(true, false, 0xff, 0xfe, 0xfd),
             0x80ff_fefd
         );
-    }
-
-    #[test]
-    fn uses_the_powersave_off_tx_scheduler_callback_id() {
-        assert_eq!(FRD_ROM_TX_SCH, 239);
     }
 }
