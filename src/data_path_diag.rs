@@ -149,7 +149,7 @@ fn record_tx_completion_status(status: u8) {
 }
 
 fn is_normal_data_queue(queue: u8) -> bool {
-    queue & 0x07 == 0
+    queue & 0x07 <= 3
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -725,10 +725,14 @@ mod tests {
     }
 
     #[test]
-    fn normal_data_queue_ignores_descriptor_flag_bits() {
+    fn unicast_data_queues_ignore_descriptor_flag_bits() {
         assert!(is_normal_data_queue(0));
+        assert!(is_normal_data_queue(1));
+        assert!(is_normal_data_queue(2));
+        assert!(is_normal_data_queue(3));
         assert!(is_normal_data_queue(0x80));
         assert!(!is_normal_data_queue(4));
+        assert!(!is_normal_data_queue(5));
         assert!(!is_normal_data_queue(0x84));
     }
 
