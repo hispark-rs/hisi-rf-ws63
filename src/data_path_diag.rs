@@ -43,6 +43,11 @@ static FRW_HMAC_SEND_DATA_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }
 static DMAC_TX_DATA_EVENT_CALLS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_DATA_EVENT_LAST_STATUS: AtomicU32 = AtomicU32::new(0);
 static DMAC_TX_DATA_EVENT_STATUS: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+const DMAC_TX_QUEUE_COUNT: usize = 6;
+static DMAC_TX_SOFTWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
+    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
+static DMAC_TX_HARDWARE_QUEUES: [AtomicU32; DMAC_TX_QUEUE_COUNT] =
+    [const { AtomicU32::new(0) }; DMAC_TX_QUEUE_COUNT];
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
@@ -81,6 +86,7 @@ unsafe extern "C" {
     fn hmac_user_get_ps_mode(user: *const c_void) -> u8;
     fn hmac_psm_is_psm_empty(user: *mut c_void) -> u8;
     fn hmac_psm_tid_mpdu_num(user: *const c_void) -> u32;
+    fn hal_chip_get_hal_device() -> *mut c_void;
 }
 
 pub(crate) fn tx_completions() -> u32 {
@@ -279,6 +285,66 @@ pub(crate) fn dmac_tx_data_event_diagnostics() -> (u32, u32, [u32; 16]) {
     )
 }
 
+pub(crate) fn dmac_tx_queue_diagnostics() -> ([u32; DMAC_TX_QUEUE_COUNT], [u32; DMAC_TX_QUEUE_COUNT])
+{
+    (
+        core::array::from_fn(|queue| DMAC_TX_SOFTWARE_QUEUES[queue].load(Ordering::Acquire)),
+        core::array::from_fn(|queue| DMAC_TX_HARDWARE_QUEUES[queue].load(Ordering::Acquire)),
+    )
+}
+
+fn pack_dmac_tx_queue(valid: bool, list_empty: bool, status: u8, ppdu: u8, mpdu: u8) -> u32 {
+    (u32::from(valid) << 31)
+        | (u32::from(list_empty) << 30)
+        | (u32::from(status) << 16)
+        | (u32::from(ppdu) << 8)
+        | u32::from(mpdu)
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn snapshot_dmac_tx_queues(vap: *mut c_void) {
+    const SOFTWARE_QUEUE_OFFSET: usize = 456;
+    const HARDWARE_QUEUE_OFFSET: usize = 40;
+    const QUEUE_SIZE: usize = 12;
+
+    unsafe fn snapshot(base: *const u8, queue: usize) -> u32 {
+        if base.is_null() {
+            return 0;
+        }
+        let header = unsafe { base.add(queue * QUEUE_SIZE) };
+        let next = unsafe { header.cast::<u32>().read_volatile() };
+        let previous = unsafe { header.add(4).cast::<u32>().read_volatile() };
+        let header_address = header as usize as u32;
+        let status = unsafe { header.add(8).read_volatile() };
+        let ppdu = unsafe { header.add(9).read_volatile() };
+        let mpdu = unsafe { header.add(10).read_volatile() };
+        pack_dmac_tx_queue(
+            true,
+            next == header_address && previous == header_address,
+            status,
+            ppdu,
+            mpdu,
+        )
+    }
+
+    if !vap.is_null() {
+        let software = unsafe { vap.cast::<u8>().add(SOFTWARE_QUEUE_OFFSET) };
+        for (queue, value) in DMAC_TX_SOFTWARE_QUEUES.iter().enumerate() {
+            value.store(unsafe { snapshot(software, queue) }, Ordering::Release);
+        }
+    }
+
+    // The original WS63 DWARF layout places `hal_to_dmac_device_stru::tx_dscr_queue`
+    // at byte 40. The six entries use the same 12-byte queue-header layout.
+    let device = unsafe { hal_chip_get_hal_device() };
+    if !device.is_null() {
+        let hardware = unsafe { device.cast::<u8>().add(HARDWARE_QUEUE_OFFSET) };
+        for (queue, value) in DMAC_TX_HARDWARE_QUEUES.iter().enumerate() {
+            value.store(unsafe { snapshot(hardware, queue) }, Ordering::Release);
+        }
+    }
+}
+
 /// Observe the HMAC Ethernet-to-WLAN boundary and preserve its return status.
 #[cfg(target_arch = "riscv32")]
 #[unsafe(export_name = "__wrap_hmac_tx_lan_to_wlan_no_tcp_opt_etc")]
@@ -347,6 +413,9 @@ pub unsafe extern "C" fn dmac_tx_process_data_event(vap: *mut c_void, message: *
     // SAFETY: the signature is the registered `dmac_frw_msg_callback` ABI;
     // both opaque pointers are forwarded unchanged to the vendor callback.
     let status = unsafe { vendor_dmac_tx_process_data_event(vap, message) };
+    // SAFETY: the queue offsets and 12-byte queue-header layout are taken from
+    // the original WS63 ELF DWARF and agree with the mask-ROM address arithmetic.
+    unsafe { snapshot_dmac_tx_queues(vap) };
     DMAC_TX_DATA_EVENT_LAST_STATUS.store(status as u32, Ordering::Relaxed);
     DMAC_TX_DATA_EVENT_STATUS[usize::from((status as u32 & 0x0f) as u8)]
         .fetch_add(1, Ordering::Relaxed);
@@ -569,5 +638,14 @@ mod tests {
         assert!(is_normal_data_queue(0x80));
         assert!(!is_normal_data_queue(4));
         assert!(!is_normal_data_queue(0x84));
+    }
+
+    #[test]
+    fn packs_dmac_queue_state_without_losing_counts() {
+        assert_eq!(pack_dmac_tx_queue(true, true, 2, 3, 4), 0xc002_0304);
+        assert_eq!(
+            pack_dmac_tx_queue(true, false, 0xff, 0xfe, 0xfd),
+            0x80ff_fefd
+        );
     }
 }
