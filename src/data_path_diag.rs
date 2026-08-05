@@ -547,6 +547,7 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     message: *mut c_void,
 ) -> i32 {
     TX_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+    let mut normal_data_completion = false;
     if !message.is_null() {
         // `frw_msg.data` points at a completion record whose first word is the
         // hardware descriptor. Descriptor word 0 starts 16 bytes later; its
@@ -572,6 +573,7 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
                 // this queue in FIFO order, so the matching identity can be
                 // consumed without following a vendor-private packet pointer.
                 if is_normal_data_queue(queue) {
+                    normal_data_completion = true;
                     record_tx_completion_trace(
                         status,
                         sequence_word & (1 << 17) != 0,
@@ -589,9 +591,13 @@ pub unsafe extern "C" fn dmac_tx_complete_event_handler(
     // SAFETY: the linker redirects the exact vendor ABI through `--wrap` and
     // `__real_*` resolves to the original mask-ROM implementation.
     let status = unsafe { vendor_dmac_tx_complete_event_handler(vap, message) };
-    // The vendor handler reclaims the completed descriptor and then attempts
-    // to schedule the next queued descriptor. Observe that postcondition.
-    unsafe { snapshot_dmac_tx_completion_queues(vap) };
+    if normal_data_completion {
+        // Management/beacon completion callbacks do not promise the data-VAP
+        // layout used below. A normal data descriptor establishes that ABI;
+        // after the vendor handler returns it has also attempted to schedule
+        // the next queued data descriptor.
+        unsafe { snapshot_dmac_tx_completion_queues(vap) };
+    }
     status
 }
 
