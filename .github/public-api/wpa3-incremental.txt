@@ -205,6 +205,7 @@ pub fn hisi_rf_ws63::osal_queue::event_diagnostics(&mut [hisi_rf_ws63::osal_queu
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_write(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_create(*const core::ffi::primitives::c_char, u16, *mut core::ffi::primitives::c_ulong, core::ffi::primitives::c_uint, u16) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_delete(core::ffi::primitives::c_ulong)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_get_msg_num(core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_uint
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_is_full(core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_read_copy(core::ffi::primitives::c_ulong, *mut core::ffi::c_void, *mut core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_write_copy(core::ffi::primitives::c_ulong, *mut core::ffi::c_void, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
