@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.73] - 2026-08-06
+
+### Added
+
+- Link the hash-bound WS63 BLE B1 controller closure through the published
+  `ws63-radio-sys 0.1.0-alpha.13` Cargo metadata, including the rooted init
+  entries and the exact four-task runtime compatibility profile.
+- Add a credential-free BLE final-link fixture and cross-platform CI gate that
+  proves stock rust-lld consumes the normalized controller archive without
+  vendor relocations or Wi-Fi ROM patch-table coupling.
+- Add the bounded BLE controller compatibility ABI required by B1, including
+  queue, synchronization, timer, allocator, NVS/eFuse and explicit unsupported
+  PKE behavior. Advertising, scanning, GATT and pairing remain later gates.
+
+### Changed
+
+- Record the queue-depth compatibility symbol in the intentional WPA2 public C
+  ABI snapshot; it is shared infrastructure for the BLE controller closure.
+
 ## [0.1.0-alpha.72] - 2026-08-06
 
 ### Changed
@@ -961,7 +980,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.68...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.73...HEAD
+[0.1.0-alpha.73]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.72...v0.1.0-alpha.73
+[0.1.0-alpha.72]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.71...v0.1.0-alpha.72
+[0.1.0-alpha.71]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.70...v0.1.0-alpha.71
+[0.1.0-alpha.70]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.69...v0.1.0-alpha.70
+[0.1.0-alpha.69]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.68...v0.1.0-alpha.69
 [0.1.0-alpha.68]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.67...v0.1.0-alpha.68
 [0.1.0-alpha.67]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.66...v0.1.0-alpha.67
 [0.1.0-alpha.66]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.65...v0.1.0-alpha.66
