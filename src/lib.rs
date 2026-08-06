@@ -114,6 +114,18 @@ compile_error!("select exactly one AP authenticator security profile");
 compile_error!("select exactly one WS63 Personal profile");
 
 #[cfg(all(
+    feature = "ble-init",
+    any(
+        feature = "wifi",
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
+    )
+))]
+compile_error!("the BLE B1 init profile is standalone until coexistence resources are proven");
+
+#[cfg(all(
     feature = "net",
     feature = "upstream-supplicant-port",
     not(any(feature = "wpa2-personal", feature = "wpa3-personal"))
@@ -151,7 +163,8 @@ use critical_section::Mutex;
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
         feature = "upstream-authenticator-wpa2",
-        feature = "upstream-authenticator-wpa3"
+        feature = "upstream-authenticator-wpa3",
+        feature = "ble-init"
     )
 ))]
 mod link_contract {
@@ -172,7 +185,18 @@ mod link_contract {
     }
 }
 
+/// Force the internal BLE B1 archive and ROM contract into a firmware link.
+///
+/// This is a bring-up hook for the B1 link fixture, not a user-facing BLE API.
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[doc(hidden)]
+pub fn ensure_ble_init_link_contract() {
+    link_contract::ensure();
+}
+
 pub mod alloc;
+#[cfg(feature = "ble-init")]
+mod ble_compat;
 #[cfg(any(
     target_arch = "riscv32",
     feature = "wifi-personal",
@@ -622,7 +646,7 @@ pub const WS63_SHARED_RADIO_ARENA_BYTES: usize = 296 * 1024;
 
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;
-#[cfg(feature = "wifi-personal")]
+#[cfg(any(feature = "wifi-personal", feature = "ble-init"))]
 mod wpa_compat;
 mod ws63_runtime_compat;
 

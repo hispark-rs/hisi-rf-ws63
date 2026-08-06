@@ -196,6 +196,11 @@ pub(crate) fn heap_metrics() -> HeapMetrics {
     HEAP.metrics()
 }
 
+#[cfg(feature = "ble-init")]
+pub(crate) fn largest_allocatable(alignment: usize) -> usize {
+    HEAP.largest_allocatable(alignment)
+}
+
 /// Allocate `size` zero-initialized bytes. Returns null on failure or zero size.
 #[unsafe(no_mangle)]
 pub extern "C" fn osal_kmalloc(size: usize) -> *mut c_void {

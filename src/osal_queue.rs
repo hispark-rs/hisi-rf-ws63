@@ -164,6 +164,29 @@ pub extern "C" fn osal_msg_queue_is_full(queue_id: c_ulong) -> c_int {
     })
 }
 
+/// Return the number of queued messages, or the vendor invalid-count value.
+#[unsafe(no_mangle)]
+pub extern "C" fn osal_msg_queue_get_msg_num(queue_id: c_ulong) -> c_uint {
+    let q = queue_id as *mut MsgQueue;
+    if q.is_null() {
+        return c_uint::MAX;
+    }
+    critical_section::with(|_cs| {
+        // SAFETY: a non-null queue id is created by `osal_msg_queue_create`
+        // and remains live until the caller quiesces users before deletion.
+        unsafe { (*q).count as c_uint }
+    })
+}
+
+#[cfg(feature = "ble-init")]
+pub(crate) fn osal_msg_queue_item_size(queue_id: c_ulong) -> c_uint {
+    let q = queue_id as *mut MsgQueue;
+    if q.is_null() {
+        return 0;
+    }
+    critical_section::with(|_cs| unsafe { (*q).item_size as c_uint })
+}
+
 /// Delete a message queue.
 #[unsafe(no_mangle)]
 pub extern "C" fn osal_msg_queue_delete(queue_id: c_ulong) {

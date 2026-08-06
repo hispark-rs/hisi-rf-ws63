@@ -52,6 +52,11 @@ name = "connectivity_contract_fixture"
 path = "examples/connectivity_contract_fixture.rs"
 required-features = ["firmware-example"]
 
+[[example]]
+name = "ble_init_link"
+path = "examples/ble_init_link.rs"
+required-features = ["ble-init", "firmware-example"]
+
 [dependencies]
 hisi-alloc = "0.1.0-alpha.3"
 hisi-storage = "0.1.0-alpha.1"
@@ -81,6 +86,7 @@ smoltcp = { version = "0.13", default-features = false, features = [
 [features]
 default = []
 wifi = ["ws63-radio-sys/wifi"]
+ble-init = ["ws63-radio-sys/ble"]
 smoltcp = ["net"]
 wpa2-personal = ["wifi", "upstream-supplicant-port"]
 wpa3-personal = ["wifi", "upstream-supplicant-wpa3"]

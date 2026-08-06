@@ -31,6 +31,14 @@ jobs:
           fi
           grep -F 'select exactly one WS63 Personal profile' "${log}"
           ! grep -E 'E0428|E0432|E0433|SelectedProfile' "${log}"
+      - name: Reject BLE B1 and Wi-Fi coexistence before resource proof
+        run: |
+          log="${RUNNER_TEMP}/ble-wifi-coexistence.log"
+          if cargo check --locked --target x86_64-unknown-linux-gnu --features ble-init,wpa2-personal 2>"${log}"; then
+            echo "backend unexpectedly accepted the unproven BLE/Wi-Fi composition" >&2
+            exit 1
+          fi
+          grep -F 'the BLE B1 init profile is standalone' "${log}"
 
   api-boundary:
     runs-on: ubuntu-latest
@@ -156,6 +164,8 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example operation_error_injection --features wpa2-personal,incremental-backend-experiment,firmware-example
       - name: Link the credential-free connectivity contract fixture
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example connectivity_contract_fixture --features firmware-example
+      - name: Link the credential-free BLE B1 controller closure with stock rust-lld
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example ble_init_link --no-default-features --features ble-init,firmware-example
       - name: Link the credential-free incremental scan profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,bootstrap-stage-diag,firmware-example
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld

@@ -20,7 +20,7 @@ fn metadata_list(name: &str) -> Vec<String> {
         .collect()
 }
 
-fn write_combined_archive(archives: &[PathBuf], object: &Path, output: &Path) {
+fn write_combined_archive(archives: &[PathBuf], object: Option<&Path>, output: &Path) {
     use ar_archive_writer::{ArchiveKind, DEFAULT_OBJECT_READER, NewArchiveMember};
     use object::read::archive::ArchiveFile;
 
@@ -45,11 +45,13 @@ fn write_combined_archive(archives: &[PathBuf], object: &Path, output: &Path) {
             ));
         }
     }
-    members.push(NewArchiveMember::new(
-        fs::read(object).unwrap_or_else(|error| panic!("read {}: {error}", object.display())),
-        &DEFAULT_OBJECT_READER,
-        "ws63_rom_patches.o".to_owned(),
-    ));
+    if let Some(object) = object {
+        members.push(NewArchiveMember::new(
+            fs::read(object).unwrap_or_else(|error| panic!("read {}: {error}", object.display())),
+            &DEFAULT_OBJECT_READER,
+            "ws63_rom_patches.o".to_owned(),
+        ));
+    }
 
     let mut output_bytes = Cursor::new(Vec::new());
     ar_archive_writer::write_archive_to_stream(
@@ -389,13 +391,27 @@ fn main() {
         env::var_os("DEP_WS63_RADIO_SYS_ROM_PATCH_OBJECT")
             .expect("ws63-radio-sys did not export its ROM patch object"),
     );
+    let ble_init = env::var_os("CARGO_FEATURE_BLE_INIT").is_some();
     let mut combined_inputs = Vec::new();
-    for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
-        let (name, mode) = archive
-            .split_once(':')
-            .expect("invalid ws63-radio-sys archive metadata");
-        if mode != "whole" {
-            combined_inputs.push(lib_dir.join(format!("lib{name}.a")));
+    if ble_init {
+        combined_inputs.extend(
+            metadata_list("DEP_WS63_RADIO_SYS_BLE_ARCHIVES")
+                .into_iter()
+                .map(PathBuf::from),
+        );
+        combined_inputs.extend(
+            metadata_list("DEP_WS63_RADIO_SYS_BLE_CONTROLLER_ARCHIVES")
+                .into_iter()
+                .map(PathBuf::from),
+        );
+    } else {
+        for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
+            let (name, mode) = archive
+                .split_once(':')
+                .expect("invalid ws63-radio-sys archive metadata");
+            if mode != "whole" {
+                combined_inputs.push(lib_dir.join(format!("lib{name}.a")));
+            }
         }
     }
     if let Some(archive) = env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE") {
@@ -405,13 +421,23 @@ fn main() {
         combined_inputs.push(PathBuf::from(archive));
     }
     let combined_archive = out_dir.join("libws63_radio_closure.a");
-    write_combined_archive(&combined_inputs, &patch_object, &combined_archive);
+    write_combined_archive(
+        &combined_inputs,
+        (!ble_init).then_some(patch_object.as_path()),
+        &combined_archive,
+    );
 
-    let mut roots = metadata_list("DEP_WS63_RADIO_SYS_WIFI_ROOT_SYMBOLS");
-    roots.extend(metadata_list(
-        "DEP_WS63_RADIO_SYS_ROM_CALLBACK_ROOT_SYMBOLS",
-    ));
-    roots.extend(metadata_list("DEP_WS63_RADIO_SYS_RUNTIME_COMPAT_SYMBOLS"));
+    let mut roots = if ble_init {
+        metadata_list("DEP_WS63_RADIO_SYS_BLE_INIT_ROOT_SYMBOLS")
+    } else {
+        metadata_list("DEP_WS63_RADIO_SYS_WIFI_ROOT_SYMBOLS")
+    };
+    if !ble_init {
+        roots.extend(metadata_list(
+            "DEP_WS63_RADIO_SYS_ROM_CALLBACK_ROOT_SYMBOLS",
+        ));
+        roots.extend(metadata_list("DEP_WS63_RADIO_SYS_RUNTIME_COMPAT_SYMBOLS"));
+    }
     if env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE").is_some() {
         roots.extend(metadata_list(
             "DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ROOT_SYMBOLS",
@@ -422,18 +448,24 @@ fn main() {
             "DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ROOT_SYMBOLS",
         ));
     }
-    roots.push("__hisi_ws63_rom_patch_table".to_owned());
+    if !ble_init {
+        roots.push("__hisi_ws63_rom_patch_table".to_owned());
+    }
     let rom_symbols = parse_rom_symbols(&rom);
     let mut census_archives = combined_inputs;
-    for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
-        let (name, mode) = archive
-            .split_once(':')
-            .expect("invalid ws63-radio-sys archive metadata");
-        if mode == "whole" {
-            census_archives.push(lib_dir.join(format!("lib{name}.a")));
+    if !ble_init {
+        for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
+            let (name, mode) = archive
+                .split_once(':')
+                .expect("invalid ws63-radio-sys archive metadata");
+            if mode == "whole" {
+                census_archives.push(lib_dir.join(format!("lib{name}.a")));
+            }
         }
     }
-    census_archives.push(lib_dir.join("librom_callback.a"));
+    if !ble_init {
+        census_archives.push(lib_dir.join("librom_callback.a"));
+    }
     let mut callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
     add_declared_callable_rom_symbols(&mut callable_rom_symbols, &rust_rom_calls, &rom_symbols);
     let contract = out_dir.join("ws63-radio-link-contract.S");
@@ -475,15 +507,19 @@ fn main() {
         }
     }
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
-    for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
-        let (name, mode) = archive
-            .split_once(':')
-            .expect("invalid ws63-radio-sys archive metadata");
-        if mode == "whole" {
-            println!("cargo:rustc-link-lib=static:+whole-archive={name}");
+    if !ble_init {
+        for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
+            let (name, mode) = archive
+                .split_once(':')
+                .expect("invalid ws63-radio-sys archive metadata");
+            if mode == "whole" {
+                println!("cargo:rustc-link-lib=static:+whole-archive={name}");
+            }
         }
     }
-    println!("cargo:rustc-link-lib=static:+whole-archive=rom_callback");
+    if !ble_init {
+        println!("cargo:rustc-link-lib=static:+whole-archive=rom_callback");
+    }
 
     println!("cargo:rerun-if-changed={}", rom.display());
     println!("cargo:rerun-if-changed={}", rust_rom_calls.display());
