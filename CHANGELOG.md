@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add an internal, credential-free BLE B1 init smoke that installs a
+  caller-owned shared arena, hardware crypto/TRNG, the exact four-task vendor
+  runtime plan, BLE IRQ routing, and the controller/host `enable_ble` closure.
+- Add typed fail-closed B1 storage, resource, admission, spawn, scheduler, and
+  vendor-init errors without exposing advertising, scanning, GATT, or pairing
+  as public BLE APIs.
+
+### Changed
+
+- Update the BLE link dependency to `ws63-radio-sys 0.1.0-alpha.15`, whose
+  profile-derived controller closure includes the original ROM timebase data.
+
 ## [0.1.0-alpha.73] - 2026-08-06
 
 ### Added

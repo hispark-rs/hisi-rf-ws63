@@ -314,13 +314,21 @@ pub extern "C" fn uapi_drv_cipher_trng_get_random_bytes(randnum: *mut u8, size: 
     }
     // SAFETY: null was rejected and the C ABI promises `size` writable bytes.
     let output = unsafe { core::slice::from_raw_parts_mut(randnum, size as usize) };
-    #[cfg(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port"))]
+    #[cfg(any(
+        feature = "ble-init",
+        feature = "wifi-wpa2-personal",
+        feature = "upstream-supplicant-port"
+    ))]
     {
         crate::crypto::fill_hardware_entropy(output)
             .map(|()| crate::OSAL_OK as u32)
             .unwrap_or(crate::OSAL_NOK as u32)
     }
-    #[cfg(not(any(feature = "wifi-wpa2-personal", feature = "upstream-supplicant-port")))]
+    #[cfg(not(any(
+        feature = "ble-init",
+        feature = "wifi-wpa2-personal",
+        feature = "upstream-supplicant-port"
+    )))]
     {
         let _ = output;
         crate::OSAL_NOK as u32

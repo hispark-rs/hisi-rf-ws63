@@ -196,6 +196,8 @@ pub fn ensure_ble_init_link_contract() {
 
 pub mod alloc;
 #[cfg(feature = "ble-init")]
+mod ble;
+#[cfg(feature = "ble-init")]
 mod ble_compat;
 #[cfg(any(
     target_arch = "riscv32",
@@ -213,6 +215,7 @@ mod ble_compat;
 mod blocking_diagnostics;
 mod compiler_rt;
 #[cfg(any(
+    feature = "ble-init",
     feature = "wifi-wpa2-personal",
     feature = "upstream-supplicant-port",
     feature = "upstream-authenticator-wpa2",
@@ -650,7 +653,32 @@ mod wlmac_diag;
 mod wpa_compat;
 mod ws63_runtime_compat;
 
+#[cfg(feature = "ble-init")]
+#[doc(hidden)]
+pub use ble::{
+    BLE_B1_ARENA_BYTES, BleB1ArenaStorage, BleB1ControlStorage, BleB1Controller, BleB1InitError,
+    BleB1Resources, BleB1Storage, InstalledBleB1Storage, init_ble_b1,
+};
 pub use pmp::prepare_vendor_memory;
+
+/// Declare caller-owned storage for the internal BLE B1 init profile.
+#[cfg(feature = "ble-init")]
+#[macro_export]
+macro_rules! declare_ble_b1_storage {
+    ($(#[$meta:meta])* $vis:vis static $name:ident) => {
+        $(#[$meta])*
+        $vis static $name: $crate::BleB1Storage<{ $crate::BLE_B1_ARENA_BYTES }> = {
+            static CONTROL: $crate::BleB1ControlStorage = $crate::BleB1ControlStorage::new();
+            #[cfg_attr(
+                target_arch = "riscv32",
+                unsafe(link_section = ".hisi.shared-arena")
+            )]
+            static ARENA: $crate::BleB1ArenaStorage<{ $crate::BLE_B1_ARENA_BYTES }> =
+                $crate::BleB1ArenaStorage::new();
+            $crate::BleB1Storage::from_parts(&CONTROL, &ARENA)
+        };
+    };
+}
 #[cfg(any(
     feature = "upstream-authenticator-wpa2",
     feature = "upstream-authenticator-wpa3"

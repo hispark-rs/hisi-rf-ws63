@@ -9,6 +9,7 @@ pub(crate) use hisi_crypto::CryptoError;
 #[cfg(all(
     target_arch = "riscv32",
     any(
+        feature = "ble-init",
         feature = "wifi-wpa2-personal",
         feature = "upstream-supplicant-port",
         feature = "upstream-authenticator-wpa2",
@@ -85,8 +86,10 @@ static MAC_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 static MAC_MAX_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 static HASH_RECOVERY_TESTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 static HASH_RECOVERY_FAILURES: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 static CIPHER_REQUESTS: AtomicU32 = AtomicU32::new(0);
@@ -97,8 +100,10 @@ static CIPHER_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 static CIPHER_MAX_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 static CIPHER_RECOVERY_TESTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 static CIPHER_RECOVERY_FAILURES: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 static P256_REQUESTS: AtomicU32 = AtomicU32::new(0);
@@ -575,6 +580,7 @@ fn cipher_hardware(
 
 /// Return non-secret hardware entropy health counters for HIL diagnostics.
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 pub(crate) fn hardware_entropy_diagnostic_snapshot() -> [u32; 4] {
     [
         u32::from(!CRYPTO_SERVICE.load(Ordering::Acquire).is_null()),
@@ -586,6 +592,7 @@ pub(crate) fn hardware_entropy_diagnostic_snapshot() -> [u32; 4] {
 
 /// Return non-secret hardware PBKDF2 health counters for HIL diagnostics.
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 pub(crate) fn hardware_pbkdf2_diagnostic_snapshot() -> [u32; 5] {
     [
         u32::from(!CRYPTO_SERVICE.load(Ordering::Acquire).is_null()),
@@ -598,6 +605,7 @@ pub(crate) fn hardware_pbkdf2_diagnostic_snapshot() -> [u32; 5] {
 
 /// Return non-secret SPACC hash, HMAC, and recovery counters for HIL diagnostics.
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 pub(crate) fn hardware_hash_diagnostic_snapshot() -> [u32; 10] {
     [
         HASH_REQUESTS.load(Ordering::Relaxed),
@@ -615,6 +623,7 @@ pub(crate) fn hardware_hash_diagnostic_snapshot() -> [u32; 10] {
 
 /// Return non-secret SPACC AES and recovery counters for HIL diagnostics.
 #[cfg(target_arch = "riscv32")]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 pub(crate) fn hardware_cipher_diagnostic_snapshot() -> [u32; 6] {
     [
         CIPHER_REQUESTS.load(Ordering::Relaxed),
@@ -758,6 +767,7 @@ pub(crate) fn hardware_hash_diagnostic_snapshot() -> [u32; 10] {
 }
 
 #[cfg(not(target_arch = "riscv32"))]
+#[allow(dead_code)]
 pub(crate) fn hardware_cipher_diagnostic_snapshot() -> [u32; 6] {
     [0; 6]
 }

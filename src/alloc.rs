@@ -183,6 +183,7 @@ pub(crate) fn install_arena<P: Profile>(arena: RadioArena<P>) -> Result<(), Aren
 }
 
 #[cfg(any(
+    feature = "ble-init",
     feature = "upstream-authenticator-wpa2",
     feature = "upstream-authenticator-wpa3"
 ))]

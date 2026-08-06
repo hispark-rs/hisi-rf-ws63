@@ -134,6 +134,7 @@ fn radio_interrupt(irq: u32) -> Option<Interrupt> {
         42 => Interrupt::COEX_WIFI_RESUME_INT,
         44 => Interrupt::WLPHY_INT,
         45 => Interrupt::WLMAC_INT,
+        46 => Interrupt::BLE_INT,
         69 => Interrupt::MAC_MONITOR_INT,
         _ => return None,
     })
@@ -449,6 +450,7 @@ radio_irq_entry!(COEX_BT_INT, 41);
 radio_irq_entry!(COEX_WIFI_RESUME_INT, 42);
 radio_irq_entry!(WLPHY_INT, 44);
 radio_irq_entry!(WLMAC_INT, 45);
+radio_irq_entry!(BLE_INT, 46);
 radio_irq_entry!(MAC_MONITOR_INT, 69);
 
 // ── Threads (backed by the application-selected runtime) ───────────────────
