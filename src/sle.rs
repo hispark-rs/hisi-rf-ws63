@@ -23,7 +23,7 @@ use ws63_radio_sys::sle::{
 use ws63_radio_sys::ssap::{
     ClientCallbacks, ClientHandleValue, ClientWriteParameters, ClientWriteResult, ExchangeInfo,
     FindServiceResult, FindStructureParameters, FindStructureResult, NotifyIndicate,
-    ServerCallbacks, ServerPropertyInfo, ServerReadRequest, Uuid,
+    ServerCallbacks, ServerPropertyInfo, ServerReadRequest, ServerWriteRequest, Uuid,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -127,6 +127,14 @@ pub enum SleS1Event {
     SsapWriteComplete {
         client_id: u8,
         connection_id: u16,
+        handle: u16,
+        property_type: u8,
+        status: u32,
+    },
+    SsapWriteRequested {
+        server_id: u8,
+        connection_id: u16,
+        request_id: u16,
         handle: u16,
         property_type: u8,
         status: u32,
@@ -975,6 +983,26 @@ unsafe extern "C" fn ssap_write_complete(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_write_requested(
+    server_id: u8,
+    connection_id: u16,
+    request: *mut ServerWriteRequest,
+    status: u32,
+) {
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return;
+    };
+    push_event(SleS1Event::SsapWriteRequested {
+        server_id,
+        connection_id,
+        request_id: request.request_id,
+        handle: request.handle,
+        property_type: request.property_type,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -1010,7 +1038,7 @@ static mut SSAP_SERVER_CALLBACKS: ServerCallbacks = ServerCallbacks {
     delete_all_services: None,
     read_request: Some(ssap_read_requested),
     read_by_uuid_request: None,
-    write_request: None,
+    write_request: Some(ssap_write_requested),
     mtu_changed: None,
     indicate_confirmed: None,
 };

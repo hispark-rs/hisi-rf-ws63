@@ -72,6 +72,9 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     }
                     sle_firmware::log(b"RFDBG_SLE_S3_SERVER_NOTIFY_OK\r\n");
                 }
+                hisi_rf_ws63::SleS1Event::SsapWriteRequested { status: 0, .. } => {
+                    sle_firmware::log(b"RFDBG_SLE_S3_SERVER_WRITE_OK\r\n");
+                }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
                     connection_state: CONNECTION_STATE_DISCONNECTED,
                     ..
