@@ -123,7 +123,9 @@ compile_error!("select exactly one WS63 Personal profile");
         feature = "upstream-authenticator-wpa3"
     )
 ))]
-compile_error!("the BGLE init profiles are standalone until coexistence resources are proven");
+compile_error!(
+    "the BLE B1 init profile is standalone; SLE S1 is also standalone until coexistence resources are proven"
+);
 
 #[cfg(all(feature = "ble-init", feature = "sle-init"))]
 compile_error!("select exactly one standalone WS63 BGLE protocol profile");
