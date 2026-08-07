@@ -11,6 +11,65 @@ use std::{
     path::{Path, PathBuf},
 };
 
+fn write_exception_diag_object(output: &Path) {
+    use object::write::{Object, Relocation, Symbol, SymbolSection};
+    use object::{
+        Architecture, BinaryFormat, Endianness, FileFlags, RelocationFlags, SectionKind,
+        SymbolFlags, SymbolKind, SymbolScope,
+    };
+
+    let mut object = Object::new(BinaryFormat::Elf, Architecture::Riscv32, Endianness::Little);
+    object.flags = FileFlags::Elf {
+        os_abi: 0,
+        abi_version: 0,
+        e_flags: 0x3,
+    };
+    let text = object.add_section(
+        Vec::new(),
+        b".text.default_exc_handler".to_vec(),
+        SectionKind::Text,
+    );
+    object.append_section_data(text, &[0x17, 0x03, 0, 0, 0x67, 0, 0x03, 0], 4);
+    object.add_symbol(Symbol {
+        name: b"default_exc_handler".to_vec(),
+        value: 0,
+        size: 8,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    let target = object.add_symbol(Symbol {
+        name: b"__ws63_ble_exception_diag".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Undefined,
+        flags: SymbolFlags::None,
+    });
+    object
+        .add_relocation(
+            text,
+            Relocation {
+                offset: 0,
+                symbol: target,
+                addend: 0,
+                flags: RelocationFlags::Elf { r_type: 19 },
+            },
+        )
+        .expect("add exception diagnostic relocation");
+    fs::write(
+        output,
+        object
+            .write()
+            .expect("serialize exception diagnostic object"),
+    )
+    .expect("write exception diagnostic object");
+}
+
 fn metadata_list(name: &str) -> Vec<String> {
     env::var(name)
         .unwrap_or_else(|_| panic!("ws63-radio-sys did not export {name}"))
@@ -241,7 +300,7 @@ fn append_rom_fallbacks(
     }
 }
 
-fn callback_target(name: &str) -> &str {
+fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) -> &'a str {
     match name {
         "__ashldi3" => "__ws63_ashldi3",
         "__udivdi3" => "__ws63_udivdi3",
@@ -263,6 +322,7 @@ fn callback_target(name: &str) -> &str {
                 | "log_event_wifi_print2"
                 | "log_event_wifi_print3"
                 | "log_event_wifi_print4"
+                | "log_oam_status_store"
                 | "osal_irq_clear"
                 | "osal_irq_disable"
                 | "osal_irq_enable"
@@ -287,11 +347,16 @@ fn callback_target(name: &str) -> &str {
         {
             name
         }
+        _ if archive_definitions.contains(name) => name,
         _ => "__ws63_missing_rom_callback",
     }
 }
 
-fn append_callback_fallbacks(assembly: &mut String, source: &Path) {
+fn append_callback_fallbacks(
+    assembly: &mut String,
+    source: &Path,
+    archive_definitions: &BTreeSet<String>,
+) {
     let source = fs::read_to_string(source)
         .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
     for name in source.lines().map(str::trim) {
@@ -299,7 +364,7 @@ fn append_callback_fallbacks(assembly: &mut String, source: &Path) {
             continue;
         }
         assert!(valid_symbol(name), "invalid ROM callback: {name:?}");
-        let target = callback_target(name);
+        let target = callback_target(name, archive_definitions);
         assert!(
             valid_symbol(target),
             "invalid ROM callback target: {target:?}"
@@ -328,6 +393,7 @@ fn write_link_contract(
     roots: &[String],
     rom_symbols: &BTreeMap<String, String>,
     callable_rom_symbols: &BTreeSet<String>,
+    callback_archive_definitions: &BTreeSet<String>,
 ) {
     let mut assembly = String::from(
         ".weak __nv_storage_start\n\
@@ -336,7 +402,7 @@ fn write_link_contract(
          .set __nv_storage_length, 0x00004000\n",
     );
     append_rom_fallbacks(&mut assembly, rom_symbols, callable_rom_symbols, roots);
-    append_callback_fallbacks(&mut assembly, callbacks);
+    append_callback_fallbacks(&mut assembly, callbacks, callback_archive_definitions);
     assembly.push_str(
         ".section .rodata.hisi_ws63_rf_roots,\"a\",@progbits\n\
          .balign 4\n\
@@ -373,6 +439,11 @@ fn main() {
     println!("cargo:rustc-link-arg=--no-relax");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    if env::var_os("CARGO_FEATURE_BLE_INIT_DIAG").is_some() {
+        let exception_diag = out_dir.join("ws63-ble-exception-diag.o");
+        write_exception_diag_object(&exception_diag);
+        println!("cargo:rustc-link-arg={}", exception_diag.display());
+    }
     let lib_dir = PathBuf::from(
         env::var_os("DEP_WS63_RADIO_SYS_LIB_DIR")
             .expect("ws63-radio-sys did not export its archive directory"),
@@ -468,6 +539,13 @@ fn main() {
     }
     let mut callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
     add_declared_callable_rom_symbols(&mut callable_rom_symbols, &rust_rom_calls, &rom_symbols);
+    let callback_archive_definitions = if ble_init {
+        metadata_list("DEP_WS63_RADIO_SYS_BLE_CALLBACK_SYMBOLS")
+            .into_iter()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let contract = out_dir.join("ws63-radio-link-contract.S");
     write_link_contract(
         &contract,
@@ -475,6 +553,7 @@ fn main() {
         &roots,
         &rom_symbols,
         &callable_rom_symbols,
+        &callback_archive_definitions,
     );
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
@@ -487,6 +566,32 @@ fn main() {
             "hmac_tx_mgmt_send_event_etc",
             "dmac_rx_prepare_data_patch",
             "dmac_tx_complete_event_handler",
+        ] {
+            println!("cargo:rustc-link-arg=--wrap={symbol}");
+        }
+    } else if env::var_os("CARGO_FEATURE_BLE_INIT_DIAG").is_some() {
+        for symbol in [
+            "bt_init",
+            "hci_init",
+            "btsdk_init",
+            "app_ble_init",
+            "sdk_bta_interface_init",
+            "bt_mpc_ble_enable_comp_notify",
+            "bt_sync_config_from_file_to_global",
+            "btsdk_power_on_bluetooth",
+            "btsdk_initialize_local_device",
+            "gap_reset_hardware",
+            "hci_controller_init",
+            "gaph_reset_hardware_cbk",
+            "api_h2c_write",
+            "app_ble_service_init",
+            "bt_dev_start_bluetooh",
+            "bt_acore_get_product_type",
+            "sapi_ble_recover_product_type",
+            "bt_acore_get_system_config",
+            "sapi_ble_recover_sys_config",
+            "bt_acore_get_bt_name",
+            "sapi_ble_set_local_name",
         ] {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }

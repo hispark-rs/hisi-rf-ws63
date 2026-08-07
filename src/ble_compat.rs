@@ -2,8 +2,9 @@
 //!
 //! This module is not a LiteOS backend. It translates only the symbols in the
 //! archive-bound BLE B1 profile to native runtime, allocator, timer and queue
-//! services. Optional vendor diagnostics are explicit sinks. Unsupported PKE
-//! operations fail instead of silently pretending that key generation worked.
+//! services. Optional vendor diagnostics are explicit sinks. Unsupported
+//! unified-cipher and PKE operations fail instead of silently pretending that
+//! key setup or cryptographic work succeeded.
 
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -591,6 +592,13 @@ pub extern "C" fn log_oam_register_handler_callback(_kind: u8, _callback: *mut c
 pub extern "C" fn diag_sample_data_register(_kind: u32, _callback: *mut c_void) {}
 
 #[unsafe(no_mangle)]
+pub extern "C" fn diag_cmd_report_sample_data(_buffer: *mut u8, _length: u32) -> u32 {
+    // The B1 profile deliberately has no DFX transport. Match the vendor
+    // `errcode_t` failure value instead of pretending that the sample was sent.
+    u32::MAX
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn log_oam_status_store(_prime: u8, _message: u16, _mode: u16, _length: u32) {}
 
 #[unsafe(no_mangle)]
@@ -608,6 +616,132 @@ pub extern "C" fn global_thread_status_update(_running: bool) {}
 #[unsafe(no_mangle)]
 pub extern "C" fn global_isr_time_statistics_get() -> u64 {
     0
+}
+
+// The mask-ROM BTC data ABI contains function tables that reference the
+// vendor unified-cipher service layer. B1 does not perform pairing or encrypted
+// link setup, but the table entries must still resolve to valid functions.
+// Keep these signatures aligned with the public SDK headers and fail closed
+// until B2 replaces them with hisi-crypto-ws63 keyslot/hash/MAC capabilities.
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_km_init() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_km_deinit() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_keyslot_create(_handle: *mut u32, _kind: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_keyslot_destroy(_handle: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_create(_handle: *mut u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_destroy(_handle: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_attach(_handle: u32, _destination: u32, _keyslot: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_detach(_handle: u32, _destination: u32, _keyslot: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_set_attr(_handle: u32, _attribute: *const c_void) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_klad_set_clear_key(_handle: u32, _key: *const c_void) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_hash_init() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_hash_deinit() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_hash_start(_handle: *mut u32, _attribute: *const c_void) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_hash_update(
+    _handle: u32,
+    _source: *const c_void,
+    _length: u32,
+) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_hash_finish(
+    _handle: u32,
+    _output: *mut u8,
+    _length: *mut u32,
+) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_symc_init() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_symc_deinit() -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_symc_destroy(_handle: u32) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_mac_start(_handle: *mut u32, _attribute: *const c_void) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_mac_update(
+    _handle: u32,
+    _source: *const c_void,
+    _length: u32,
+) -> u32 {
+    ERROR
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_mac_finish(
+    _handle: u32,
+    _output: *mut u8,
+    _length: *mut u32,
+) -> u32 {
+    ERROR
 }
 
 // Pairing crypto is outside B1. Returning failure keeps the boundary explicit;
@@ -658,10 +792,36 @@ mod tests {
     }
 
     #[test]
+    fn b1_crypto_table_entries_fail_closed() {
+        let mut handle = 0;
+        assert_eq!(uapi_drv_km_init(), ERROR);
+        assert_eq!(uapi_drv_keyslot_create(&mut handle, 0), ERROR);
+        assert_eq!(uapi_drv_klad_create(&mut handle), ERROR);
+        assert_eq!(uapi_drv_cipher_hash_init(), ERROR);
+        assert_eq!(
+            uapi_drv_cipher_hash_start(&mut handle, core::ptr::null()),
+            ERROR
+        );
+        assert_eq!(uapi_drv_cipher_symc_init(), ERROR);
+        assert_eq!(
+            uapi_drv_cipher_mac_start(&mut handle, core::ptr::null()),
+            ERROR
+        );
+    }
+
+    #[test]
     fn stopping_an_unallocated_software_timer_fails() {
         critical_section::with(|_| unsafe {
             (*SWTMR_CBS.0.get())[0] = LosSwtmrCb::EMPTY;
         });
         assert_eq!(LOS_SwtmrStop(0), ERROR);
+    }
+
+    #[test]
+    fn disabled_dfx_sample_transport_fails_closed() {
+        assert_eq!(
+            diag_cmd_report_sample_data(core::ptr::null_mut(), 0),
+            u32::MAX
+        );
     }
 }

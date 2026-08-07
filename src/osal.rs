@@ -135,6 +135,8 @@ fn radio_interrupt(irq: u32) -> Option<Interrupt> {
         44 => Interrupt::WLPHY_INT,
         45 => Interrupt::WLMAC_INT,
         46 => Interrupt::BLE_INT,
+        47 => Interrupt::GLE_INT,
+        68 => Interrupt::TIMING_GEN_INT,
         69 => Interrupt::MAC_MONITOR_INT,
         _ => return None,
     })
@@ -201,6 +203,8 @@ pub extern "C" fn osal_irq_enable(irq: u32) -> c_int {
         return OSAL_NOK;
     };
     IRQ_ENABLE_CALLS[irq as usize].fetch_add(1, Ordering::Relaxed);
+    #[cfg(feature = "ble-init-diag")]
+    log_irq_event(b"enable_begin", irq);
     unsafe { interrupt::enable(interrupt) };
     // SAFETY: `osal_irq_request` has already installed this line's vendor
     // handler before the SDK calls `osal_irq_enable`, and the controller line
@@ -242,11 +246,17 @@ pub extern "C" fn osal_irq_set_priority(irq: core::ffi::c_uint, priority: u16) -
     let Some(priority) = u8::try_from(priority).ok().and_then(Priority::from_level) else {
         return OSAL_NOK;
     };
+    #[cfg(feature = "ble-init-diag")]
+    log_irq_event(b"priority_begin", irq);
     interrupt::set_priority(interrupt, priority);
+    #[cfg(feature = "ble-init-diag")]
+    log_irq_event(b"priority_end", irq);
     OSAL_OK
 }
 
 fn dispatch_irq(irq: u32) {
+    #[cfg(feature = "ble-init-diag")]
+    log_irq_event(b"dispatch_begin", irq);
     let _ = hisi_rf_rtos_driver::interrupt_enter();
     let slot = critical_section::with(|cs| {
         let cell = IRQ_SLOTS[irq as usize].borrow(cs);
@@ -278,6 +288,40 @@ fn dispatch_irq(irq: u32) {
     // pending latch also needs clearing. Clearing here can erase an interrupt
     // that reasserted while the handler was processing the previous event.
     let _ = hisi_rf_rtos_driver::interrupt_exit();
+    #[cfg(feature = "ble-init-diag")]
+    log_irq_event(b"dispatch_end", irq);
+}
+
+/// Dispatch a WS63 interrupt through the RF-aware device table boundary.
+///
+/// RF power-up can leave a local pending latch asserted before the matching
+/// vendor handler is registered. Sending that source through the PAC's default
+/// handler would strand the hart. Radio lines therefore fail closed until
+/// `osal_irq_request` installs their owner. Both DIRECT and local-vectored trap
+/// paths use this hook; non-radio lines keep using the runtime's default
+/// device.x dispatcher.
+#[unsafe(no_mangle)]
+pub extern "C" fn __rt_irq_dispatch(irq: u32) {
+    if radio_interrupt(irq).is_some() {
+        let registered =
+            critical_section::with(|cs| IRQ_SLOTS[irq as usize].borrow(cs).get().handler.is_some());
+        if registered {
+            dispatch_irq(irq);
+        } else {
+            #[cfg(feature = "ble-init-diag")]
+            log_irq_event(b"unregistered", irq);
+            let _ = osal_irq_disable(irq);
+            let _ = osal_irq_clear(irq);
+        }
+        return;
+    }
+
+    unsafe extern "C" {
+        fn __hisi_rt_irq_dispatch_default(irq: u32);
+    }
+    // SAFETY: the runtime default bounds-checks `irq` before indexing the
+    // device.x table.
+    unsafe { __hisi_rt_irq_dispatch_default(irq) };
 }
 
 #[cfg(feature = "rf-queue-guard")]
@@ -451,6 +495,8 @@ radio_irq_entry!(COEX_WIFI_RESUME_INT, 42);
 radio_irq_entry!(WLPHY_INT, 44);
 radio_irq_entry!(WLMAC_INT, 45);
 radio_irq_entry!(BLE_INT, 46);
+radio_irq_entry!(GLE_INT, 47);
+radio_irq_entry!(TIMING_GEN_INT, 68);
 radio_irq_entry!(MAC_MONITOR_INT, 69);
 
 // ── Threads (backed by the application-selected runtime) ───────────────────
@@ -570,3 +616,28 @@ pub extern "C" fn osal_get_current_tid() -> c_int {
 
 // Wait objects (`osal_wait { void *wait; }`, condition-variable semantics) live
 // in [`crate::osal_wait`] — the C SDK signatures take the struct pointer.
+
+#[cfg(test)]
+mod tests {
+    use super::radio_interrupt;
+
+    #[test]
+    fn maps_ble_controller_timebase_interrupt() {
+        assert_eq!(
+            radio_interrupt(68).map(|interrupt| interrupt as u16),
+            Some(68)
+        );
+    }
+
+    #[test]
+    fn maps_ble_and_gle_baseband_interrupts() {
+        assert_eq!(
+            radio_interrupt(46).map(|interrupt| interrupt as u16),
+            Some(46)
+        );
+        assert_eq!(
+            radio_interrupt(47).map(|interrupt| interrupt as u16),
+            Some(47)
+        );
+    }
+}

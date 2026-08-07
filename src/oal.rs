@@ -11,22 +11,43 @@
 use core::ffi::c_void;
 
 // ── General OAL allocation (driver structures, not packet RAM) ───────────────
-// The C SDK `oal_mem_alloc(pool_id, len, lock)` / `oal_mem_free(ptr, lock)`
-// macros normally expand to `*_etc()` (file/line traced); the blob also
-// references the bare names (verified by nm). Both back onto the general heap.
+// The generic OSAL ABI uses the bare one-argument functions below. The Wi-Fi
+// driver's three-argument `oal_mem_alloc(pool_id, len, lock)` spelling is a C
+// macro that expands to the separately owned `oal_mem_alloc_etc(...)` symbol.
+// These ABIs must not be conflated: the Bluetooth archive calls the bare symbol
+// with only `a0` initialized.
 
-/// Allocate `len` bytes from the general heap (pool id / lock are advisory).
+/// Allocate `size` bytes from the general heap.
 #[unsafe(no_mangle)]
-pub extern "C" fn oal_mem_alloc(
-    _pool_id: core::ffi::c_int,
-    len: core::ffi::c_uint,
-    _lock: core::ffi::c_uchar,
-) -> *mut c_void {
-    crate::alloc::osal_kmalloc(len as usize)
+pub extern "C" fn oal_mem_alloc(size: core::ffi::c_uint) -> *mut c_void {
+    crate::alloc::osal_kmalloc(size as usize)
 }
 
 /// Free a block from [`oal_mem_alloc`].
 #[unsafe(no_mangle)]
-pub extern "C" fn oal_mem_free(ptr: *mut c_void, _lock: core::ffi::c_uchar) {
+pub extern "C" fn oal_mem_free(ptr: *mut c_void) -> core::ffi::c_uint {
     crate::alloc::osal_kfree(ptr);
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_oal_allocator_uses_the_single_argument_abi() {
+        const LIST_NODE_HEADER_BYTES: usize = 8;
+        const PAYLOAD_BYTES: usize = 8;
+        const ALLOCATION_BYTES: usize = LIST_NODE_HEADER_BYTES + PAYLOAD_BYTES;
+
+        let ptr = oal_mem_alloc(ALLOCATION_BYTES as u32).cast::<u8>();
+        assert!(!ptr.is_null());
+        // SAFETY: the OAL adapter returned a live allocation of this length.
+        assert!(
+            unsafe { core::slice::from_raw_parts(ptr, ALLOCATION_BYTES) }
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert_eq!(oal_mem_free(ptr.cast()), 0);
+    }
 }

@@ -13,6 +13,60 @@ use core::cell::RefCell;
 use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
 use critical_section::Mutex;
 use hisi_rf_rtos_driver::{Semaphore, WaitOutcome, WaitTimeout};
+#[cfg(feature = "ble-init")]
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
+
+#[cfg(feature = "ble-init")]
+static BLE_FIRST_QUEUE_READ: AtomicBool = AtomicBool::new(true);
+#[cfg(feature = "ble-init")]
+static BLE_QUEUE_CREATE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "ble-init")]
+fn emit_hex32(value: u32) {
+    let mut hex = [0_u8; 8];
+    for (index, byte) in hex.iter_mut().enumerate() {
+        let nibble = ((value >> ((7 - index) * 4)) & 0xf) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        };
+    }
+    crate::log_emit(&hex);
+}
+
+#[cfg(feature = "ble-init")]
+fn trace_queue_create(sequence: u32, queue_len: u16, max_msgsize: u16, result: c_int, id: usize) {
+    let metrics = crate::alloc::heap_metrics();
+    crate::log_emit(b"RFDBG_BLE_B1_QUEUE_CREATE seq=0x");
+    emit_hex32(sequence);
+    crate::log_emit(b" len=0x");
+    emit_hex32(u32::from(queue_len));
+    crate::log_emit(b" size=0x");
+    emit_hex32(u32::from(max_msgsize));
+    crate::log_emit(b" result=0x");
+    emit_hex32(result as u32);
+    crate::log_emit(b" id=0x");
+    emit_hex32(id as u32);
+    crate::log_emit(b" free=0x");
+    emit_hex32(metrics.free_bytes as u32);
+    crate::log_emit(b" largest=0x");
+    emit_hex32(crate::alloc::largest_allocatable(core::mem::align_of::<usize>()) as u32);
+    crate::log_emit(b" failures=0x");
+    emit_hex32(metrics.allocation_failures as u32);
+    crate::log_emit(b"\r\n");
+}
+
+#[cfg(feature = "ble-init-diag")]
+fn trace_queue_transfer(event: &[u8], queue_id: c_ulong, word: u32) {
+    crate::log_emit(b"RFDBG_BLE_B1_QUEUE_");
+    crate::log_emit(event);
+    crate::log_emit(b" id=0x");
+    emit_hex32(queue_id as u32);
+    crate::log_emit(b" word=0x");
+    emit_hex32(word);
+    crate::log_emit(b"\r\n");
+}
 
 // ── Message queue (bounded ring + counting semaphore) ───────────────────────
 
@@ -34,18 +88,28 @@ pub extern "C" fn osal_msg_queue_create(
     _flags: c_uint,
     max_msgsize: u16,
 ) -> c_int {
+    #[cfg(feature = "ble-init")]
+    let sequence = BLE_QUEUE_CREATE_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
     if queue_id.is_null() || queue_len == 0 || max_msgsize == 0 {
+        #[cfg(feature = "ble-init")]
+        trace_queue_create(sequence, queue_len, max_msgsize, OSAL_NOK, 0);
         return OSAL_NOK;
     }
     let cap = queue_len as usize;
     let isz = max_msgsize as usize;
     let ring = crate::alloc::osal_kmalloc(cap * isz) as *mut u8;
     if ring.is_null() {
+        #[cfg(feature = "ble-init")]
+        trace_queue_create(sequence, queue_len, max_msgsize, OSAL_NOK, 0);
         return OSAL_NOK;
     }
     let q = crate::alloc::osal_kmalloc(core::mem::size_of::<MsgQueue>()) as *mut MsgQueue;
     if q.is_null() {
         crate::alloc::osal_kfree(ring as *mut c_void);
+        #[cfg(feature = "ble-init")]
+        trace_queue_create(sequence, queue_len, max_msgsize, OSAL_NOK, 0);
         return OSAL_NOK;
     }
     // SAFETY: freshly allocated, correctly sized.
@@ -60,6 +124,8 @@ pub extern "C" fn osal_msg_queue_create(
         });
         *queue_id = q as c_ulong;
     }
+    #[cfg(feature = "ble-init")]
+    trace_queue_create(sequence, queue_len, max_msgsize, OSAL_OK, q as usize);
     OSAL_OK
 }
 
@@ -75,6 +141,15 @@ pub extern "C" fn osal_msg_queue_write_copy(
     if q.is_null() || buffer_addr.is_null() {
         return OSAL_NOK;
     }
+    #[cfg(feature = "ble-init-diag")]
+    let first_word = if buffer_size >= 4 {
+        // SAFETY: the caller promises `buffer_size` readable bytes.
+        unsafe { buffer_addr.cast::<u32>().read_unaligned() }
+    } else {
+        0
+    };
+    #[cfg(feature = "ble-init-diag")]
+    trace_queue_transfer(b"WRITE_BEGIN", queue_id, first_word);
     let ok = critical_section::with(|_cs| {
         // SAFETY: q is a live handle; exclusive under the critical section.
         let m = unsafe { &mut *q };
@@ -94,12 +169,17 @@ pub extern "C" fn osal_msg_queue_write_copy(
         true
     });
     if ok {
+        #[cfg(feature = "ble-init-diag")]
+        trace_queue_transfer(b"UP_BEGIN", queue_id, first_word);
         // SAFETY: q is a live handle.
-        if unsafe { (*q).items.up() }.is_ok() {
+        let result = if unsafe { (*q).items.up() }.is_ok() {
             OSAL_OK
         } else {
             OSAL_NOK
-        }
+        };
+        #[cfg(feature = "ble-init-diag")]
+        trace_queue_transfer(b"UP_END", queue_id, first_word);
+        result
     } else {
         OSAL_NOK
     }
@@ -118,12 +198,24 @@ pub extern "C" fn osal_msg_queue_read_copy(
     if q.is_null() || buffer_addr.is_null() {
         return OSAL_NOK;
     }
+    #[cfg(feature = "ble-init")]
+    let trace_first = BLE_FIRST_QUEUE_READ.swap(false, Ordering::Relaxed);
+    #[cfg(feature = "ble-init")]
+    if trace_first {
+        crate::log_emit(b"RFDBG_BLE_B1_QUEUE_WAIT_BEGIN\r\n");
+    }
     // SAFETY: q is a live handle. Block (up to `timeout`) for an item.
-    if !matches!(
-        unsafe { (*q).items.down_timeout(WaitTimeout::from_millis(timeout)) },
-        Ok(WaitOutcome::Acquired)
-    ) {
+    let wait = unsafe { (*q).items.down_timeout(WaitTimeout::from_millis(timeout)) };
+    if !matches!(wait, Ok(WaitOutcome::Acquired)) {
+        #[cfg(feature = "ble-init")]
+        if trace_first {
+            crate::log_emit(b"RFDBG_BLE_B1_QUEUE_WAIT_FAILED\r\n");
+        }
         return OSAL_NOK;
+    }
+    #[cfg(feature = "ble-init")]
+    if trace_first {
+        crate::log_emit(b"RFDBG_BLE_B1_QUEUE_WAIT_ACQUIRED\r\n");
     }
     critical_section::with(|_cs| {
         let m = unsafe { &mut *q };
@@ -148,6 +240,16 @@ pub extern "C" fn osal_msg_queue_read_copy(
         m.head = (m.head + 1) % m.cap;
         m.count -= 1;
     });
+    #[cfg(feature = "ble-init-diag")]
+    {
+        let copied_word = if buffer_size.is_null() || unsafe { *buffer_size } < 4 {
+            0
+        } else {
+            // SAFETY: the successful read copied at least four bytes above.
+            unsafe { buffer_addr.cast::<u32>().read_unaligned() }
+        };
+        trace_queue_transfer(b"READ_END", queue_id, copied_word);
+    }
     OSAL_OK
 }
 

@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vendor-init errors without exposing advertising, scanning, GATT, or pairing
   as public BLE APIs.
 
+### Fixed
+
+- Select the BLE profile's 512-byte minimum task stack at RTOS startup so its
+  four heterogeneous preallocated reservations are not rejected by the
+  Wi-Fi-oriented 24 KiB default floor.
+- Give the opt-in BLE task snapshot worker a dedicated 4 KiB stack. Its 17-entry
+  diagnostic array exceeded the former 2 KiB stack and underflowed into the
+  adjacent calibration state on real WS63 silicon.
+
 ### Changed
 
 - Update the BLE link dependency to `ws63-radio-sys 0.1.0-alpha.15`, whose

@@ -199,6 +199,8 @@ pub mod alloc;
 mod ble;
 #[cfg(feature = "ble-init")]
 mod ble_compat;
+#[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
+mod ble_init_diag;
 #[cfg(any(
     target_arch = "riscv32",
     feature = "wifi-personal",
@@ -656,8 +658,9 @@ mod ws63_runtime_compat;
 #[cfg(feature = "ble-init")]
 #[doc(hidden)]
 pub use ble::{
-    BLE_B1_ARENA_BYTES, BleB1ArenaStorage, BleB1ControlStorage, BleB1Controller, BleB1InitError,
-    BleB1Resources, BleB1Storage, InstalledBleB1Storage, init_ble_b1,
+    BLE_B1_ARENA_BYTES, BLE_B1_MINIMUM_TASK_STACK_BYTES, BleB1ArenaStorage, BleB1ControlStorage,
+    BleB1Controller, BleB1InitError, BleB1Resources, BleB1Storage, InstalledBleB1Storage,
+    init_ble_b1,
 };
 pub use pmp::prepare_vendor_memory;
 
@@ -1143,6 +1146,7 @@ pub fn force_link_contract() {
     keep!(uapi::uapi_nv_write as extern "C" fn(u16, *const u8, u16) -> u32);
     keep!(uapi::uapi_efuse_read_bit as extern "C" fn(*mut u8, u32, u8) -> u32);
     keep!(uapi::uapi_efuse_read_buffer as extern "C" fn(*mut u8, u32, u16) -> u32);
+    keep!(uapi::uapi_drv_cipher_trng_get_random as extern "C" fn(*mut u32) -> u32);
     keep!(uapi::uapi_drv_cipher_trng_get_random_bytes as extern "C" fn(*mut u8, u32) -> u32);
     keep!(uapi::get_dev_addr as extern "C" fn(*mut u8, u8, u8) -> u32);
     keep!(uapi::get_tcxo_freq as extern "C" fn() -> u32);

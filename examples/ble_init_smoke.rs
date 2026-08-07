@@ -3,7 +3,11 @@
 #![no_std]
 #![no_main]
 
+#[cfg(feature = "ble-init-diag")]
+use core::ffi::c_void;
 use core::num::NonZeroU32;
+#[cfg(feature = "ble-init-diag")]
+use core::num::NonZeroUsize;
 
 use hisi_hal::Peripherals;
 use hisi_hal::delay::Delay;
@@ -31,6 +35,7 @@ fn main() -> ! {
     );
     Watchdog::new(p.WDT).disable();
     uart.write(b"\r\nRFDBG_BLE_B1_BEGIN\r\n");
+    hisi_rf_ws63::set_log_sink(rf_log_uart0);
 
     let storage = BLE_STORAGE.install().expect("install BLE B1 storage");
     uart.write(b"RFDBG_BLE_B1_STORAGE_OK\r\n");
@@ -44,9 +49,15 @@ fn main() -> ! {
     let _software_interrupt = SoftwareInterrupt0::new(p.SYS_CTL1);
     let _runtime = hisi_rtos::start_with_port(
         hisi_rtos::PortedConfig {
+            // B1 uses the archive-derived heterogeneous stack plan. Keeping the
+            // runtime floor at the profile minimum prevents the Wi-Fi-oriented
+            // 24 KiB default from invalidating the smaller reservations.
+            minimum_stack_size: core::num::NonZeroUsize::new(
+                hisi_rf_ws63::BLE_B1_MINIMUM_TASK_STACK_BYTES,
+            )
+            .unwrap(),
             radio_task_policy: hisi_rtos::RunPolicy::Cooperative,
             max_scheduler_lock_duration: NonZeroU32::new(5_000).unwrap(),
-            ..hisi_rtos::PortedConfig::default()
         },
         hisi_rtos::Resources {
             allocate: rtos_allocate,
@@ -66,6 +77,9 @@ fn main() -> ! {
 
     unsafe { interrupt::enable_global() };
     hisi_rtos::request_reschedule();
+
+    #[cfg(feature = "ble-init-diag")]
+    start_task_diagnostics();
 
     let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.TRNG);
     match hisi_rf_ws63::init_ble_b1(resources, storage) {
@@ -116,6 +130,162 @@ fn rtos_contract_violation(_violation: hisi_rtos::ContractViolation) -> ! {
     panic!("hisi-rtos scheduler contract violation")
 }
 
+#[cfg(feature = "ble-init-diag")]
+#[unsafe(no_mangle)]
+extern "C" fn __ws63_ble_exception_diag(frame: *const u32) -> ! {
+    let (mcause, mepc, mtval): (u32, u32, u32);
+    // SAFETY: the runtime calls this handler in machine mode after preserving
+    // the interrupted context. Reading the trap CSRs does not modify it.
+    unsafe {
+        core::arch::asm!("csrr {value}, mcause", value = out(reg) mcause, options(nomem, nostack));
+        core::arch::asm!("csrr {value}, mepc", value = out(reg) mepc, options(nomem, nostack));
+        core::arch::asm!("csrr {value}, mtval", value = out(reg) mtval, options(nomem, nostack));
+    }
+    rf_log_uart0(b"RFDBG_BLE_B1_EXCEPTION cause=0x");
+    rf_log_uart0(&hex8(mcause));
+    rf_log_uart0(b" epc=0x");
+    rf_log_uart0(&hex8(mepc));
+    rf_log_uart0(b" tval=0x");
+    rf_log_uart0(&hex8(mtval));
+    if !frame.is_null() {
+        // startup.S stores ra/a0-a2 at words 35/31/29-30 of this frame.
+        let (ra, a0, a1, a2) = unsafe {
+            (
+                frame.add(35).read_volatile(),
+                frame.add(31).read_volatile(),
+                frame.add(30).read_volatile(),
+                frame.add(29).read_volatile(),
+            )
+        };
+        rf_log_uart0(b" ra=0x");
+        rf_log_uart0(&hex8(ra));
+        rf_log_uart0(b" a0=0x");
+        rf_log_uart0(&hex8(a0));
+        rf_log_uart0(b" a1=0x");
+        rf_log_uart0(&hex8(a1));
+        rf_log_uart0(b" a2=0x");
+        rf_log_uart0(&hex8(a2));
+    }
+    rf_log_uart0(b"\r\n");
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(feature = "ble-init-diag")]
+fn start_task_diagnostics() {
+    // `TaskDiagnostic` is intentionally rich (128 bytes on RV32), and the
+    // 17-slot snapshot makes this task's optimized frame larger than 2 KiB.
+    // Keep the diagnostic stack separate from the archive-derived vendor task
+    // minima so enabling diagnostics cannot underflow into radio BSS.
+    const DIAGNOSTIC_STACK_BYTES: usize = 4 * 1024;
+    let config = hisi_rf_rtos_driver::TaskConfig {
+        stack_size: NonZeroUsize::new(DIAGNOSTIC_STACK_BYTES).unwrap(),
+        priority: hisi_rf_rtos_driver::TaskPriority::new(30).unwrap(),
+    };
+    match hisi_rf_rtos_driver::spawn(ble_task_diagnostics, core::ptr::null_mut(), config) {
+        Ok(_) => rf_log_uart0(b"RFDBG_BLE_B1_DIAG_TASK_OK\r\n"),
+        Err(_) => rf_log_uart0(b"RFDBG_BLE_B1_DIAG_TASK_ERR\r\n"),
+    }
+}
+
+#[cfg(feature = "ble-init-diag")]
+extern "C" fn ble_task_diagnostics(_argument: *mut c_void) -> *mut c_void {
+    loop {
+        let _ = hisi_rf_rtos_driver::sleep_ms(NonZeroU32::new(2_000).unwrap());
+        write_task_diagnostics();
+    }
+}
+
+#[cfg(feature = "ble-init-diag")]
+fn write_task_diagnostics() {
+    for irq in [46_u32, 47, 68] {
+        let lifecycle = hisi_rf_ws63::osal::irq_lifecycle_diagnostics(irq);
+        rf_log_uart0(b"RFDBG_BLE_B1_IRQ irq=0x");
+        rf_log_uart0(&hex8(irq));
+        rf_log_uart0(b" enable=0x");
+        rf_log_uart0(&hex8(lifecycle[0]));
+        rf_log_uart0(b" clear=0x");
+        rf_log_uart0(&hex8(lifecycle[2]));
+        rf_log_uart0(b" dispatch=0x");
+        rf_log_uart0(&hex8(lifecycle[3]));
+        rf_log_uart0(b" enabled=0x");
+        rf_log_uart0(&hex8(lifecycle[4]));
+        rf_log_uart0(b" pending=0x");
+        rf_log_uart0(&hex8(lifecycle[5]));
+        rf_log_uart0(b"\r\n");
+    }
+
+    let scheduler = hisi_rtos::diagnostics();
+    rf_log_uart0(b"RFDBG_BLE_B1_SCHED current=0x");
+    rf_log_uart0(&hex8(scheduler.current_task as u32));
+    rf_log_uart0(b" ready=0x");
+    rf_log_uart0(&hex8(u32::from(scheduler.ready_tasks)));
+    rf_log_uart0(b" blocked=0x");
+    rf_log_uart0(&hex8(u32::from(scheduler.blocked_tasks)));
+    rf_log_uart0(b" sleeping=0x");
+    rf_log_uart0(&hex8(u32::from(scheduler.sleeping_tasks)));
+    rf_log_uart0(b" pending=0x");
+    rf_log_uart0(&hex8(
+        scheduler
+            .switch_intents_committed
+            .saturating_sub(scheduler.switch_intents_completed),
+    ));
+    rf_log_uart0(b"\r\n");
+
+    let mut tasks = [hisi_rtos::TaskDiagnostic::default(); 17];
+    let count = hisi_rtos::task_diagnostics(&mut tasks);
+    for task in &tasks[..count] {
+        if task.state == hisi_rtos::TaskState::Free {
+            continue;
+        }
+        rf_log_uart0(b"RFDBG_BLE_B1_TASK id=0x");
+        rf_log_uart0(&hex8(task.task as u32));
+        rf_log_uart0(b" state=");
+        rf_log_uart0(task_state_name(task.state));
+        rf_log_uart0(b" entry=0x");
+        rf_log_uart0(&hex8(task.entry as u32));
+        rf_log_uart0(b" prio=0x");
+        rf_log_uart0(&hex8(u32::from(task.priority)));
+        rf_log_uart0(b" sem=0x");
+        rf_log_uart0(&hex8(task.waiting_sem as u32));
+        rf_log_uart0(b" mutex=0x");
+        rf_log_uart0(&hex8(task.waiting_mutex as u32));
+        rf_log_uart0(b" wake=0x");
+        rf_log_uart0(&hex8(task.wake_at as u32));
+        rf_log_uart0(b" dispatch=0x");
+        rf_log_uart0(&hex8(task.dispatches));
+        rf_log_uart0(b"\r\n");
+    }
+}
+
+#[cfg(feature = "ble-init-diag")]
+fn task_state_name(state: hisi_rtos::TaskState) -> &'static [u8] {
+    match state {
+        hisi_rtos::TaskState::Free => b"free",
+        hisi_rtos::TaskState::Ready => b"ready",
+        hisi_rtos::TaskState::Running => b"running",
+        hisi_rtos::TaskState::Blocked => b"blocked",
+        hisi_rtos::TaskState::Sleeping => b"sleeping",
+        hisi_rtos::TaskState::Throttled => b"throttled",
+    }
+}
+
+fn rf_log_uart0(bytes: &[u8]) {
+    const DATA: *mut u32 = 0x4401_0004 as *mut u32;
+    const FIFO_STATUS: *const u32 = 0x4401_0044 as *const u32;
+    for &byte in bytes {
+        // SAFETY: UART0 was configured above and remains exclusively owned by
+        // this diagnostic firmware. The register layout matches the HAL/PAC.
+        unsafe {
+            while core::ptr::read_volatile(FIFO_STATUS) & 0x01 != 0 {
+                core::hint::spin_loop();
+            }
+            core::ptr::write_volatile(DATA, u32::from(byte));
+        }
+    }
+}
+
 fn error_code(error: hisi_rf_ws63::BleB1InitError) -> u32 {
     use hisi_rf_ws63::BleB1InitError;
     match error {
@@ -127,6 +297,7 @@ fn error_code(error: hisi_rf_ws63::BleB1InitError) -> u32 {
         BleB1InitError::SchedulerLock => 6,
         BleB1InitError::TaskSpawn { index } => 0x100 + index as u32,
         BleB1InitError::SchedulerUnlock => 7,
+        BleB1InitError::TaskHandoff => 10,
         BleB1InitError::Crypto => 8,
         BleB1InitError::Enable(status) => status,
         BleB1InitError::UnsupportedTarget => 9,

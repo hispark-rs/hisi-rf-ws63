@@ -303,6 +303,15 @@ pub extern "C" fn uapi_efuse_read_buffer(buffer: *mut u8, byte: u32, length: u16
     crate::OSAL_OK as u32
 }
 
+/// Fill one 32-bit word through the uniquely owned WS63 hardware TRNG.
+#[unsafe(no_mangle)]
+pub extern "C" fn uapi_drv_cipher_trng_get_random(randnum: *mut u32) -> u32 {
+    if randnum.is_null() {
+        return crate::OSAL_NOK as u32;
+    }
+    uapi_drv_cipher_trng_get_random_bytes(randnum.cast(), core::mem::size_of::<u32>() as u32)
+}
+
 /// Fill random bytes through the uniquely owned WS63 hardware TRNG.
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_trng_get_random_bytes(randnum: *mut u8, size: u32) -> u32 {

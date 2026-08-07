@@ -100,6 +100,9 @@ ble-init = [
     "hisi-crypto-ws63/pbkdf2",
     "hisi-crypto-ws63/hal-trng",
 ]
+# Maintainer-only stage markers around the synchronous vendor BLE enable path.
+# This never changes the default B1 link or exposes a user-facing BLE API.
+ble-init-diag = ["ble-init"]
 smoltcp = ["net"]
 wpa2-personal = ["wifi", "upstream-supplicant-port"]
 wpa3-personal = ["wifi", "upstream-supplicant-wpa3"]
@@ -234,7 +237,7 @@ incremental-late-completion-profile = ["incremental-cancel-profile"]
 
 [build-dependencies]
 ar_archive_writer = "0.5.2"
-object = { version = "0.37", default-features = false, features = ["archive", "read_core", "elf"] }
+object = { version = "0.37", default-features = false, features = ["archive", "read_core", "write", "elf"] }
 
 # For the internal firmware examples only (runtime entry + linker scripts).
 # Keep this off host unit-test builds: riscv-rt's startup assembly is not valid
@@ -249,7 +252,7 @@ hisi-riscv-rt = { version = "0.5.7", default-features = false, features = [
     "ws63-radio-main-stack-32k",
 ] }
 hisi-panic-handler = { version = "0.1.0", default-features = false, features = ["panic-uart0"] }
-hisi-rtos = { version = "=0.1.0-alpha.19", features = ["chip-ws63", "embassy"] }
+hisi-rtos = { version = "=0.1.0-alpha.24", features = ["chip-ws63", "embassy"] }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }

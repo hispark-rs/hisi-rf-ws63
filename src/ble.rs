@@ -19,6 +19,8 @@ use static_cell::StaticCell;
 
 /// Caller-owned heap shared by the BLE host, controller, and RTOS objects.
 pub const BLE_B1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
+/// Smallest stack in the pinned heterogeneous BLE B1 task profile.
+pub const BLE_B1_MINIMUM_TASK_STACK_BYTES: usize = 512;
 
 #[cfg(any(target_arch = "riscv32", test))]
 const TASK_COUNT: usize = 4;
@@ -215,6 +217,8 @@ pub enum BleB1InitError {
     TaskSpawn { index: usize },
     /// Scheduler unlocking failed.
     SchedulerUnlock,
+    /// The cooperative runtime could not hand off to the newly ready BLE tasks.
+    TaskHandoff,
     /// The WS63 hardware entropy service could not be installed.
     Crypto,
     /// `enable_ble` returned a vendor error.
@@ -234,25 +238,33 @@ unsafe extern "C" {
 
 #[cfg(target_arch = "riscv32")]
 extern "C" fn bt_task(argument: *mut c_void) -> *mut c_void {
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_ENTER name=bt\r\n");
     unsafe { bt_thread_handle(argument) };
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_RETURN name=bt\r\n");
     core::ptr::null_mut()
 }
 
 #[cfg(target_arch = "riscv32")]
 extern "C" fn bt_sdk_task(_: *mut c_void) -> *mut c_void {
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_ENTER name=bt_sdk\r\n");
     unsafe { bt_acore_task_main() };
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_RETURN name=bt_sdk\r\n");
     core::ptr::null_mut()
 }
 
 #[cfg(target_arch = "riscv32")]
 extern "C" fn bth_sdk_task(_: *mut c_void) -> *mut c_void {
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_ENTER name=bth_sdk\r\n");
     unsafe { sdk_msg_thread() };
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_RETURN name=bth_sdk\r\n");
     core::ptr::null_mut()
 }
 
 #[cfg(target_arch = "riscv32")]
 extern "C" fn bt_service_task(argument: *mut c_void) -> *mut c_void {
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_ENTER name=bt_service\r\n");
     unsafe { btsrv_task_body(argument.cast_const()) };
+    crate::log_emit(b"RFDBG_BLE_B1_TASK_RETURN name=bt_service\r\n");
     core::ptr::null_mut()
 }
 
@@ -303,11 +315,15 @@ pub fn init_ble_b1(
     storage: InstalledBleB1Storage,
 ) -> Result<BleB1Controller, BleB1InitError> {
     crate::ensure_ble_init_link_contract();
+    crate::log_emit(b"RFDBG_BLE_B1_LINK_CONTRACT_OK\r\n");
     // SAFETY: B1 initialization runs once before any vendor task executes and
     // owns the fixed linker regions described by the selected BLE profile.
     unsafe { crate::prepare_vendor_memory() };
+    crate::log_emit(b"RFDBG_BLE_B1_VENDOR_MEMORY_OK\r\n");
     let _ = crate::uapi::initialize_rom_timebases();
+    crate::log_emit(b"RFDBG_BLE_B1_TIMEBASE_OK\r\n");
     crate::uapi::enable_efuse_reads();
+    crate::log_emit(b"RFDBG_BLE_B1_EFUSE_OK\r\n");
     crate::crypto::install_hardware_crypto(
         resources.km,
         resources.spacc,
@@ -316,6 +332,7 @@ pub fn init_ble_b1(
         storage.crypto,
     )
     .map_err(|_| BleB1InitError::Crypto)?;
+    crate::log_emit(b"RFDBG_BLE_B1_CRYPTO_OK\r\n");
 
     let groups: [_; TASK_COUNT] = [
         task_group(OWNER_BT, STACK_BT)?,
@@ -327,6 +344,7 @@ pub fn init_ble_b1(
         hisi_rf_rtos_driver::TaskResourcePlan::new(&groups).ok_or(BleB1InitError::TaskPlan)?;
     let mut reservations = hisi_rf_rtos_driver::reserve_task_resource_plan(plan)
         .map_err(|_| BleB1InitError::TaskAdmission)?;
+    crate::log_emit(b"RFDBG_BLE_B1_ADMISSION_OK\r\n");
 
     hisi_rf_rtos_driver::lock_scheduler().map_err(|_| BleB1InitError::SchedulerLock)?;
     let spawn_result = (|| {
@@ -353,10 +371,20 @@ pub fn init_ble_b1(
             PRIORITY_BT_SERVICE,
         )
     })();
+    crate::log_emit(b"RFDBG_BLE_B1_SPAWN_BATCH_DONE\r\n");
     let unlock_result = hisi_rf_rtos_driver::unlock_scheduler();
     spawn_result?;
     unlock_result.map_err(|_| BleB1InitError::SchedulerUnlock)?;
+    crate::log_emit(b"RFDBG_BLE_B1_SCHEDULER_UNLOCKED\r\n");
 
+    // LiteOS starts the application and BLE tasks as one initial scheduler
+    // population, so the highest-priority BLE task runs before app_main. This
+    // port adopts main first and adds the BLE tasks later; make that initial
+    // handoff explicit while preserving Cooperative semantics for every task.
+    hisi_rf_rtos_driver::yield_now().map_err(|_| BleB1InitError::TaskHandoff)?;
+    crate::log_emit(b"RFDBG_BLE_B1_TASKS_PRIMED\r\n");
+
+    crate::log_emit(b"RFDBG_BLE_B1_ENABLE_BEGIN\r\n");
     let status = unsafe { enable_ble() };
     if status != 0 {
         return Err(BleB1InitError::Enable(status));
@@ -386,6 +414,7 @@ mod tests {
             STACK_BT + STACK_BT_SDK + STACK_BTH_SDK + STACK_BT_SERVICE,
             10_240
         );
+        assert_eq!(STACK_BTH_SDK, BLE_B1_MINIMUM_TASK_STACK_BYTES);
         assert_eq!(
             [
                 PRIORITY_BT,
