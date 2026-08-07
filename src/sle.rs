@@ -97,6 +97,11 @@ pub enum SleS1Event {
         address: Address,
         status: u32,
     },
+    AuthenticationComplete {
+        connection_id: u16,
+        address: Address,
+        status: u32,
+    },
     SsapServiceStarted {
         server_id: u8,
         service_handle: u16,
@@ -905,6 +910,23 @@ unsafe extern "C" fn pair_complete(connection_id: u16, address: *const Address, 
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn authentication_complete(
+    connection_id: u16,
+    address: *const Address,
+    status: u32,
+    _event: *const c_void,
+) {
+    let Some(address) = (unsafe { address.as_ref() }).copied() else {
+        return;
+    };
+    push_event(SleS1Event::AuthenticationComplete {
+        connection_id,
+        address,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 unsafe extern "C" fn ssap_service_started(server_id: u8, service_handle: u16, status: u32) {
     push_event(SleS1Event::SsapServiceStarted {
         server_id,
@@ -1075,7 +1097,7 @@ static mut CONNECTION_CALLBACKS: ConnectionCallbacks = ConnectionCallbacks {
     connection_state_changed: Some(connection_state_changed),
     connection_parameter_update_request: None,
     connection_parameter_update: None,
-    authentication_complete: None,
+    authentication_complete: Some(authentication_complete),
     pair_complete: Some(pair_complete),
     read_rssi: None,
     low_latency: None,

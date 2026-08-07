@@ -88,6 +88,13 @@ pub fn log(bytes: &[u8]) {
     }
 }
 
+#[allow(dead_code)]
+pub fn log_status(prefix: &[u8], status: u32) {
+    log(prefix);
+    log(&hex8(status));
+    log(b"\r\n");
+}
+
 pub fn stop() -> ! {
     loop {
         core::hint::spin_loop();

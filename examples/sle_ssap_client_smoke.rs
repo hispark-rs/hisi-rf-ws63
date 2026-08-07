@@ -74,6 +74,18 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                         fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
                     }
                 }
+                hisi_rf_ws63::SleS1Event::AuthenticationComplete {
+                    address, status, ..
+                } if address == SERVER_ADDRESS && status != 0 => {
+                    sle_firmware::log_status(b"RFDBG_SLE_S3_CLIENT_AUTH_ERR status=0x", status);
+                    sle_firmware::stop();
+                }
+                hisi_rf_ws63::SleS1Event::PairComplete {
+                    address, status, ..
+                } if address == SERVER_ADDRESS => {
+                    sle_firmware::log_status(b"RFDBG_SLE_S3_CLIENT_PAIR_CFM_ERR status=0x", status);
+                    sle_firmware::stop();
+                }
                 hisi_rf_ws63::SleS1Event::SsapExchangeComplete {
                     connection_id,
                     status: 0,
