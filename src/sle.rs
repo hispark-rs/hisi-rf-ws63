@@ -16,7 +16,8 @@ use static_cell::StaticCell;
 use ws63_radio_sys::sle::Address;
 #[cfg(target_arch = "riscv32")]
 use ws63_radio_sys::sle::{
-    AnnounceData, AnnounceParameters, AnnounceSeekCallbacks, SeekParameters, SeekResult,
+    AnnounceData, AnnounceParameters, AnnounceSeekCallbacks, ConnectionCallbacks,
+    DefaultConnectionParameters, SeekParameters, SeekResult,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -76,6 +77,13 @@ pub enum SleS1Event {
         data_len: u8,
         truncated: bool,
         data: [u8; SLE_S1_EVENT_DATA_CAPACITY],
+    },
+    ConnectionStateChanged {
+        connection_id: u16,
+        address: Address,
+        connection_state: u32,
+        pair_state: u32,
+        disconnect_reason: u32,
     },
 }
 
@@ -296,6 +304,35 @@ impl SleS1Controller {
     }
 
     #[cfg(target_arch = "riscv32")]
+    pub fn set_local_address(&mut self, mut address: Address) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_set_local_addr(&raw mut address) };
+        if status != 0 {
+            return Err(SleS1OperationError::SetLocalAddress(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn configure_default_connection(&mut self) -> Result<(), SleS1OperationError> {
+        let mut parameters = DefaultConnectionParameters {
+            enable_filter_policy: 0,
+            initiate_phys: 1,
+            gt_negotiate: 1,
+            scan_interval: 400,
+            scan_window: 20,
+            min_interval: 0x14,
+            max_interval: 0x14,
+            timeout: 0x1f4,
+        };
+        let status =
+            unsafe { ws63_radio_sys::sle::sle_default_connection_param_set(&raw mut parameters) };
+        if status != 0 {
+            return Err(SleS1OperationError::SetConnectionParameters(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
     pub fn start_announce(
         &mut self,
         announce_data: &'static mut [u8],
@@ -375,6 +412,33 @@ impl SleS1Controller {
         }
         Ok(())
     }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn stop_seek(&mut self) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_stop_seek() };
+        if status != 0 {
+            return Err(SleS1OperationError::StopSeek(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn connect(&mut self, address: &Address) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_connect_remote_device(address) };
+        if status != 0 {
+            return Err(SleS1OperationError::Connect(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn disconnect(&mut self, address: &Address) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_disconnect_remote_device(address) };
+        if status != 0 {
+            return Err(SleS1OperationError::Disconnect(status));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -386,6 +450,11 @@ pub enum SleS1OperationError {
     StartAnnounce(u32),
     SetSeekParameters(u32),
     StartSeek(u32),
+    StopSeek(u32),
+    SetLocalAddress(u32),
+    SetConnectionParameters(u32),
+    Connect(u32),
+    Disconnect(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -402,6 +471,7 @@ pub enum SleS1InitError {
     Crypto,
     EventSinkAlreadyInstalled,
     RegisterCallbacks(u32),
+    RegisterConnectionCallbacks(u32),
     Enable(u32),
     UnsupportedTarget,
 }
@@ -481,6 +551,27 @@ unsafe extern "C" fn seek_result(result: *mut SeekResult) {
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn connection_state_changed(
+    connection_id: u16,
+    address: *const Address,
+    connection_state: u32,
+    pair_state: u32,
+    disconnect_reason: u32,
+) {
+    let address = unsafe { address.as_ref() }.copied().unwrap_or(Address {
+        address_type: 0,
+        bytes: [0; 6],
+    });
+    push_event(SleS1Event::ConnectionStateChanged {
+        connection_id,
+        address,
+        connection_state,
+        pair_state,
+        disconnect_reason,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -492,6 +583,19 @@ static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     seek_disable: Some(seek_disabled),
     seek_result: Some(seek_result),
     dfr: None,
+};
+
+#[cfg(target_arch = "riscv32")]
+static mut CONNECTION_CALLBACKS: ConnectionCallbacks = ConnectionCallbacks {
+    connection_state_changed: Some(connection_state_changed),
+    connection_parameter_update_request: None,
+    connection_parameter_update: None,
+    authentication_complete: None,
+    pair_complete: None,
+    read_rssi: None,
+    low_latency: None,
+    set_phy: None,
+    pair_remove: None,
 };
 
 #[cfg(target_arch = "riscv32")]
@@ -587,6 +691,12 @@ pub fn init_sle_s1(
         unsafe { ws63_radio_sys::sle::sle_announce_seek_register_callbacks(&raw mut CALLBACKS) };
     if status != 0 {
         return Err(SleS1InitError::RegisterCallbacks(status));
+    }
+    let status = unsafe {
+        ws63_radio_sys::sle::sle_connection_register_callbacks(&raw mut CONNECTION_CALLBACKS)
+    };
+    if status != 0 {
+        return Err(SleS1InitError::RegisterConnectionCallbacks(status));
     }
 
     let groups = [

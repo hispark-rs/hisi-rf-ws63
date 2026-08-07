@@ -200,7 +200,7 @@ pub fn ensure_ble_init_link_contract() {
     link_contract::ensure();
 }
 
-/// Force the internal SLE S1 archive and ROM contract into a firmware link.
+/// Force the internal SLE S1/S2 archive and ROM contract into a firmware link.
 #[cfg(all(target_arch = "riscv32", feature = "sle-init"))]
 #[doc(hidden)]
 pub fn ensure_sle_init_link_contract() {

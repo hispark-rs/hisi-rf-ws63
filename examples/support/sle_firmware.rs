@@ -141,7 +141,9 @@ fn error_code(error: hisi_rf_ws63::SleS1InitError) -> u32 {
         SleS1InitError::UnsupportedTarget => 9,
         SleS1InitError::TaskHandoff => 10,
         SleS1InitError::EventSinkAlreadyInstalled => 11,
-        SleS1InitError::RegisterCallbacks(status) | SleS1InitError::Enable(status) => status,
+        SleS1InitError::RegisterCallbacks(status)
+        | SleS1InitError::RegisterConnectionCallbacks(status)
+        | SleS1InitError::Enable(status) => status,
     }
 }
 
