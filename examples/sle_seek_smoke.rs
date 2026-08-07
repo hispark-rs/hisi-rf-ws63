@@ -28,13 +28,13 @@ fn run_seek(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                 hisi_rf_ws63::SleS1Event::SeekEnabled { status: 0 } => {
                     sle_firmware::log(b"RFDBG_SLE_S1_SEEK_READY\r\n");
                 }
-                hisi_rf_ws63::SleS1Event::SeekResult { data_len, data, .. }
-                    if usize::from(data_len) >= 7
-                        && data[..usize::from(data_len)]
-                            .windows(7)
-                            .any(|window| window == b"HISISLE") =>
+                hisi_rf_ws63::SleS1Event::SeekResult { address, .. }
+                    if address.bytes == [0x11, 0x22, 0x33, 0x44, 0x55, 0x66] =>
                 {
                     sle_firmware::log(b"RFDBG_SLE_S1_SEEK_MATCH\r\n");
+                }
+                hisi_rf_ws63::SleS1Event::SeekResult { .. } => {
+                    sle_firmware::log(b"RFDBG_SLE_S1_SEEK_RESULT\r\n");
                 }
                 _ => {}
             }
