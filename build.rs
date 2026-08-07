@@ -309,6 +309,8 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         "memcpy" => "__ws63_rom_memcpy",
         "memmove" => "__ws63_rom_memmove",
         "memset" => "__ws63_rom_memset",
+        "mem_news" => "osal_kmalloc",
+        "mem_frees" => "osal_kfree",
         "strlen" => "__ws63_rom_strlen",
         name if matches!(
             name,
