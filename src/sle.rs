@@ -19,6 +19,10 @@ use ws63_radio_sys::sle::{
     AnnounceData, AnnounceParameters, AnnounceSeekCallbacks, ConnectionCallbacks,
     DefaultConnectionParameters, SeekParameters, SeekResult,
 };
+#[cfg(target_arch = "riscv32")]
+use ws63_radio_sys::ssap::{
+    ClientCallbacks, ClientHandleValue, NotifyIndicate, ServerCallbacks, ServerPropertyInfo, Uuid,
+};
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
 pub const SLE_S1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
@@ -84,6 +88,21 @@ pub enum SleS1Event {
         connection_state: u32,
         pair_state: u32,
         disconnect_reason: u32,
+    },
+    SsapServiceStarted {
+        server_id: u8,
+        service_handle: u16,
+        status: u32,
+    },
+    SsapNotification {
+        client_id: u8,
+        connection_id: u16,
+        handle: u16,
+        property_type: u8,
+        status: u32,
+        data_len: u8,
+        truncated: bool,
+        data: [u8; SLE_S1_EVENT_DATA_CAPACITY],
     },
 }
 
@@ -294,6 +313,13 @@ pub struct SleS1Controller {
     events: &'static EventQueue,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SsapServerHandles {
+    pub server_id: u8,
+    pub service_handle: u16,
+    pub property_handle: u16,
+}
+
 impl SleS1Controller {
     pub fn next_event(&mut self) -> Option<SleS1Event> {
         self.events.pop()
@@ -439,6 +465,109 @@ impl SleS1Controller {
         }
         Ok(())
     }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn configure_ssap_server(
+        &mut self,
+        property_value: &'static mut [u8],
+    ) -> Result<SsapServerHandles, SleS1OperationError> {
+        let mut server_id = 0;
+        let mut app_uuid = short_uuid(0);
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssaps_register_server(&raw mut app_uuid, &raw mut server_id)
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::RegisterSsapServer(status));
+        }
+        let mut service_handle = 0;
+        let mut service_uuid = short_uuid(0x060b);
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssaps_add_service_sync(
+                server_id,
+                &raw mut service_uuid,
+                true,
+                &raw mut service_handle,
+            )
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::AddSsapService(status));
+        }
+        let value_len =
+            property_value
+                .len()
+                .try_into()
+                .map_err(|_| SleS1OperationError::SsapValueTooLong {
+                    length: property_value.len(),
+                })?;
+        let mut property = ServerPropertyInfo {
+            uuid: short_uuid(0x1122),
+            permissions: ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
+            operate_indication: ws63_radio_sys::ssap::OPERATE_READ_NOTIFY,
+            value_len,
+            value: property_value.as_mut_ptr(),
+        };
+        let mut property_handle = 0;
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssaps_add_property_sync(
+                server_id,
+                service_handle,
+                &raw mut property,
+                &raw mut property_handle,
+            )
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::AddSsapProperty(status));
+        }
+        let status =
+            unsafe { ws63_radio_sys::ssap::ssaps_start_service(server_id, service_handle) };
+        if status != 0 {
+            return Err(SleS1OperationError::StartSsapService(status));
+        }
+        Ok(SsapServerHandles {
+            server_id,
+            service_handle,
+            property_handle,
+        })
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn notify_ssap(
+        &mut self,
+        handles: SsapServerHandles,
+        connection_id: u16,
+        data: &'static mut [u8],
+    ) -> Result<(), SleS1OperationError> {
+        let value_len = data
+            .len()
+            .try_into()
+            .map_err(|_| SleS1OperationError::SsapValueTooLong { length: data.len() })?;
+        let mut parameters = NotifyIndicate {
+            handle: handles.property_handle,
+            property_type: ws63_radio_sys::ssap::PROPERTY_TYPE_VALUE,
+            value_len,
+            value: data.as_mut_ptr(),
+        };
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssaps_notify_indicate(
+                handles.server_id,
+                connection_id,
+                &raw mut parameters,
+            )
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::NotifySsap(status));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+fn short_uuid(value: u16) -> Uuid {
+    let mut bytes = [
+        0x37, 0xbe, 0xa8, 0x80, 0xfc, 0x70, 0x11, 0xea, 0xb7, 0x20, 0, 0, 0, 0, 0, 0,
+    ];
+    bytes[14..].copy_from_slice(&value.to_le_bytes());
+    Uuid { len: 2, bytes }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -455,6 +584,12 @@ pub enum SleS1OperationError {
     SetConnectionParameters(u32),
     Connect(u32),
     Disconnect(u32),
+    SsapValueTooLong { length: usize },
+    RegisterSsapServer(u32),
+    AddSsapService(u32),
+    AddSsapProperty(u32),
+    StartSsapService(u32),
+    NotifySsap(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -472,6 +607,8 @@ pub enum SleS1InitError {
     EventSinkAlreadyInstalled,
     RegisterCallbacks(u32),
     RegisterConnectionCallbacks(u32),
+    RegisterSsapServerCallbacks(u32),
+    RegisterSsapClientCallbacks(u32),
     Enable(u32),
     UnsupportedTarget,
 }
@@ -572,6 +709,43 @@ unsafe extern "C" fn connection_state_changed(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_service_started(server_id: u8, service_handle: u16, status: u32) {
+    push_event(SleS1Event::SsapServiceStarted {
+        server_id,
+        service_handle,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_notification(
+    client_id: u8,
+    connection_id: u16,
+    value: *mut ClientHandleValue,
+    status: u32,
+) {
+    let Some(value) = (unsafe { value.as_ref() }) else {
+        return;
+    };
+    let source_len = usize::from(value.data_len);
+    let copy_len = source_len.min(SLE_S1_EVENT_DATA_CAPACITY);
+    let mut data = [0; SLE_S1_EVENT_DATA_CAPACITY];
+    if copy_len != 0 && !value.data.is_null() {
+        unsafe { core::ptr::copy_nonoverlapping(value.data, data.as_mut_ptr(), copy_len) };
+    }
+    push_event(SleS1Event::SsapNotification {
+        client_id,
+        connection_id,
+        handle: value.handle,
+        property_type: value.property_type,
+        status,
+        data_len: copy_len as u8,
+        truncated: copy_len != source_len,
+        data,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -596,6 +770,33 @@ static mut CONNECTION_CALLBACKS: ConnectionCallbacks = ConnectionCallbacks {
     low_latency: None,
     set_phy: None,
     pair_remove: None,
+};
+
+#[cfg(target_arch = "riscv32")]
+static mut SSAP_SERVER_CALLBACKS: ServerCallbacks = ServerCallbacks {
+    add_service: None,
+    add_property: None,
+    add_descriptor: None,
+    start_service: Some(ssap_service_started),
+    delete_all_services: None,
+    read_request: None,
+    read_by_uuid_request: None,
+    write_request: None,
+    mtu_changed: None,
+    indicate_confirmed: None,
+};
+
+#[cfg(target_arch = "riscv32")]
+static mut SSAP_CLIENT_CALLBACKS: ClientCallbacks = ClientCallbacks {
+    find_structure: None,
+    find_property: None,
+    find_structure_complete: None,
+    read_confirmed: None,
+    read_by_uuid_complete: None,
+    write_confirmed: None,
+    exchange_info: None,
+    notification: Some(ssap_notification),
+    indication: None,
 };
 
 #[cfg(target_arch = "riscv32")]
@@ -697,6 +898,16 @@ pub fn init_sle_s1(
     };
     if status != 0 {
         return Err(SleS1InitError::RegisterConnectionCallbacks(status));
+    }
+    let status =
+        unsafe { ws63_radio_sys::ssap::ssaps_register_callbacks(&raw mut SSAP_SERVER_CALLBACKS) };
+    if status != 0 {
+        return Err(SleS1InitError::RegisterSsapServerCallbacks(status));
+    }
+    let status =
+        unsafe { ws63_radio_sys::ssap::ssapc_register_callbacks(&raw mut SSAP_CLIENT_CALLBACKS) };
+    if status != 0 {
+        return Err(SleS1InitError::RegisterSsapClientCallbacks(status));
     }
 
     let groups = [

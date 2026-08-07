@@ -696,7 +696,8 @@ pub use pmp::prepare_vendor_memory;
 pub use sle::{
     InstalledSleS1Storage, SLE_S1_ARENA_BYTES, SLE_S1_EVENT_DATA_CAPACITY,
     SLE_S1_MINIMUM_TASK_STACK_BYTES, SleS1ArenaStorage, SleS1ControlStorage, SleS1Controller,
-    SleS1Event, SleS1InitError, SleS1OperationError, SleS1Resources, SleS1Storage, init_sle_s1,
+    SleS1Event, SleS1InitError, SleS1OperationError, SleS1Resources, SleS1Storage,
+    SsapServerHandles, init_sle_s1,
 };
 
 /// Declare caller-owned storage for the internal BLE B1 init profile.

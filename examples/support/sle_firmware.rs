@@ -143,6 +143,8 @@ fn error_code(error: hisi_rf_ws63::SleS1InitError) -> u32 {
         SleS1InitError::EventSinkAlreadyInstalled => 11,
         SleS1InitError::RegisterCallbacks(status)
         | SleS1InitError::RegisterConnectionCallbacks(status)
+        | SleS1InitError::RegisterSsapServerCallbacks(status)
+        | SleS1InitError::RegisterSsapClientCallbacks(status)
         | SleS1InitError::Enable(status) => status,
     }
 }

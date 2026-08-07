@@ -92,6 +92,16 @@ name = "sle_connect_client_smoke"
 path = "examples/sle_connect_client_smoke.rs"
 required-features = ["sle-init", "firmware-example"]
 
+[[example]]
+name = "sle_ssap_server_smoke"
+path = "examples/sle_ssap_server_smoke.rs"
+required-features = ["sle-init", "firmware-example"]
+
+[[example]]
+name = "sle_ssap_client_smoke"
+path = "examples/sle_ssap_client_smoke.rs"
+required-features = ["sle-init", "firmware-example"]
+
 [dependencies]
 hisi-alloc = "0.1.0-alpha.3"
 hisi-storage = "0.1.0-alpha.1"
