@@ -23,8 +23,6 @@ fn main() -> ! {
 
 fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
     let mut handles = None;
-    let mut connection = None;
-    let mut notify_delay = None;
     loop {
         while let Some(event) = controller.next_event() {
             match event {
@@ -54,13 +52,25 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     sle_firmware::log(b"RFDBG_SLE_S3_SERVER_READY\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
-                    connection_id,
                     connection_state: CONNECTION_STATE_CONNECTED,
                     ..
                 } => {
-                    connection = Some(connection_id);
-                    notify_delay = Some(20u8);
                     sle_firmware::log(b"RFDBG_SLE_S3_SERVER_CONNECTED\r\n");
+                }
+                hisi_rf_ws63::SleS1Event::SsapReadRequested {
+                    connection_id,
+                    status: 0,
+                    ..
+                } => {
+                    static mut NOTIFICATION: [u8; 8] = PAYLOAD;
+                    let data = unsafe { &mut *core::ptr::addr_of_mut!(NOTIFICATION) };
+                    if controller
+                        .notify_ssap(handles.unwrap(), connection_id, data)
+                        .is_err()
+                    {
+                        fail(b"RFDBG_SLE_S3_SERVER_NOTIFY_ERR\r\n");
+                    }
+                    sle_firmware::log(b"RFDBG_SLE_S3_SERVER_NOTIFY_OK\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
                     connection_state: CONNECTION_STATE_DISCONNECTED,
@@ -69,22 +79,6 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     sle_firmware::log(b"RFDBG_SLE_S3_SERVER_DISCONNECTED\r\n");
                 }
                 _ => {}
-            }
-        }
-        if let Some(remaining) = notify_delay {
-            if remaining == 0 {
-                static mut NOTIFICATION: [u8; 8] = PAYLOAD;
-                let data = unsafe { &mut *core::ptr::addr_of_mut!(NOTIFICATION) };
-                if controller
-                    .notify_ssap(handles.unwrap(), connection.unwrap(), data)
-                    .is_err()
-                {
-                    fail(b"RFDBG_SLE_S3_SERVER_NOTIFY_ERR\r\n");
-                }
-                notify_delay = None;
-                sle_firmware::log(b"RFDBG_SLE_S3_SERVER_NOTIFY_OK\r\n");
-            } else {
-                notify_delay = Some(remaining - 1);
             }
         }
         if controller.dropped_events() != 0 {

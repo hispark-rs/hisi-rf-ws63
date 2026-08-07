@@ -21,8 +21,9 @@ use ws63_radio_sys::sle::{
 };
 #[cfg(target_arch = "riscv32")]
 use ws63_radio_sys::ssap::{
-    ClientCallbacks, ClientHandleValue, ExchangeInfo, NotifyIndicate, ServerCallbacks,
-    ServerPropertyInfo, Uuid,
+    ClientCallbacks, ClientHandleValue, ExchangeInfo, FindServiceResult, FindStructureParameters,
+    FindStructureResult, NotifyIndicate, ServerCallbacks, ServerPropertyInfo, ServerReadRequest,
+    Uuid,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -100,6 +101,27 @@ pub enum SleS1Event {
         connection_id: u16,
         mtu_size: u32,
         version: u16,
+        status: u32,
+    },
+    SsapServiceFound {
+        client_id: u8,
+        connection_id: u16,
+        start_handle: u16,
+        end_handle: u16,
+        uuid: Uuid,
+        status: u32,
+    },
+    SsapDiscoveryComplete {
+        client_id: u8,
+        connection_id: u16,
+        status: u32,
+    },
+    SsapReadRequested {
+        server_id: u8,
+        connection_id: u16,
+        request_id: u16,
+        handle: u16,
+        property_type: u8,
         status: u32,
     },
     SsapNotification {
@@ -590,6 +612,47 @@ impl SleS1Controller {
         }
         Ok(())
     }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn discover_ssap_services(
+        &mut self,
+        connection_id: u16,
+    ) -> Result<(), SleS1OperationError> {
+        let mut parameters = FindStructureParameters {
+            find_type: ws63_radio_sys::ssap::FIND_TYPE_PRIMARY_SERVICE,
+            start_handle: 1,
+            end_handle: u16::MAX,
+            uuid: short_uuid(0),
+            reserved: 0,
+        };
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssapc_find_structure(0, connection_id, &raw mut parameters)
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::DiscoverSsapServices(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn read_ssap(
+        &mut self,
+        connection_id: u16,
+        handle: u16,
+    ) -> Result<(), SleS1OperationError> {
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssapc_read_req(
+                0,
+                connection_id,
+                handle,
+                ws63_radio_sys::ssap::PROPERTY_TYPE_VALUE,
+            )
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::ReadSsap(status));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -623,6 +686,8 @@ pub enum SleS1OperationError {
     StartSsapService(u32),
     NotifySsap(u32),
     ExchangeSsapInfo(u32),
+    DiscoverSsapServices(u32),
+    ReadSsap(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -801,6 +866,60 @@ unsafe extern "C" fn ssap_exchange_complete(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_service_found(
+    client_id: u8,
+    connection_id: u16,
+    service: *mut FindServiceResult,
+    status: u32,
+) {
+    let Some(service) = (unsafe { service.as_ref() }).copied() else {
+        return;
+    };
+    push_event(SleS1Event::SsapServiceFound {
+        client_id,
+        connection_id,
+        start_handle: service.start_handle,
+        end_handle: service.end_handle,
+        uuid: service.uuid,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_discovery_complete(
+    client_id: u8,
+    connection_id: u16,
+    _result: *mut FindStructureResult,
+    status: u32,
+) {
+    push_event(SleS1Event::SsapDiscoveryComplete {
+        client_id,
+        connection_id,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_read_requested(
+    server_id: u8,
+    connection_id: u16,
+    request: *mut ServerReadRequest,
+    status: u32,
+) {
+    let Some(request) = (unsafe { request.as_ref() }).copied() else {
+        return;
+    };
+    push_event(SleS1Event::SsapReadRequested {
+        server_id,
+        connection_id,
+        request_id: request.request_id,
+        handle: request.handle,
+        property_type: request.property_type,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -834,7 +953,7 @@ static mut SSAP_SERVER_CALLBACKS: ServerCallbacks = ServerCallbacks {
     add_descriptor: None,
     start_service: Some(ssap_service_started),
     delete_all_services: None,
-    read_request: None,
+    read_request: Some(ssap_read_requested),
     read_by_uuid_request: None,
     write_request: None,
     mtu_changed: None,
@@ -843,9 +962,9 @@ static mut SSAP_SERVER_CALLBACKS: ServerCallbacks = ServerCallbacks {
 
 #[cfg(target_arch = "riscv32")]
 static mut SSAP_CLIENT_CALLBACKS: ClientCallbacks = ClientCallbacks {
-    find_structure: None,
+    find_structure: Some(ssap_service_found),
     find_property: None,
-    find_structure_complete: None,
+    find_structure_complete: Some(ssap_discovery_complete),
     read_confirmed: None,
     read_by_uuid_complete: None,
     write_confirmed: None,

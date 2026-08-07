@@ -28,6 +28,7 @@ fn main() -> ! {
 fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
     let mut seeking = false;
     let mut connect_after_stop = false;
+    let mut service = None;
     loop {
         while let Some(event) = controller.next_event() {
             match event {
@@ -64,8 +65,39 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                         fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
                     }
                 }
-                hisi_rf_ws63::SleS1Event::SsapExchangeComplete { status: 0, .. } => {
+                hisi_rf_ws63::SleS1Event::SsapExchangeComplete {
+                    connection_id,
+                    status: 0,
+                    ..
+                } => {
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_OK\r\n");
+                    if controller.discover_ssap_services(connection_id).is_err() {
+                        fail(b"RFDBG_SLE_S3_CLIENT_DISCOVERY_ERR\r\n");
+                    }
+                }
+                hisi_rf_ws63::SleS1Event::SsapServiceFound {
+                    connection_id,
+                    start_handle,
+                    uuid,
+                    status: 0,
+                    ..
+                } if uuid.len == 2 && uuid.bytes[14..] == [0x0b, 0x06] => {
+                    service = Some((connection_id, start_handle));
+                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_SERVICE_OK\r\n");
+                }
+                hisi_rf_ws63::SleS1Event::SsapDiscoveryComplete {
+                    connection_id,
+                    status: 0,
+                    ..
+                } => {
+                    let Some((service_connection, handle)) = service else {
+                        fail(b"RFDBG_SLE_S3_CLIENT_SERVICE_MISSING\r\n");
+                    };
+                    if service_connection != connection_id
+                        || controller.read_ssap(connection_id, handle).is_err()
+                    {
+                        fail(b"RFDBG_SLE_S3_CLIENT_READ_ERR\r\n");
+                    }
                 }
                 hisi_rf_ws63::SleS1Event::SsapNotification {
                     status: 0,
