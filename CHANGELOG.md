@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.74] - 2026-08-07
+
 ### Added
 
 - Add an internal, credential-free BLE B1 init smoke that installs a
@@ -27,8 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Update the BLE link dependency to `ws63-radio-sys 0.1.0-alpha.15`, whose
-  profile-derived controller closure includes the original ROM timebase data.
+- Update the BLE link dependency to `ws63-radio-sys 0.1.0-alpha.16`, whose
+  profile-derived controller closure includes the original ROM timebase data
+  and exports the guarded ROM callback symbol contract to standalone builds.
 
 ## [0.1.0-alpha.73] - 2026-08-06
 
