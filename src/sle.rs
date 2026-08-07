@@ -9,7 +9,9 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
-use hisi_rf_core::sle::{AnnounceConfig, SeekConfig};
+use hisi_rf_core::sle::{AnnounceConfig, SeekConfig, SsapServerDefinition};
+#[cfg(any(target_arch = "riscv32", test))]
+use hisi_rf_core::sle::{SsapOperations, SsapPermissions, SsapUuid};
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -37,6 +39,7 @@ pub const SLE_S1_MINIMUM_TASK_STACK_BYTES: usize = 512;
 pub const SLE_S1_EVENT_DATA_CAPACITY: usize = 64;
 
 const EVENT_CAPACITY: usize = 32;
+const SLE_S3_VALUE_CAPACITY: usize = 64;
 
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
 struct SleS1OperationStorage {
@@ -44,6 +47,8 @@ struct SleS1OperationStorage {
     announce_len: u16,
     seek_response_data: [u8; SLE_S1_EVENT_DATA_CAPACITY],
     seek_response_len: u16,
+    ssap_property_value: [u8; SLE_S3_VALUE_CAPACITY],
+    ssap_descriptor_value: [u8; SLE_S3_VALUE_CAPACITY],
     #[cfg(target_arch = "riscv32")]
     announce_parameters: AnnounceParameters,
     #[cfg(target_arch = "riscv32")]
@@ -57,6 +62,8 @@ impl SleS1OperationStorage {
             announce_len: 0,
             seek_response_data: [0; SLE_S1_EVENT_DATA_CAPACITY],
             seek_response_len: 0,
+            ssap_property_value: [0; SLE_S3_VALUE_CAPACITY],
+            ssap_descriptor_value: [0; SLE_S3_VALUE_CAPACITY],
             #[cfg(target_arch = "riscv32")]
             announce_parameters: AnnounceParameters {
                 announce_handle: 1,
@@ -102,6 +109,29 @@ impl SleS1OperationStorage {
         self.announce_len = data.len() as u16;
         self.seek_response_data[..seek_response.len()].copy_from_slice(seek_response);
         self.seek_response_len = seek_response.len() as u16;
+    }
+
+    #[cfg(any(target_arch = "riscv32", test))]
+    fn store_ssap_values(
+        &mut self,
+        property: &[u8],
+        descriptor: &[u8],
+    ) -> Result<(), SleS1OperationError> {
+        if property.len() > SLE_S3_VALUE_CAPACITY {
+            return Err(SleS1OperationError::SsapValueTooLong {
+                length: property.len(),
+            });
+        }
+        if descriptor.len() > SLE_S3_VALUE_CAPACITY {
+            return Err(SleS1OperationError::SsapValueTooLong {
+                length: descriptor.len(),
+            });
+        }
+        self.ssap_property_value.fill(0);
+        self.ssap_property_value[..property.len()].copy_from_slice(property);
+        self.ssap_descriptor_value.fill(0);
+        self.ssap_descriptor_value[..descriptor.len()].copy_from_slice(descriptor);
+        Ok(())
     }
 }
 #[cfg(any(target_arch = "riscv32", test))]
@@ -620,6 +650,15 @@ impl SleS1Controller {
         Err(SleS1OperationError::UnsupportedTarget)
     }
 
+    /// Host builds cannot invoke the WS63 typed SSAP implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn configure_ssap_server_definition(
+        &mut self,
+        _: SsapServerDefinition,
+    ) -> Result<SsapServerHandles, SleS1OperationError> {
+        Err(SleS1OperationError::UnsupportedTarget)
+    }
+
     #[cfg(target_arch = "riscv32")]
     pub fn stop_seek(&mut self) -> Result<(), SleS1OperationError> {
         let status = unsafe { ws63_radio_sys::sle::sle_stop_seek() };
@@ -662,8 +701,74 @@ impl SleS1Controller {
         property_value: &'static mut [u8],
         descriptor_value: &'static mut [u8],
     ) -> Result<SsapServerHandles, SleS1OperationError> {
+        Self::configure_ssap_server_raw(
+            short_uuid(0),
+            short_uuid(0x060b),
+            short_uuid(0x1122),
+            ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
+            ws63_radio_sys::ssap::OPERATE_READ_NOTIFY,
+            property_value,
+            short_uuid(0),
+            ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
+            ws63_radio_sys::ssap::OPERATE_READ_WRITE,
+            descriptor_value,
+        )
+    }
+
+    /// Configure one static SSAP database within the reviewed WS63 U3 capacity.
+    #[cfg(target_arch = "riscv32")]
+    pub fn configure_ssap_server_definition(
+        &mut self,
+        definition: SsapServerDefinition,
+    ) -> Result<SsapServerHandles, SleS1OperationError> {
+        let [service] = definition.services() else {
+            return Err(SleS1OperationError::UnsupportedDatabase);
+        };
+        let [property] = service.properties() else {
+            return Err(SleS1OperationError::UnsupportedDatabase);
+        };
+        let [descriptor] = property.descriptors() else {
+            return Err(SleS1OperationError::UnsupportedDatabase);
+        };
+        if property.maximum_len() as usize > SLE_S3_VALUE_CAPACITY
+            || descriptor.maximum_len() as usize > SLE_S3_VALUE_CAPACITY
+        {
+            return Err(SleS1OperationError::UnsupportedDatabase);
+        }
+        self.operations
+            .store_ssap_values(property.initial_value(), descriptor.initial_value())?;
+        let property_len = property.initial_value().len();
+        let descriptor_len = descriptor.initial_value().len();
+
+        Self::configure_ssap_server_raw(
+            ssap_uuid(definition.app_uuid()),
+            ssap_uuid(service.uuid()),
+            ssap_uuid(property.uuid()),
+            map_ssap_permissions(property.permissions()),
+            map_ssap_operations(property.operations()),
+            &mut self.operations.ssap_property_value[..property_len],
+            ssap_uuid(descriptor.uuid()),
+            map_ssap_permissions(descriptor.permissions()),
+            map_ssap_descriptor_operations(descriptor.permissions()),
+            &mut self.operations.ssap_descriptor_value[..descriptor_len],
+        )
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    #[allow(clippy::too_many_arguments)]
+    fn configure_ssap_server_raw(
+        mut app_uuid: Uuid,
+        mut service_uuid: Uuid,
+        property_uuid: Uuid,
+        property_permissions: u16,
+        property_operations: u32,
+        property_value: &mut [u8],
+        descriptor_uuid: Uuid,
+        descriptor_permissions: u16,
+        descriptor_operations: u32,
+        descriptor_value: &mut [u8],
+    ) -> Result<SsapServerHandles, SleS1OperationError> {
         let mut server_id = 0;
-        let mut app_uuid = short_uuid(0);
         let status = unsafe {
             ws63_radio_sys::ssap::ssaps_register_server(&raw mut app_uuid, &raw mut server_id)
         };
@@ -671,7 +776,6 @@ impl SleS1Controller {
             return Err(SleS1OperationError::RegisterSsapServer(status));
         }
         let mut service_handle = 0;
-        let mut service_uuid = short_uuid(0x060b);
         let status = unsafe {
             ws63_radio_sys::ssap::ssaps_add_service_sync(
                 server_id,
@@ -691,9 +795,9 @@ impl SleS1Controller {
                     length: property_value.len(),
                 })?;
         let mut property = ServerPropertyInfo {
-            uuid: short_uuid(0x1122),
-            permissions: ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
-            operate_indication: ws63_radio_sys::ssap::OPERATE_READ_NOTIFY,
+            uuid: property_uuid,
+            permissions: property_permissions,
+            operate_indication: property_operations,
             value_len,
             value: property_value.as_mut_ptr(),
         };
@@ -715,9 +819,9 @@ impl SleS1Controller {
             }
         })?;
         let mut descriptor = ServerDescriptorInfo {
-            uuid: short_uuid(0),
-            permissions: ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
-            operate_indication: ws63_radio_sys::ssap::OPERATE_READ_WRITE,
+            uuid: descriptor_uuid,
+            permissions: descriptor_permissions,
+            operate_indication: descriptor_operations,
             descriptor_type: ws63_radio_sys::ssap::DESCRIPTOR_USER_DESCRIPTION,
             value_len: descriptor_len,
             value: descriptor_value.as_mut_ptr(),
@@ -868,7 +972,7 @@ impl SleS1Controller {
     }
 }
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", test))]
 fn short_uuid(value: u16) -> Uuid {
     let mut bytes = [
         0x37, 0xbe, 0xa8, 0x80, 0xfc, 0x70, 0x11, 0xea, 0xb7, 0x20, 0, 0, 0, 0, 0, 0,
@@ -877,10 +981,64 @@ fn short_uuid(value: u16) -> Uuid {
     Uuid { len: 2, bytes }
 }
 
+#[cfg(any(target_arch = "riscv32", test))]
+fn ssap_uuid(uuid: SsapUuid) -> Uuid {
+    match uuid {
+        SsapUuid::Uuid16(value) => short_uuid(value),
+        SsapUuid::Uuid128(bytes) => Uuid { len: 16, bytes },
+    }
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+const fn map_ssap_permissions(permissions: SsapPermissions) -> u16 {
+    let mut raw = 0;
+    if permissions.contains(SsapPermissions::READ) {
+        raw |= 0x01;
+    }
+    if permissions.contains(SsapPermissions::WRITE) {
+        raw |= 0x02;
+    }
+    raw
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+const fn map_ssap_operations(operations: SsapOperations) -> u32 {
+    let mut raw = 0;
+    if operations.contains(SsapOperations::READ) {
+        raw |= 0x01;
+    }
+    if operations.contains(SsapOperations::WRITE) {
+        raw |= 0x04;
+    }
+    if operations.contains(SsapOperations::NOTIFY) {
+        raw |= 0x08;
+    }
+    if operations.contains(SsapOperations::INDICATE) {
+        raw |= 0x10;
+    }
+    raw
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+const fn map_ssap_descriptor_operations(permissions: SsapPermissions) -> u32 {
+    let mut raw = 0;
+    if permissions.contains(SsapPermissions::READ) {
+        raw |= 0x01;
+    }
+    if permissions.contains(SsapPermissions::WRITE) {
+        raw |= 0x04;
+    }
+    raw
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SleS1OperationError {
-    AnnounceDataTooLong { length: usize },
-    SeekResponseDataTooLong { length: usize },
+    AnnounceDataTooLong {
+        length: usize,
+    },
+    SeekResponseDataTooLong {
+        length: usize,
+    },
     SetAnnounceParameters(u32),
     SetAnnounceData(u32),
     StartAnnounce(u32),
@@ -892,7 +1050,11 @@ pub enum SleS1OperationError {
     Connect(u32),
     Disconnect(u32),
     Pair(u32),
-    SsapValueTooLong { length: usize },
+    SsapValueTooLong {
+        length: usize,
+    },
+    /// The definition exceeds the reviewed one-service U3 profile.
+    UnsupportedDatabase,
     RegisterSsapServer(u32),
     AddSsapService(u32),
     AddSsapProperty(u32),
@@ -1447,6 +1609,38 @@ mod tests {
 
         assert_eq!(&storage.announce_data[..8], b"announce");
         assert_eq!(&storage.seek_response_data[..8], b"response");
+    }
+
+    #[test]
+    fn typed_ssap_values_and_bits_match_the_ws63_abi() {
+        let mut storage = SleS1OperationStorage::new();
+        storage
+            .store_ssap_values(b"property", b"descriptor")
+            .unwrap();
+        assert_eq!(&storage.ssap_property_value[..8], b"property");
+        assert_eq!(&storage.ssap_descriptor_value[..10], b"descriptor");
+        let permissions = SsapPermissions::READ.union(SsapPermissions::WRITE);
+        assert_eq!(map_ssap_permissions(permissions), 0x03);
+        assert_eq!(map_ssap_descriptor_operations(permissions), 0x05);
+        assert_eq!(
+            map_ssap_operations(
+                SsapOperations::READ
+                    .union(SsapOperations::WRITE)
+                    .union(SsapOperations::NOTIFY)
+                    .union(SsapOperations::INDICATE)
+            ),
+            0x1d
+        );
+        assert_eq!(
+            ssap_uuid(SsapUuid::Uuid16(0x600b)).bytes[14..],
+            [0x0b, 0x60]
+        );
+        assert_eq!(
+            storage.store_ssap_values(&[0; SLE_S3_VALUE_CAPACITY + 1], &[]),
+            Err(SleS1OperationError::SsapValueTooLong {
+                length: SLE_S3_VALUE_CAPACITY + 1
+            })
+        );
     }
 
     #[test]

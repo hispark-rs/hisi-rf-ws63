@@ -17,7 +17,9 @@ use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
 #[cfg(target_arch = "riscv32")]
 use hisi_rf_core::ble::ScanMode;
-use hisi_rf_core::ble::{AdvertisingConfig, ScanConfig};
+use hisi_rf_core::ble::{AdvertisingConfig, GattServerDefinition, ScanConfig};
+#[cfg(any(target_arch = "riscv32", test))]
+use hisi_rf_core::ble::{GattPermissions, GattProperties, GattUuid};
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -65,6 +67,8 @@ const BLE_B3_VALUE_CAPACITY: usize = 32;
 struct BleB2OperationStorage {
     advertising_data: [u8; BLE_B2_ADV_DATA_CAPACITY],
     advertising_len: u8,
+    gatt_characteristic_value: [u8; BLE_B3_VALUE_CAPACITY],
+    gatt_descriptor_value: [u8; BLE_B3_VALUE_CAPACITY],
     #[cfg(target_arch = "riscv32")]
     advertising_parameters: GapBleAdvertisingParameters,
     #[cfg(target_arch = "riscv32")]
@@ -76,6 +80,8 @@ impl BleB2OperationStorage {
         Self {
             advertising_data: [0; BLE_B2_ADV_DATA_CAPACITY],
             advertising_len: 0,
+            gatt_characteristic_value: [0; BLE_B3_VALUE_CAPACITY],
+            gatt_descriptor_value: [0; BLE_B3_VALUE_CAPACITY],
             #[cfg(target_arch = "riscv32")]
             advertising_parameters: GapBleAdvertisingParameters {
                 min_interval: 0x20,
@@ -111,6 +117,29 @@ impl BleB2OperationStorage {
         let payload = config.payload().as_bytes();
         self.advertising_data[..payload.len()].copy_from_slice(payload);
         self.advertising_len = payload.len() as u8;
+    }
+
+    #[cfg(any(target_arch = "riscv32", test))]
+    fn store_gatt_values(
+        &mut self,
+        characteristic: &[u8],
+        descriptor: &[u8],
+    ) -> Result<(), BleB3Error> {
+        if characteristic.len() > BLE_B3_VALUE_CAPACITY {
+            return Err(BleB3Error::ValueTooLong {
+                length: characteristic.len(),
+            });
+        }
+        if descriptor.len() > BLE_B3_VALUE_CAPACITY {
+            return Err(BleB3Error::ValueTooLong {
+                length: descriptor.len(),
+            });
+        }
+        self.gatt_characteristic_value.fill(0);
+        self.gatt_characteristic_value[..characteristic.len()].copy_from_slice(characteristic);
+        self.gatt_descriptor_value.fill(0);
+        self.gatt_descriptor_value[..descriptor.len()].copy_from_slice(descriptor);
+        Ok(())
     }
 }
 
@@ -630,20 +659,76 @@ impl BleB1Controller {
     /// Register and start the fixed B3 primary service.
     #[cfg(target_arch = "riscv32")]
     pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
+        const CCC: hisi_rf_core::ble::GattDescriptorDefinition =
+            hisi_rf_core::ble::GattDescriptorDefinition::try_new(
+                GattUuid::Uuid16(BLE_B3_CCC_UUID),
+                GattPermissions::READ.union(GattPermissions::WRITE),
+                &[0, 0],
+                2,
+            )
+            .unwrap();
+        const CHARACTERISTIC: hisi_rf_core::ble::GattCharacteristicDefinition =
+            hisi_rf_core::ble::GattCharacteristicDefinition::try_new(
+                GattUuid::Uuid16(BLE_B3_CHARACTERISTIC_UUID),
+                GattPermissions::READ.union(GattPermissions::WRITE),
+                GattProperties::READ
+                    .union(GattProperties::WRITE)
+                    .union(GattProperties::NOTIFY)
+                    .union(GattProperties::INDICATE),
+                b"B3",
+                BLE_B3_VALUE_CAPACITY as u16,
+                &[CCC],
+            )
+            .unwrap();
+        const SERVICE: hisi_rf_core::ble::GattServiceDefinition =
+            hisi_rf_core::ble::GattServiceDefinition::try_new(
+                GattUuid::Uuid16(BLE_B3_SERVICE_UUID),
+                true,
+                &[CHARACTERISTIC],
+            )
+            .unwrap();
+        const DATABASE: GattServerDefinition =
+            GattServerDefinition::try_new(GattUuid::Uuid16(0xB301), &[SERVICE]).unwrap();
+        self.register_gatt_server_definition(DATABASE)
+    }
+
+    /// Register one static database within the reviewed WS63 U3 capacity.
+    #[cfg(target_arch = "riscv32")]
+    pub fn register_gatt_server_definition(
+        &mut self,
+        definition: GattServerDefinition,
+    ) -> Result<BleGattServer, BleB3Error> {
+        let [service] = definition.services() else {
+            return Err(BleB3Error::UnsupportedDatabase);
+        };
+        let [characteristic] = service.characteristics() else {
+            return Err(BleB3Error::UnsupportedDatabase);
+        };
+        let [descriptor] = characteristic.descriptors() else {
+            return Err(BleB3Error::UnsupportedDatabase);
+        };
+        if characteristic.maximum_len() as usize > BLE_B3_VALUE_CAPACITY
+            || descriptor.maximum_len() as usize > BLE_B3_VALUE_CAPACITY
+        {
+            return Err(BleB3Error::UnsupportedDatabase);
+        }
+        self.operations
+            .store_gatt_values(characteristic.initial_value(), descriptor.initial_value())?;
+
         let mut server_id = 0;
-        let mut app_uuid = BtUuid::from_u16(0xB301);
+        let mut app_uuid = BtUuid::from_core(definition.app_uuid());
         let status = unsafe { gatts_register_server(&raw mut app_uuid, &raw mut server_id) };
         if status != 0 {
             return Err(BleB3Error::RegisterServer(status));
         }
 
         let mut service_handle = 0;
-        let mut service_uuid = BtUuid::from_u16(BLE_B3_SERVICE_UUID);
+        let mut service_uuid = BtUuid::from_core(service.uuid());
         let status = unsafe {
             gatts_add_service_sync(
                 server_id,
                 &raw mut service_uuid,
-                true,
+                service.is_primary(),
                 &raw mut service_handle,
             )
         };
@@ -651,13 +736,12 @@ impl BleB1Controller {
             return Err(BleB3Error::AddService(status));
         }
 
-        static mut INITIAL_VALUE: [u8; 2] = *b"B3";
         let mut characteristic = GattsAddCharacteristic {
-            uuid: BtUuid::from_u16(BLE_B3_CHARACTERISTIC_UUID),
-            permissions: 0x03,
-            properties: 0x3A,
-            value_len: 2,
-            value: core::ptr::addr_of_mut!(INITIAL_VALUE).cast(),
+            uuid: BtUuid::from_core(characteristic.uuid()),
+            permissions: map_gatt_permissions(characteristic.permissions()),
+            properties: map_gatt_properties(characteristic.properties()),
+            value_len: characteristic.initial_value().len() as u16,
+            value: self.operations.gatt_characteristic_value.as_mut_ptr(),
         };
         let mut characteristic_result = GattsAddCharacteristicResult {
             declaration_handle: 0,
@@ -675,12 +759,11 @@ impl BleB1Controller {
             return Err(BleB3Error::AddCharacteristic(status));
         }
 
-        static mut INITIAL_CCC: [u8; 2] = [0, 0];
         let mut descriptor = GattsAddDescriptor {
-            uuid: BtUuid::from_u16(BLE_B3_CCC_UUID),
-            permissions: 0x03,
-            value_len: 2,
-            value: core::ptr::addr_of_mut!(INITIAL_CCC).cast(),
+            uuid: BtUuid::from_core(descriptor.uuid()),
+            permissions: map_gatt_permissions(descriptor.permissions()),
+            value_len: descriptor.initial_value().len() as u16,
+            value: self.operations.gatt_descriptor_value.as_mut_ptr(),
         };
         let mut ccc_handle = 0;
         let status = unsafe {
@@ -865,6 +948,15 @@ impl BleB1Controller {
         Err(BleB3Error::UnsupportedTarget)
     }
 
+    /// Host builds cannot invoke the WS63 typed GATT implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn register_gatt_server_definition(
+        &mut self,
+        _: GattServerDefinition,
+    ) -> Result<BleGattServer, BleB3Error> {
+        Err(BleB3Error::UnsupportedTarget)
+    }
+
     /// Host builds cannot invoke the WS63 GAP/GATT implementation.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn register_gatt_client(&mut self) -> Result<BleGattClient, BleB3Error> {
@@ -905,6 +997,8 @@ pub enum BleB3Error {
     Disconnect(u32),
     /// A payload exceeded the bounded B3 event/value capacity.
     ValueTooLong { length: usize },
+    /// The definition exceeds the reviewed one-service U3 profile.
+    UnsupportedDatabase,
     /// The operation is unavailable outside WS63 target firmware.
     UnsupportedTarget,
 }
@@ -1026,7 +1120,7 @@ struct GapBleScanResult {
     advertising_data: *const u8,
 }
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", test))]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct BtUuid {
@@ -1034,7 +1128,7 @@ struct BtUuid {
     bytes: [u8; 16],
 }
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", test))]
 impl BtUuid {
     const fn from_u16(value: u16) -> Self {
         let mut bytes = [0; 16];
@@ -1043,12 +1137,53 @@ impl BtUuid {
         Self { length: 2, bytes }
     }
 
+    const fn from_core(uuid: GattUuid) -> Self {
+        match uuid {
+            GattUuid::Uuid16(value) => Self::from_u16(value),
+            GattUuid::Uuid128(bytes) => Self { length: 16, bytes },
+        }
+    }
+
+    #[cfg(target_arch = "riscv32")]
     fn as_u16(&self) -> u16 {
         if self.length != 2 {
             return 0;
         }
         u16::from_be_bytes([self.bytes[0], self.bytes[1]])
     }
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+const fn map_gatt_permissions(permissions: GattPermissions) -> u8 {
+    let mut raw = 0;
+    if permissions.contains(GattPermissions::READ) {
+        raw |= 0x01;
+    }
+    if permissions.contains(GattPermissions::WRITE) {
+        raw |= 0x02;
+    }
+    raw
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+const fn map_gatt_properties(properties: GattProperties) -> u8 {
+    let mut raw = 0;
+    if properties.contains(GattProperties::READ) {
+        raw |= 0x02;
+    }
+    if properties.contains(GattProperties::WRITE_WITHOUT_RESPONSE) {
+        raw |= 0x04;
+    }
+    if properties.contains(GattProperties::WRITE) {
+        raw |= 0x08;
+    }
+    if properties.contains(GattProperties::NOTIFY) {
+        raw |= 0x10;
+    }
+    if properties.contains(GattProperties::INDICATE) {
+        raw |= 0x20;
+    }
+    raw
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1852,6 +1987,37 @@ mod tests {
 
         assert_eq!(storage.advertising_len, 10);
         assert_eq!(&storage.advertising_data[..10], b"u2-payload");
+    }
+
+    #[test]
+    fn typed_gatt_values_and_bits_match_the_ws63_abi() {
+        let mut storage = BleB2OperationStorage::new();
+        storage.store_gatt_values(b"value", &[1, 2]).unwrap();
+        assert_eq!(&storage.gatt_characteristic_value[..5], b"value");
+        assert_eq!(&storage.gatt_descriptor_value[..2], &[1, 2]);
+        assert_eq!(
+            map_gatt_permissions(GattPermissions::READ.union(GattPermissions::WRITE)),
+            0x03
+        );
+        assert_eq!(
+            map_gatt_properties(
+                GattProperties::READ
+                    .union(GattProperties::WRITE)
+                    .union(GattProperties::NOTIFY)
+                    .union(GattProperties::INDICATE)
+            ),
+            0x3a
+        );
+        assert_eq!(
+            BtUuid::from_core(GattUuid::Uuid16(0xabcd)).bytes[..2],
+            [0xab, 0xcd]
+        );
+        assert_eq!(
+            storage.store_gatt_values(&[0; BLE_B3_VALUE_CAPACITY + 1], &[]),
+            Err(BleB3Error::ValueTooLong {
+                length: BLE_B3_VALUE_CAPACITY + 1
+            })
+        );
     }
 
     #[test]
