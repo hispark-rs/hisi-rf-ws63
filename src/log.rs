@@ -383,6 +383,13 @@ pub extern "C" fn memcpy_s(
     crate::OSAL_OK
 }
 
+/// Consume a vendor OAM status sample when no diagnostic transport is installed.
+///
+/// The ROM callback table references this hook in both Wi-Fi and BLE profiles,
+/// so it belongs to the common logging contract rather than the BLE adapter.
+#[unsafe(no_mangle)]
+pub extern "C" fn log_oam_status_store(_prime: u8, _message: u16, _mode: u16, _length: u32) {}
+
 #[cfg(test)]
 mod snprintf_tests {
     use super::snprintf_s;

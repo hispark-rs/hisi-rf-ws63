@@ -53,6 +53,7 @@ pub mod hisi_rf_ws63::log
 #[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print2(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print3(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print4(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_oam_status_store(u8, u16, u16, u32)
 #[no_mangle] pub c fn hisi_rf_ws63::log::memcpy_s(*mut core::ffi::c_void, usize, *const core::ffi::c_void, usize) -> core::ffi::primitives::c_int
 #[no_mangle] pub c fn hisi_rf_ws63::log::memset_s(*mut core::ffi::c_void, usize, core::ffi::primitives::c_int, usize) -> core::ffi::primitives::c_int
 #[no_mangle] pub unsafe c fn hisi_rf_ws63::log::osal_printk(*const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int

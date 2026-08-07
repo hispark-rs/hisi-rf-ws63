@@ -599,9 +599,6 @@ pub extern "C" fn diag_cmd_report_sample_data(_buffer: *mut u8, _length: u32) ->
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn log_oam_status_store(_prime: u8, _message: u16, _mode: u16, _length: u32) {}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn massdata_record_system_error(_event: u8, _a: u8, _b: u8, _c: u32) {}
 
 #[unsafe(no_mangle)]
