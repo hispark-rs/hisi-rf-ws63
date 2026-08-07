@@ -23,7 +23,8 @@ use ws63_radio_sys::sle::{
 use ws63_radio_sys::ssap::{
     ClientCallbacks, ClientHandleValue, ClientWriteParameters, ClientWriteResult, ExchangeInfo,
     FindServiceResult, FindStructureParameters, FindStructureResult, NotifyIndicate,
-    ServerCallbacks, ServerPropertyInfo, ServerReadRequest, ServerWriteRequest, Uuid,
+    ServerCallbacks, ServerDescriptorInfo, ServerPropertyInfo, ServerReadRequest,
+    ServerWriteRequest, Uuid,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -515,6 +516,7 @@ impl SleS1Controller {
     pub fn configure_ssap_server(
         &mut self,
         property_value: &'static mut [u8],
+        descriptor_value: &'static mut [u8],
     ) -> Result<SsapServerHandles, SleS1OperationError> {
         let mut server_id = 0;
         let mut app_uuid = short_uuid(0);
@@ -562,6 +564,30 @@ impl SleS1Controller {
         };
         if status != 0 {
             return Err(SleS1OperationError::AddSsapProperty(status));
+        }
+        let descriptor_len = descriptor_value.len().try_into().map_err(|_| {
+            SleS1OperationError::SsapValueTooLong {
+                length: descriptor_value.len(),
+            }
+        })?;
+        let mut descriptor = ServerDescriptorInfo {
+            uuid: short_uuid(0),
+            permissions: ws63_radio_sys::ssap::PERMISSION_READ_WRITE,
+            operate_indication: ws63_radio_sys::ssap::OPERATE_READ_WRITE,
+            descriptor_type: ws63_radio_sys::ssap::DESCRIPTOR_USER_DESCRIPTION,
+            value_len: descriptor_len,
+            value: descriptor_value.as_mut_ptr(),
+        };
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssaps_add_descriptor_sync(
+                server_id,
+                service_handle,
+                property_handle,
+                &raw mut descriptor,
+            )
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::AddSsapDescriptor(status));
         }
         let mut exchange = ExchangeInfo {
             mtu_size: 1_500,
@@ -725,6 +751,7 @@ pub enum SleS1OperationError {
     RegisterSsapServer(u32),
     AddSsapService(u32),
     AddSsapProperty(u32),
+    AddSsapDescriptor(u32),
     SetSsapInfo(u32),
     StartSsapService(u32),
     NotifySsap(u32),

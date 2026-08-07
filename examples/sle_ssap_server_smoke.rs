@@ -28,14 +28,16 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
             match event {
                 hisi_rf_ws63::SleS1Event::Enabled { status: 0 } if handles.is_none() => {
                     static mut PROPERTY_VALUE: [u8; 8] = [0; 8];
+                    static mut DESCRIPTOR_VALUE: [u8; 2] = [1, 0];
                     static mut ANNOUNCE_DATA: [u8; 7] = [1, 1, 1, 3, 2, 0x0b, 0x06];
                     static mut SEEK_RESPONSE_DATA: [u8; 10] =
                         [5, 8, b'H', b'I', b'S', b'I', b'S', b'L', b'E', b'3'];
                     let property = unsafe { &mut *core::ptr::addr_of_mut!(PROPERTY_VALUE) };
+                    let descriptor = unsafe { &mut *core::ptr::addr_of_mut!(DESCRIPTOR_VALUE) };
                     if controller.set_local_address(SERVER_ADDRESS).is_err() {
                         fail(b"RFDBG_SLE_S3_SERVER_ADDR_ERR\r\n");
                     }
-                    handles = controller.configure_ssap_server(property).ok();
+                    handles = controller.configure_ssap_server(property, descriptor).ok();
                     if handles.is_none() {
                         fail(b"RFDBG_SLE_S3_SERVER_SERVICE_ERR\r\n");
                     }
