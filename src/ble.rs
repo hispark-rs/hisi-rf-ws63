@@ -1,9 +1,10 @@
-//! Internal WS63 BLE controller/host initialization and B2 discovery slice.
+//! Internal WS63 BLE controller/host initialization and bounded GAP/GATT slice.
 //!
 //! B1 is deliberately narrower than a public BLE API: it installs the fixed
 //! vendor task set, platform services, and controller/host runtime, then proves
 //! that `enable_ble` completes. B2 adds advertising, scanning, and a bounded
-//! copied-event queue. GATT, pairing, and user callbacks remain out of scope.
+//! copied-event queue. B3 adds an unpaired GATT client/server smoke contract;
+//! pairing and user callbacks remain out of scope.
 
 use core::cell::{RefCell, UnsafeCell};
 #[cfg(target_arch = "riscv32")]
@@ -53,8 +54,16 @@ const OWNER_BTH_SDK: u32 = 0x424c_4503;
 #[cfg(any(target_arch = "riscv32", test))]
 const OWNER_BT_SERVICE: u32 = 0x424c_4504;
 
-const BLE_B2_EVENT_CAPACITY: usize = 16;
+const BLE_B2_EVENT_CAPACITY: usize = 32;
 const BLE_B2_ADV_DATA_CAPACITY: usize = 31;
+const BLE_B3_VALUE_CAPACITY: usize = 32;
+
+/// UUID used by the bounded B3 interoperability service.
+pub const BLE_B3_SERVICE_UUID: u16 = 0xABCD;
+/// UUID used by the bounded B3 read/write/notify/indicate characteristic.
+pub const BLE_B3_CHARACTERISTIC_UUID: u16 = 0xCDEF;
+/// Standard Client Characteristic Configuration descriptor UUID.
+pub const BLE_B3_CCC_UUID: u16 = 0x2902;
 
 /// One bounded event copied out of the vendor BLE callback context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +85,88 @@ pub enum BleB2Event {
         rssi: i8,
         data_len: u8,
         data: [u8; BLE_B2_ADV_DATA_CAPACITY],
+    },
+    /// A peer connected or disconnected. Vendor-owned address bytes are copied.
+    ConnectionState {
+        conn_id: u16,
+        address: [u8; 6],
+        address_type: u8,
+        connected: bool,
+        pair_state: u32,
+        reason: u32,
+    },
+    /// The local B3 service start request completed.
+    GattServiceStarted {
+        server_id: u8,
+        service_handle: u16,
+        status: u32,
+    },
+    /// A bounded write request arrived at the B3 server.
+    GattServerWrite {
+        server_id: u8,
+        conn_id: u16,
+        handle: u16,
+        status: u32,
+        value_len: u8,
+        value: [u8; BLE_B3_VALUE_CAPACITY],
+    },
+    /// The peer confirmed a server indication.
+    GattIndicationConfirmed {
+        server_id: u8,
+        conn_id: u16,
+        status: u32,
+    },
+    /// A service matching a client discovery request was copied.
+    GattServiceDiscovered {
+        client_id: u8,
+        conn_id: u16,
+        start_handle: u16,
+        end_handle: u16,
+        uuid: u16,
+        status: u32,
+    },
+    /// A characteristic matching a client discovery request was copied.
+    GattCharacteristicDiscovered {
+        client_id: u8,
+        conn_id: u16,
+        declaration_handle: u16,
+        value_handle: u16,
+        properties: u8,
+        uuid: u16,
+        status: u32,
+    },
+    /// A characteristic descriptor was copied.
+    GattDescriptorDiscovered {
+        client_id: u8,
+        conn_id: u16,
+        handle: u16,
+        uuid: u16,
+        status: u32,
+    },
+    /// A client write request completed.
+    GattWriteCompleted {
+        client_id: u8,
+        conn_id: u16,
+        handle: u16,
+        status: u32,
+    },
+    /// A bounded notification payload arrived at the client.
+    GattNotification {
+        client_id: u8,
+        conn_id: u16,
+        handle: u16,
+        status: u32,
+        value_len: u8,
+        value: [u8; BLE_B3_VALUE_CAPACITY],
+    },
+    /// A bounded indication payload arrived at the client.
+    GattIndication {
+        client_id: u8,
+        conn_id: u16,
+        handle: u16,
+        status: u32,
+        value_len: u8,
+        value: [u8; BLE_B3_VALUE_CAPACITY],
     },
 }
 
@@ -298,6 +389,26 @@ pub struct BleB1Controller {
     events: &'static BleEventQueue,
 }
 
+/// Handles allocated by the pinned WS63 GATT server for the B3 service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BleGattServer {
+    /// Vendor server identifier.
+    pub server_id: u8,
+    /// Primary service handle.
+    pub service_handle: u16,
+    /// Characteristic value handle used for writes and outbound values.
+    pub value_handle: u16,
+    /// Client Characteristic Configuration descriptor handle.
+    pub ccc_handle: u16,
+}
+
+/// Identifier allocated by the pinned WS63 GATT client.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BleGattClient {
+    /// Vendor client identifier.
+    pub client_id: u8,
+}
+
 impl BleB1Controller {
     /// Remove and return the oldest copied vendor event, if any.
     pub fn next_event(&mut self) -> Option<BleB2Event> {
@@ -381,6 +492,232 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Stop scanning and connect to one copied scan-result address.
+    #[cfg(target_arch = "riscv32")]
+    pub fn connect(&mut self, address: [u8; 6], address_type: u8) -> Result<(), BleB3Error> {
+        let stop_status = unsafe { gap_ble_stop_scan() };
+        if stop_status != 0 {
+            return Err(BleB3Error::StopScanning(stop_status));
+        }
+        let address = BdAddr {
+            addr: address,
+            address_type,
+        };
+        let status = unsafe { gap_ble_connect_remote_device(&raw const address) };
+        if status != 0 {
+            return Err(BleB3Error::Connect(status));
+        }
+        Ok(())
+    }
+
+    /// Register and start the fixed B3 primary service.
+    #[cfg(target_arch = "riscv32")]
+    pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
+        let mut server_id = 0;
+        let mut app_uuid = BtUuid::from_u16(0xB301);
+        let status = unsafe { gatts_register_server(&raw mut app_uuid, &raw mut server_id) };
+        if status != 0 {
+            return Err(BleB3Error::RegisterServer(status));
+        }
+
+        let mut service_handle = 0;
+        let mut service_uuid = BtUuid::from_u16(BLE_B3_SERVICE_UUID);
+        let status = unsafe {
+            gatts_add_service_sync(
+                server_id,
+                &raw mut service_uuid,
+                true,
+                &raw mut service_handle,
+            )
+        };
+        if status != 0 {
+            return Err(BleB3Error::AddService(status));
+        }
+
+        static mut INITIAL_VALUE: [u8; 2] = *b"B3";
+        let mut characteristic = GattsAddCharacteristic {
+            uuid: BtUuid::from_u16(BLE_B3_CHARACTERISTIC_UUID),
+            permissions: 0x03,
+            properties: 0x3A,
+            value_len: 2,
+            value: core::ptr::addr_of_mut!(INITIAL_VALUE).cast(),
+        };
+        let mut characteristic_result = GattsAddCharacteristicResult {
+            declaration_handle: 0,
+            value_handle: 0,
+        };
+        let status = unsafe {
+            gatts_add_characteristic_sync(
+                server_id,
+                service_handle,
+                &raw mut characteristic,
+                &raw mut characteristic_result,
+            )
+        };
+        if status != 0 {
+            return Err(BleB3Error::AddCharacteristic(status));
+        }
+
+        static mut INITIAL_CCC: [u8; 2] = [0, 0];
+        let mut descriptor = GattsAddDescriptor {
+            uuid: BtUuid::from_u16(BLE_B3_CCC_UUID),
+            permissions: 0x03,
+            value_len: 2,
+            value: core::ptr::addr_of_mut!(INITIAL_CCC).cast(),
+        };
+        let mut ccc_handle = 0;
+        let status = unsafe {
+            gatts_add_descriptor_sync(
+                server_id,
+                service_handle,
+                &raw mut descriptor,
+                &raw mut ccc_handle,
+            )
+        };
+        if status != 0 {
+            return Err(BleB3Error::AddDescriptor(status));
+        }
+        let status = unsafe { gatts_start_service(server_id, service_handle) };
+        if status != 0 {
+            return Err(BleB3Error::StartService(status));
+        }
+        Ok(BleGattServer {
+            server_id,
+            service_handle,
+            value_handle: characteristic_result.value_handle,
+            ccc_handle,
+        })
+    }
+
+    /// Register one fixed GATT client before initiating discovery.
+    #[cfg(target_arch = "riscv32")]
+    pub fn register_gatt_client(&mut self) -> Result<BleGattClient, BleB3Error> {
+        let mut client_id = 0;
+        let mut app_uuid = BtUuid::from_u16(0xB302);
+        let status = unsafe { gattc_register_client(&raw mut app_uuid, &raw mut client_id) };
+        if status != 0 {
+            return Err(BleB3Error::RegisterClient(status));
+        }
+        Ok(BleGattClient { client_id })
+    }
+
+    /// Discover the fixed B3 service on a connected peer.
+    #[cfg(target_arch = "riscv32")]
+    pub fn discover_b3_service(
+        &mut self,
+        client: BleGattClient,
+        conn_id: u16,
+    ) -> Result<(), BleB3Error> {
+        let mut uuid = BtUuid::from_u16(BLE_B3_SERVICE_UUID);
+        let status = unsafe { gattc_discovery_service(client.client_id, conn_id, &raw mut uuid) };
+        if status != 0 {
+            return Err(BleB3Error::DiscoverService(status));
+        }
+        Ok(())
+    }
+
+    /// Discover the fixed B3 characteristic within a discovered service.
+    #[cfg(target_arch = "riscv32")]
+    pub fn discover_b3_characteristic(
+        &mut self,
+        client: BleGattClient,
+        conn_id: u16,
+        service_handle: u16,
+    ) -> Result<(), BleB3Error> {
+        let mut parameters = GattcDiscoverCharacteristic {
+            service_handle,
+            uuid: BtUuid::from_u16(BLE_B3_CHARACTERISTIC_UUID),
+        };
+        let status =
+            unsafe { gattc_discovery_character(client.client_id, conn_id, &raw mut parameters) };
+        if status != 0 {
+            return Err(BleB3Error::DiscoverCharacteristic(status));
+        }
+        Ok(())
+    }
+
+    /// Discover descriptors attached to a characteristic declaration.
+    #[cfg(target_arch = "riscv32")]
+    pub fn discover_descriptors(
+        &mut self,
+        client: BleGattClient,
+        conn_id: u16,
+        declaration_handle: u16,
+    ) -> Result<(), BleB3Error> {
+        let status =
+            unsafe { gattc_discovery_descriptor(client.client_id, conn_id, declaration_handle) };
+        if status != 0 {
+            return Err(BleB3Error::DiscoverDescriptor(status));
+        }
+        Ok(())
+    }
+
+    /// Submit one bounded GATT write request.
+    #[cfg(target_arch = "riscv32")]
+    pub fn gatt_write(
+        &mut self,
+        client: BleGattClient,
+        conn_id: u16,
+        handle: u16,
+        value: &'static mut [u8],
+    ) -> Result<(), BleB3Error> {
+        if value.len() > BLE_B3_VALUE_CAPACITY {
+            return Err(BleB3Error::ValueTooLong {
+                length: value.len(),
+            });
+        }
+        let mut parameters = GattcHandleValue {
+            handle,
+            data_len: value.len() as u16,
+            data: value.as_mut_ptr(),
+        };
+        let status = unsafe { gattc_write_req(client.client_id, conn_id, &raw mut parameters) };
+        if status != 0 {
+            return Err(BleB3Error::Write(status));
+        }
+        Ok(())
+    }
+
+    /// Send a notification or indication according to the peer CCC value.
+    #[cfg(target_arch = "riscv32")]
+    pub fn gatt_notify_or_indicate(
+        &mut self,
+        server: BleGattServer,
+        conn_id: u16,
+        value: &'static mut [u8],
+    ) -> Result<(), BleB3Error> {
+        if value.len() > BLE_B3_VALUE_CAPACITY {
+            return Err(BleB3Error::ValueTooLong {
+                length: value.len(),
+            });
+        }
+        let mut parameters = GattsNotification {
+            attr_handle: server.value_handle,
+            value_len: value.len() as u16,
+            value: value.as_mut_ptr(),
+        };
+        let status =
+            unsafe { gatts_notify_indicate(server.server_id, conn_id, &raw mut parameters) };
+        if status != 0 {
+            return Err(BleB3Error::NotifyOrIndicate(status));
+        }
+        Ok(())
+    }
+
+    /// Disconnect one peer and rely on the copied GAP event for cleanup proof.
+    #[cfg(target_arch = "riscv32")]
+    pub fn disconnect(&mut self, address: [u8; 6], address_type: u8) -> Result<(), BleB3Error> {
+        let address = BdAddr {
+            addr: address,
+            address_type,
+        };
+        let status = unsafe { gap_ble_disconnect_remote_device(&raw const address) };
+        if status != 0 {
+            return Err(BleB3Error::Disconnect(status));
+        }
+        Ok(())
+    }
+
     /// Host builds cannot invoke the WS63 GAP implementation.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn start_advertising(&mut self, _: &'static [u8]) -> Result<(), BleB2Error> {
@@ -392,6 +729,55 @@ impl BleB1Controller {
     pub fn start_scanning(&mut self) -> Result<(), BleB2Error> {
         Err(BleB2Error::UnsupportedTarget)
     }
+
+    /// Host builds cannot invoke the WS63 GAP/GATT implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
+        Err(BleB3Error::UnsupportedTarget)
+    }
+
+    /// Host builds cannot invoke the WS63 GAP/GATT implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn register_gatt_client(&mut self) -> Result<BleGattClient, BleB3Error> {
+        Err(BleB3Error::UnsupportedTarget)
+    }
+}
+
+/// Fail-closed errors from the bounded B3 GATT contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BleB3Error {
+    /// Stopping the active scan failed.
+    StopScanning(u32),
+    /// Starting an ACL connection failed.
+    Connect(u32),
+    /// Registering the GATT server application failed.
+    RegisterServer(u32),
+    /// Adding the primary service failed.
+    AddService(u32),
+    /// Adding the B3 characteristic failed.
+    AddCharacteristic(u32),
+    /// Adding the CCC descriptor failed.
+    AddDescriptor(u32),
+    /// Starting the primary service failed.
+    StartService(u32),
+    /// Registering the GATT client application failed.
+    RegisterClient(u32),
+    /// Starting service discovery failed.
+    DiscoverService(u32),
+    /// Starting characteristic discovery failed.
+    DiscoverCharacteristic(u32),
+    /// Starting descriptor discovery failed.
+    DiscoverDescriptor(u32),
+    /// Submitting a GATT write request failed.
+    Write(u32),
+    /// Submitting a notification or indication failed.
+    NotifyOrIndicate(u32),
+    /// Disconnecting the peer failed.
+    Disconnect(u32),
+    /// A payload exceeded the bounded B3 event/value capacity.
+    ValueTooLong { length: usize },
+    /// The operation is unavailable outside WS63 target firmware.
+    UnsupportedTarget,
 }
 
 /// Fail-closed errors returned while starting BLE B2 advertising or scanning.
@@ -442,6 +828,10 @@ pub enum BleB1InitError {
     EventSinkAlreadyInstalled,
     /// GAP callback registration returned a vendor error.
     RegisterCallbacks(u32),
+    /// GATT server callback registration returned a vendor error.
+    RegisterGattServerCallbacks(u32),
+    /// GATT client callback registration returned a vendor error.
+    RegisterGattClientCallbacks(u32),
     /// BLE B1 is executable only on WS63 target firmware.
     UnsupportedTarget,
 }
@@ -507,6 +897,140 @@ struct GapBleScanResult {
 
 #[cfg(target_arch = "riscv32")]
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct BtUuid {
+    length: u8,
+    bytes: [u8; 16],
+}
+
+#[cfg(target_arch = "riscv32")]
+impl BtUuid {
+    const fn from_u16(value: u16) -> Self {
+        let mut bytes = [0; 16];
+        bytes[0] = (value >> 8) as u8;
+        bytes[1] = value as u8;
+        Self { length: 2, bytes }
+    }
+
+    fn as_u16(&self) -> u16 {
+        if self.length != 2 {
+            return 0;
+        }
+        u16::from_be_bytes([self.bytes[0], self.bytes[1]])
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsAddCharacteristic {
+    uuid: BtUuid,
+    permissions: u8,
+    properties: u8,
+    value_len: u16,
+    value: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsAddCharacteristicResult {
+    declaration_handle: u16,
+    value_handle: u16,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsAddDescriptor {
+    uuid: BtUuid,
+    permissions: u8,
+    value_len: u16,
+    value: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsWriteRequest {
+    request_id: u16,
+    handle: u16,
+    offset: u16,
+    need_response: bool,
+    need_authorize: bool,
+    is_prepare: bool,
+    length: u16,
+    value: *const u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsNotification {
+    attr_handle: u16,
+    value_len: u16,
+    value: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcHandleValue {
+    handle: u16,
+    data_len: u16,
+    data: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcDiscoverServiceResult {
+    start_handle: u16,
+    end_handle: u16,
+    uuid: BtUuid,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcDiscoverCharacteristic {
+    service_handle: u16,
+    uuid: BtUuid,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcDiscoverCharacteristicResult {
+    uuid: BtUuid,
+    declaration_handle: u16,
+    value_handle: u16,
+    properties: u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcDiscoverDescriptorResult {
+    handle: u16,
+    uuid: BtUuid,
+}
+
+#[cfg(target_arch = "riscv32")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+
+    assert!(size_of::<BtUuid>() == 17);
+    assert!(size_of::<GattsAddCharacteristic>() == 28);
+    assert!(offset_of!(GattsAddCharacteristic, value_len) == 20);
+    assert!(offset_of!(GattsAddCharacteristic, value) == 24);
+    assert!(size_of::<GattsAddCharacteristicResult>() == 4);
+    assert!(size_of::<GattsAddDescriptor>() == 24);
+    assert!(offset_of!(GattsAddDescriptor, value) == 20);
+    assert!(size_of::<GattsWriteRequest>() == 16);
+    assert!(offset_of!(GattsWriteRequest, length) == 10);
+    assert!(offset_of!(GattsWriteRequest, value) == 12);
+    assert!(size_of::<GattsNotification>() == 8);
+    assert!(size_of::<GattcHandleValue>() == 8);
+    assert!(size_of::<GattcDiscoverServiceResult>() == 22);
+    assert!(size_of::<GattcDiscoverCharacteristic>() == 20);
+    assert!(size_of::<GattcDiscoverCharacteristicResult>() == 24);
+    assert!(offset_of!(GattcDiscoverCharacteristicResult, declaration_handle) == 18);
+    assert!(size_of::<GattcDiscoverDescriptorResult>() == 20);
+};
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
 struct GapBleCallbacks {
     enable: Option<extern "C" fn(u32)>,
     disable: *const c_void,
@@ -516,7 +1040,7 @@ struct GapBleCallbacks {
     start_advertising: Option<extern "C" fn(u8, u32)>,
     stop_advertising: *const c_void,
     scan_result: Option<extern "C" fn(*const GapBleScanResult)>,
-    connection_state: *const c_void,
+    connection_state: Option<extern "C" fn(u16, *const BdAddr, u32, u32, u32)>,
     pairing_result: *const c_void,
     read_rssi: *const c_void,
     terminate_advertising: *const c_void,
@@ -538,7 +1062,7 @@ impl GapBleCallbacks {
             start_advertising: Some(ble_start_advertising_callback),
             stop_advertising: core::ptr::null(),
             scan_result: Some(ble_scan_result_callback),
-            connection_state: core::ptr::null(),
+            connection_state: Some(ble_connection_state_callback),
             pairing_result: core::ptr::null(),
             read_rssi: core::ptr::null(),
             terminate_advertising: core::ptr::null(),
@@ -551,7 +1075,90 @@ impl GapBleCallbacks {
 }
 
 #[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattsCallbacks {
+    add_service: *const c_void,
+    add_characteristic: *const c_void,
+    add_descriptor: *const c_void,
+    start_service: Option<extern "C" fn(u8, u16, u32)>,
+    stop_service: *const c_void,
+    delete_service: *const c_void,
+    read_request: *const c_void,
+    write_request: Option<extern "C" fn(u8, u16, *const GattsWriteRequest, u32)>,
+    mtu_changed: *const c_void,
+    indication_confirm: Option<extern "C" fn(u8, u16, u32)>,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl GattsCallbacks {
+    const fn b3() -> Self {
+        Self {
+            add_service: core::ptr::null(),
+            add_characteristic: core::ptr::null(),
+            add_descriptor: core::ptr::null(),
+            start_service: Some(ble_gatts_service_started_callback),
+            stop_service: core::ptr::null(),
+            delete_service: core::ptr::null(),
+            read_request: core::ptr::null(),
+            write_request: Some(ble_gatts_write_callback),
+            mtu_changed: core::ptr::null(),
+            indication_confirm: Some(ble_gatts_indication_confirmed_callback),
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct GattcCallbacks {
+    discover_service: Option<extern "C" fn(u8, u16, *const GattcDiscoverServiceResult, u32)>,
+    discover_service_complete: *const c_void,
+    discover_characteristic:
+        Option<extern "C" fn(u8, u16, *const GattcDiscoverCharacteristicResult, u32)>,
+    discover_characteristic_complete: *const c_void,
+    discover_descriptor: Option<extern "C" fn(u8, u16, *const GattcDiscoverDescriptorResult, u32)>,
+    discover_descriptor_complete: *const c_void,
+    read: *const c_void,
+    read_complete: *const c_void,
+    write: Option<extern "C" fn(u8, u16, u16, u32)>,
+    mtu_changed: *const c_void,
+    notification: Option<extern "C" fn(u8, u16, *const GattcHandleValue, u32)>,
+    indication: Option<extern "C" fn(u8, u16, *const GattcHandleValue, u32)>,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl GattcCallbacks {
+    const fn b3() -> Self {
+        Self {
+            discover_service: Some(ble_gattc_service_callback),
+            discover_service_complete: core::ptr::null(),
+            discover_characteristic: Some(ble_gattc_characteristic_callback),
+            discover_characteristic_complete: core::ptr::null(),
+            discover_descriptor: Some(ble_gattc_descriptor_callback),
+            discover_descriptor_complete: core::ptr::null(),
+            read: core::ptr::null(),
+            read_complete: core::ptr::null(),
+            write: Some(ble_gattc_write_callback),
+            mtu_changed: core::ptr::null(),
+            notification: Some(ble_gattc_notification_callback),
+            indication: Some(ble_gattc_indication_callback),
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+const _: () = {
+    use core::mem::size_of;
+
+    assert!(size_of::<GattsCallbacks>() == 10 * size_of::<usize>());
+    assert!(size_of::<GattcCallbacks>() == 12 * size_of::<usize>());
+};
+
+#[cfg(target_arch = "riscv32")]
 static mut BLE_CALLBACKS: GapBleCallbacks = GapBleCallbacks::b2();
+#[cfg(target_arch = "riscv32")]
+static mut GATTS_CALLBACKS: GattsCallbacks = GattsCallbacks::b3();
+#[cfg(target_arch = "riscv32")]
+static mut GATTC_CALLBACKS: GattcCallbacks = GattcCallbacks::b3();
 
 #[cfg(target_arch = "riscv32")]
 fn push_ble_event(event: BleB2Event) {
@@ -621,6 +1228,202 @@ extern "C" fn ble_scan_result_callback(result: *const GapBleScanResult) {
 }
 
 #[cfg(target_arch = "riscv32")]
+extern "C" fn ble_connection_state_callback(
+    conn_id: u16,
+    address: *const BdAddr,
+    state: u32,
+    pair_state: u32,
+    reason: u32,
+) {
+    let Some(address) = (unsafe { address.as_ref() }) else {
+        return;
+    };
+    push_ble_event(BleB2Event::ConnectionState {
+        conn_id,
+        address: address.addr,
+        address_type: address.address_type,
+        connected: state == 1,
+        pair_state,
+        reason,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gatts_service_started_callback(server_id: u8, service_handle: u16, status: u32) {
+    push_ble_event(BleB2Event::GattServiceStarted {
+        server_id,
+        service_handle,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gatts_write_callback(
+    server_id: u8,
+    conn_id: u16,
+    request: *const GattsWriteRequest,
+    status: u32,
+) {
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return;
+    };
+    let mut value = [0; BLE_B3_VALUE_CAPACITY];
+    let length = usize::from(request.length).min(value.len());
+    if length != 0 && !request.value.is_null() {
+        // SAFETY: the vendor owns the request payload for the callback only;
+        // copy it before returning so no borrowed pointer escapes.
+        unsafe { core::ptr::copy_nonoverlapping(request.value, value.as_mut_ptr(), length) };
+    }
+    push_ble_event(BleB2Event::GattServerWrite {
+        server_id,
+        conn_id,
+        handle: request.handle,
+        status,
+        value_len: length as u8,
+        value,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gatts_indication_confirmed_callback(server_id: u8, conn_id: u16, status: u32) {
+    push_ble_event(BleB2Event::GattIndicationConfirmed {
+        server_id,
+        conn_id,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_service_callback(
+    client_id: u8,
+    conn_id: u16,
+    service: *const GattcDiscoverServiceResult,
+    status: u32,
+) {
+    let Some(service) = (unsafe { service.as_ref() }) else {
+        return;
+    };
+    push_ble_event(BleB2Event::GattServiceDiscovered {
+        client_id,
+        conn_id,
+        start_handle: service.start_handle,
+        end_handle: service.end_handle,
+        uuid: service.uuid.as_u16(),
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_characteristic_callback(
+    client_id: u8,
+    conn_id: u16,
+    characteristic: *const GattcDiscoverCharacteristicResult,
+    status: u32,
+) {
+    let Some(characteristic) = (unsafe { characteristic.as_ref() }) else {
+        return;
+    };
+    push_ble_event(BleB2Event::GattCharacteristicDiscovered {
+        client_id,
+        conn_id,
+        declaration_handle: characteristic.declaration_handle,
+        value_handle: characteristic.value_handle,
+        properties: characteristic.properties,
+        uuid: characteristic.uuid.as_u16(),
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_descriptor_callback(
+    client_id: u8,
+    conn_id: u16,
+    descriptor: *const GattcDiscoverDescriptorResult,
+    status: u32,
+) {
+    let Some(descriptor) = (unsafe { descriptor.as_ref() }) else {
+        return;
+    };
+    push_ble_event(BleB2Event::GattDescriptorDiscovered {
+        client_id,
+        conn_id,
+        handle: descriptor.handle,
+        uuid: descriptor.uuid.as_u16(),
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_write_callback(client_id: u8, conn_id: u16, handle: u16, status: u32) {
+    push_ble_event(BleB2Event::GattWriteCompleted {
+        client_id,
+        conn_id,
+        handle,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+fn push_gattc_value(
+    client_id: u8,
+    conn_id: u16,
+    raw: *const GattcHandleValue,
+    status: u32,
+    indication: bool,
+) {
+    let Some(raw) = (unsafe { raw.as_ref() }) else {
+        return;
+    };
+    let mut value = [0; BLE_B3_VALUE_CAPACITY];
+    let length = usize::from(raw.data_len).min(value.len());
+    if length != 0 && !raw.data.is_null() {
+        // SAFETY: callback payload storage is vendor-owned for this callback;
+        // copy it into the bounded event before returning.
+        unsafe { core::ptr::copy_nonoverlapping(raw.data, value.as_mut_ptr(), length) };
+    }
+    let event = if indication {
+        BleB2Event::GattIndication {
+            client_id,
+            conn_id,
+            handle: raw.handle,
+            status,
+            value_len: length as u8,
+            value,
+        }
+    } else {
+        BleB2Event::GattNotification {
+            client_id,
+            conn_id,
+            handle: raw.handle,
+            status,
+            value_len: length as u8,
+            value,
+        }
+    };
+    push_ble_event(event);
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_notification_callback(
+    client_id: u8,
+    conn_id: u16,
+    value: *const GattcHandleValue,
+    status: u32,
+) {
+    push_gattc_value(client_id, conn_id, value, status, false);
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_gattc_indication_callback(
+    client_id: u8,
+    conn_id: u16,
+    value: *const GattcHandleValue,
+    status: u32,
+) {
+    push_gattc_value(client_id, conn_id, value, status, true);
+}
+
+#[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
     fn bt_thread_handle(argument: *mut c_void);
     fn bt_acore_task_main();
@@ -636,6 +1439,45 @@ unsafe extern "C" {
     fn gap_ble_start_adv(advertising_id: u8) -> u32;
     fn gap_ble_set_scan_parameters(parameters: *const GapBleScanParameters) -> u32;
     fn gap_ble_start_scan() -> u32;
+    fn gap_ble_stop_scan() -> u32;
+    fn gap_ble_connect_remote_device(address: *const BdAddr) -> u32;
+    fn gap_ble_disconnect_remote_device(address: *const BdAddr) -> u32;
+    fn gatts_register_callbacks(callbacks: *mut GattsCallbacks) -> u32;
+    fn gatts_register_server(app_uuid: *mut BtUuid, server_id: *mut u8) -> u32;
+    fn gatts_add_service_sync(
+        server_id: u8,
+        service_uuid: *mut BtUuid,
+        is_primary: bool,
+        handle: *mut u16,
+    ) -> u32;
+    fn gatts_add_characteristic_sync(
+        server_id: u8,
+        service_handle: u16,
+        characteristic: *mut GattsAddCharacteristic,
+        result: *mut GattsAddCharacteristicResult,
+    ) -> u32;
+    fn gatts_add_descriptor_sync(
+        server_id: u8,
+        service_handle: u16,
+        descriptor: *mut GattsAddDescriptor,
+        handle: *mut u16,
+    ) -> u32;
+    fn gatts_start_service(server_id: u8, service_handle: u16) -> u32;
+    fn gatts_notify_indicate(
+        server_id: u8,
+        conn_id: u16,
+        notification: *mut GattsNotification,
+    ) -> u32;
+    fn gattc_register_callbacks(callbacks: *mut GattcCallbacks) -> u32;
+    fn gattc_register_client(app_uuid: *mut BtUuid, client_id: *mut u8) -> u32;
+    fn gattc_discovery_service(client_id: u8, conn_id: u16, uuid: *mut BtUuid) -> u32;
+    fn gattc_discovery_character(
+        client_id: u8,
+        conn_id: u16,
+        parameters: *mut GattcDiscoverCharacteristic,
+    ) -> u32;
+    fn gattc_discovery_descriptor(client_id: u8, conn_id: u16, declaration_handle: u16) -> u32;
+    fn gattc_write_req(client_id: u8, conn_id: u16, value: *mut GattcHandleValue) -> u32;
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -750,6 +1592,17 @@ pub fn init_ble_b1(
         return Err(BleB1InitError::RegisterCallbacks(callback_status));
     }
     crate::log_emit(b"RFDBG_BLE_B2_CALLBACKS_OK\r\n");
+    let callback_status =
+        unsafe { gatts_register_callbacks(core::ptr::addr_of_mut!(GATTS_CALLBACKS)) };
+    if callback_status != 0 {
+        return Err(BleB1InitError::RegisterGattServerCallbacks(callback_status));
+    }
+    let callback_status =
+        unsafe { gattc_register_callbacks(core::ptr::addr_of_mut!(GATTC_CALLBACKS)) };
+    if callback_status != 0 {
+        return Err(BleB1InitError::RegisterGattClientCallbacks(callback_status));
+    }
+    crate::log_emit(b"RFDBG_BLE_B3_CALLBACKS_OK\r\n");
 
     let groups: [_; TASK_COUNT] = [
         task_group(OWNER_BT, STACK_BT)?,
@@ -869,6 +1722,24 @@ mod tests {
             assert_eq!(queue.pop(), Some(BleB2Event::Enabled { status }));
         }
         assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn b3_payload_event_is_copied_through_the_bounded_queue() {
+        let queue = BleEventQueue::new();
+        let mut value = [0; BLE_B3_VALUE_CAPACITY];
+        value[..2].copy_from_slice(b"B3");
+        let event = BleB2Event::GattNotification {
+            client_id: 1,
+            conn_id: 2,
+            handle: 3,
+            status: 0,
+            value_len: 2,
+            value,
+        };
+        queue.push(event);
+        assert_eq!(queue.pop(), Some(event));
+        assert_eq!(queue.dropped.load(Ordering::Relaxed), 0);
     }
 }
 

@@ -374,6 +374,8 @@ fn error_code(error: hisi_rf_ws63::BleB1InitError) -> u32 {
         BleB1InitError::Enable(status) => status,
         BleB1InitError::EventSinkAlreadyInstalled => 11,
         BleB1InitError::RegisterCallbacks(status) => status,
+        BleB1InitError::RegisterGattServerCallbacks(status) => status,
+        BleB1InitError::RegisterGattClientCallbacks(status) => status,
         BleB1InitError::UnsupportedTarget => 9,
     }
 }

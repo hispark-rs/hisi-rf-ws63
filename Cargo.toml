@@ -62,6 +62,16 @@ name = "ble_init_smoke"
 path = "examples/ble_init_smoke.rs"
 required-features = ["ble-init", "firmware-example"]
 
+[[example]]
+name = "ble_gatt_server_smoke"
+path = "examples/ble_gatt_server_smoke.rs"
+required-features = ["ble-init", "firmware-example"]
+
+[[example]]
+name = "ble_gatt_client_smoke"
+path = "examples/ble_gatt_client_smoke.rs"
+required-features = ["ble-init", "firmware-example"]
+
 [dependencies]
 hisi-alloc = "0.1.0-alpha.3"
 hisi-storage = "0.1.0-alpha.1"
