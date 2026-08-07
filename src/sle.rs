@@ -19,12 +19,13 @@ use ws63_radio_sys::sle::{
     AnnounceData, AnnounceParameters, AnnounceSeekCallbacks, ConnectionCallbacks,
     DefaultConnectionParameters, SeekParameters, SeekResult,
 };
+use ws63_radio_sys::ssap::Uuid;
 #[cfg(target_arch = "riscv32")]
 use ws63_radio_sys::ssap::{
     ClientCallbacks, ClientHandleValue, ClientWriteParameters, ClientWriteResult, ExchangeInfo,
     FindServiceResult, FindStructureParameters, FindStructureResult, NotifyIndicate,
     ServerCallbacks, ServerDescriptorInfo, ServerPropertyInfo, ServerReadRequest,
-    ServerWriteRequest, Uuid,
+    ServerWriteRequest,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.

@@ -23,6 +23,8 @@ PROFILES = {
         "wpa3-personal,smoltcp,incremental-backend-experiment,"
         "incremental-embassy-wait"
     ),
+    "ble-b3": "ble-init",
+    "sle-s3": "sle-init",
 }
 
 
@@ -48,6 +50,21 @@ REQUIRED_SIGNATURES = (
     "hisi_rf_ws63::WifiDevice::RxToken<'a> = hisi_rf_ws63::WifiRxToken",
     "hisi_rf_ws63::WifiDevice::TxToken<'a> = hisi_rf_ws63::WifiTxToken",
 )
+HIDDEN_STAGE_TOKENS = {
+    "ble-b3": (
+        "hisi_rf_ws63::BleB1Controller",
+        "hisi_rf_ws63::BleB2Event",
+        "hisi_rf_ws63::BleGattClient",
+        "hisi_rf_ws63::BleGattServer",
+        "hisi_rf_ws63::init_ble_b1",
+    ),
+    "sle-s3": (
+        "hisi_rf_ws63::SleS1Controller",
+        "hisi_rf_ws63::SleS1Event",
+        "hisi_rf_ws63::SsapServerHandles",
+        "hisi_rf_ws63::init_sle_s1",
+    ),
+}
 
 
 def public_api(target: str, profile: str) -> list[str]:
@@ -83,7 +100,8 @@ def main() -> int:
     args = parser.parse_args()
 
     lines = public_api(args.target, args.profile)
-    baseline = ROOT / ".github" / "public-api" / f"{args.profile}-incremental.txt"
+    suffix = "incremental" if args.profile in {"wpa2", "wpa3"} else "stage"
+    baseline = ROOT / ".github" / "public-api" / f"{args.profile}-{suffix}.txt"
     expected = baseline.read_text(encoding="utf-8").splitlines()
     if lines != expected:
         diff = "\n".join(
@@ -100,29 +118,38 @@ def main() -> int:
             f"the baseline only with an intentional API change:\n{diff}"
         )
 
-    exposed = [
-        line
-        for line in lines
-        if any(public_type in line for public_type in PUBLIC_COMPOSITION_TYPES)
-        and any(token in line for token in FORBIDDEN_TOKENS)
-    ]
-    if exposed:
-        raise RuntimeError(
-            "facade-owned API exposes hidden backend/runtime types:\n  "
-            + "\n  ".join(exposed)
-        )
-
     rendered = "\n".join(lines)
-    missing = [signature for signature in REQUIRED_SIGNATURES if signature not in rendered]
+    if args.profile in {"wpa2", "wpa3"}:
+        exposed = [
+            line
+            for line in lines
+            if any(public_type in line for public_type in PUBLIC_COMPOSITION_TYPES)
+            and any(token in line for token in FORBIDDEN_TOKENS)
+        ]
+        if exposed:
+            raise RuntimeError(
+                "facade-owned API exposes hidden backend/runtime types:\n  "
+                + "\n  ".join(exposed)
+            )
+        required = REQUIRED_SIGNATURES
+    else:
+        leaked = [token for token in HIDDEN_STAGE_TOKENS[args.profile] if token in rendered]
+        if leaked:
+            raise RuntimeError(
+                "internal stage API leaked into the documented public surface:\n  "
+                + "\n  ".join(leaked)
+            )
+        required = ()
+
+    missing = [signature for signature in required if signature not in rendered]
     if missing:
         raise RuntimeError(
-            "expected opaque composition signatures are missing:\n  "
+            "expected profile signatures are missing:\n  "
             + "\n  ".join(missing)
         )
 
     print(
-        f"WS63 {args.profile} public API matches its baseline and contains no "
-        "hidden backend/runtime types"
+        f"WS63 {args.profile} public API matches its reviewed baseline"
     )
     return 0
 

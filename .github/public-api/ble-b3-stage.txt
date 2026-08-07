@@ -1,0 +1,326 @@
+pub mod hisi_rf_ws63
+pub use hisi_rf_ws63::RfHeapMetrics
+pub use hisi_rf_ws63::WifiL2Capabilities
+pub mod hisi_rf_ws63::alloc
+#[no_mangle] pub c fn hisi_rf_ws63::alloc::osal_kfree(*mut core::ffi::c_void)
+#[no_mangle] pub c fn hisi_rf_ws63::alloc::osal_kmalloc(usize) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::alloc::osal_kmalloc_align(u32, u32, u32) -> *mut core::ffi::c_void
+pub mod hisi_rf_ws63::error
+pub struct hisi_rf_ws63::error::WifiError(pub hisi_rf_ws63::error::Errcode)
+pub const hisi_rf_ws63::error::ERRCODE_SUCC: hisi_rf_ws63::error::Errcode
+pub fn hisi_rf_ws63::error::check(hisi_rf_ws63::error::Errcode) -> core::result::Result<(), hisi_rf_ws63::error::WifiError>
+pub type hisi_rf_ws63::error::Errcode = u32
+pub mod hisi_rf_ws63::frw
+#[repr(C)] pub struct hisi_rf_ws63::frw::FrwMsg
+pub hisi_rf_ws63::frw::FrwMsg::data: *mut u8
+pub hisi_rf_ws63::frw::FrwMsg::data_len: u16
+pub hisi_rf_ws63::frw::FrwMsg::flags: u16
+pub hisi_rf_ws63::frw::FrwMsg::rsp: *mut u8
+pub hisi_rf_ws63::frw::FrwMsg::rsp_buf_len: u16
+pub hisi_rf_ws63::frw::FrwMsg::rsp_len: u16
+#[repr(C)] pub struct hisi_rf_ws63::frw::FrwMsgNode
+pub hisi_rf_ws63::frw::FrwMsgNode::msg: hisi_rf_ws63::frw::FrwMsg
+pub type hisi_rf_ws63::frw::MsgHandler = fn(*mut hisi_rf_ws63::frw::FrwMsg)
+pub mod hisi_rf_ws63::hcc
+pub mod hisi_rf_ws63::libc
+#[repr(C)] pub struct hisi_rf_ws63::libc::Timespec
+pub unsafe c fn hisi_rf_ws63::libc::__ws63_rom_memcmp(*const core::ffi::c_void, *const core::ffi::c_void, usize) -> core::ffi::primitives::c_int
+pub unsafe c fn hisi_rf_ws63::libc::__ws63_rom_memcpy(*mut core::ffi::c_void, *const core::ffi::c_void, usize) -> *mut core::ffi::c_void
+pub unsafe c fn hisi_rf_ws63::libc::__ws63_rom_memmove(*mut core::ffi::c_void, *const core::ffi::c_void, usize) -> *mut core::ffi::c_void
+pub unsafe c fn hisi_rf_ws63::libc::__ws63_rom_memset(*mut core::ffi::c_void, core::ffi::primitives::c_int, usize) -> *mut core::ffi::c_void
+pub unsafe c fn hisi_rf_ws63::libc::__ws63_rom_strlen(*const core::ffi::primitives::c_char) -> usize
+pub c fn hisi_rf_ws63::libc::atoi(*const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int
+pub c fn hisi_rf_ws63::libc::clock_gettime(core::ffi::primitives::c_int, *mut hisi_rf_ws63::libc::Timespec) -> core::ffi::primitives::c_int
+pub c fn hisi_rf_ws63::libc::free(*mut core::ffi::c_void)
+pub c fn hisi_rf_ws63::libc::gettimeofday(*mut hisi_rf_ws63::osal_ext::OsalTimeval, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+pub c fn hisi_rf_ws63::libc::malloc(core::ffi::primitives::c_ulong) -> *mut core::ffi::c_void
+pub c fn hisi_rf_ws63::libc::memalign(core::ffi::primitives::c_ulong, core::ffi::primitives::c_ulong) -> *mut core::ffi::c_void
+pub c fn hisi_rf_ws63::libc::panic() -> never
+pub c fn hisi_rf_ws63::libc::print_str(*const core::ffi::primitives::c_char)
+pub c fn hisi_rf_ws63::libc::realloc(*mut core::ffi::c_void, core::ffi::primitives::c_ulong) -> *mut core::ffi::c_void
+pub c fn hisi_rf_ws63::libc::strcmp(*const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int
+pub c fn hisi_rf_ws63::libc::strstr(*const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> *mut core::ffi::primitives::c_char
+pub c fn hisi_rf_ws63::libc::strtol(*const core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_long
+pub c fn hisi_rf_ws63::libc::tolower(core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+pub mod hisi_rf_ws63::log
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_print0() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_print1() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_print2() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_print3() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_print4() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print0(core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print1(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print2(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print3(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_event_wifi_print4(core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::log_oam_status_store(u8, u16, u16, u32)
+#[no_mangle] pub c fn hisi_rf_ws63::log::memcpy_s(*mut core::ffi::c_void, usize, *const core::ffi::c_void, usize) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::log::memset_s(*mut core::ffi::c_void, usize, core::ffi::primitives::c_int, usize) -> core::ffi::primitives::c_int
+#[no_mangle] pub unsafe c fn hisi_rf_ws63::log::osal_printk(*const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int
+#[no_mangle] pub unsafe c fn hisi_rf_ws63::log::snprintf_s(*mut core::ffi::primitives::c_char, usize, usize, *const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int
+pub mod hisi_rf_ws63::netif
+pub enum hisi_rf_ws63::netif::TxError
+pub hisi_rf_ws63::netif::TxError::InvalidLength
+pub hisi_rf_ws63::netif::TxError::NoDriver
+pub hisi_rf_ws63::netif::TxError::NoInterface
+pub hisi_rf_ws63::netif::TxError::NoMemory
+pub struct hisi_rf_ws63::netif::NetifDiagnostics
+pub hisi_rf_ws63::netif::NetifDiagnostics::address: usize
+pub hisi_rf_ws63::netif::NetifDiagnostics::driver_send: usize
+pub hisi_rf_ws63::netif::NetifDiagnostics::hardware_address: [u8; 6]
+pub hisi_rf_ws63::netif::NetifDiagnostics::hardware_address_len: u8
+pub fn hisi_rf_ws63::netif::diagnostics() -> core::option::Option<hisi_rf_ws63::netif::NetifDiagnostics>
+#[no_mangle] pub c fn hisi_rf_ws63::netif::driverif_input(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netif_set_link_down_interface(*mut core::ffi::c_void)
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netif_set_link_up_interface(*mut core::ffi::c_void)
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_add(*mut core::ffi::c_void, *const u32, *const u32, *const u32) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_add_ext_callback(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_add_ip6_linklocal_address(*mut core::ffi::c_void, u8) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_find_by_name(*const u8) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_get_addr(*mut core::ffi::c_void, *mut u32, *mut u32, *mut u32) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_remove(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_set_default(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_set_down(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_set_link_up(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_netif_set_up(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::netifapi_set_ip6_autoconfig_disabled(*mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::netif::pbuf_alloc(core::ffi::primitives::c_int, u16, core::ffi::primitives::c_int) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::netif::pbuf_free(*mut core::ffi::c_void) -> u8
+#[no_mangle] pub c fn hisi_rf_ws63::netif::pbuf_header(*mut core::ffi::c_void, i16) -> u8
+#[no_mangle] pub c fn hisi_rf_ws63::netif::pbuf_ref(*mut core::ffi::c_void)
+pub fn hisi_rf_ws63::netif::rx_dropped() -> u32
+pub fn hisi_rf_ws63::netif::rx_received() -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::netif::tcpip_callback(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+pub fn hisi_rf_ws63::netif::transmit(&[u8]) -> core::result::Result<(), hisi_rf_ws63::netif::TxError>
+pub fn hisi_rf_ws63::netif::tx_failed() -> u32
+pub mod hisi_rf_ws63::oal
+#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_alloc(core::ffi::primitives::c_uint) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_free(*mut core::ffi::c_void) -> core::ffi::primitives::c_uint
+pub mod hisi_rf_ws63::osal
+#[no_mangle] pub c fn hisi_rf_ws63::osal::__rt_irq_dispatch(u32)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_flush_all()
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_region_clean(*mut core::ffi::c_void, u32)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_region_inv(*mut core::ffi::c_void, u32)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_flush_cache()
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_get_current_pid() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_get_current_tid() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_clear(u32) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_disable(u32) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_enable(u32) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_free(u32, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_lock() -> core::ffi::primitives::c_ulong
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_request(u32, core::option::Option<fn(u32, *mut core::ffi::c_void)>, core::option::Option<fn(u32, *mut core::ffi::c_void)>, *const core::ffi::primitives::c_char, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_restore(core::ffi::primitives::c_ulong)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_irq_set_priority(core::ffi::primitives::c_uint, u16) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_kthread_create(core::option::Option<fn(*mut core::ffi::c_void) -> *mut core::ffi::c_void>, *mut core::ffi::c_void, *const core::ffi::primitives::c_char, usize) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_kthread_destroy(*mut core::ffi::c_void, u32)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_kthread_lock()
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_kthread_set_priority(*mut core::ffi::c_void, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_kthread_unlock()
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_msleep(u32)
+#[no_mangle] pub c fn hisi_rf_ws63::osal::osal_udelay(u32)
+pub mod hisi_rf_ws63::osal_adapt
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_add(*mut hisi_rf_ws63::osal_sync::OsalAtomic, core::ffi::primitives::c_int)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_dec(*mut hisi_rf_ws63::osal_sync::OsalAtomic)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_dec_return(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_destroy(*mut hisi_rf_ws63::osal_sync::OsalAtomic)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_inc(*mut hisi_rf_ws63::osal_sync::OsalAtomic)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_inc_return(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_init(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_read(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_atomic_set(*mut hisi_rf_ws63::osal_sync::OsalAtomic, core::ffi::primitives::c_int)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_event_clear(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_event_destroy(*mut hisi_rf_ws63::osal_queue::OsalEvent) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_event_init(*mut hisi_rf_ws63::osal_queue::OsalEvent) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_event_read(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_event_write(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_get_jiffies() -> u64
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_irq_lock() -> core::ffi::primitives::c_uint
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_irq_restore(core::ffi::primitives::c_uint)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_create(core::option::Option<fn(*mut core::ffi::c_void) -> *mut core::ffi::c_void>, *mut core::ffi::c_void, *const core::ffi::primitives::c_char, core::ffi::primitives::c_uint) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_destroy(*mut core::ffi::c_void, core::ffi::primitives::c_uint)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_lock()
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_set_priority(*mut core::ffi::c_void, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_should_stop() -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_kthread_unlock()
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_wait_destroy(*mut hisi_rf_ws63::osal_wait::OsalWait)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_wait_wakeup(*mut hisi_rf_ws63::osal_wait::OsalWait)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_workqueue_destroy(*mut core::ffi::c_void)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_adapt::osal_adapt_workqueue_init(*mut core::ffi::c_void, *mut core::ffi::c_void) -> core::ffi::primitives::c_int
+pub mod hisi_rf_ws63::osal_ext
+#[repr(C)] pub struct hisi_rf_ws63::osal_ext::OsalTimeval
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_adapt_get_current_tid() -> core::ffi::primitives::c_long
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_adapt_jiffies_to_msecs(core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_ulong
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_adapt_strncmp(*const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_copy_to_user(*mut core::ffi::c_void, *const core::ffi::c_void, core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_ulong
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_get_jiffies() -> u64
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_gettimeofday(*mut hisi_rf_ws63::osal_ext::OsalTimeval)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_memcmp(*const core::ffi::c_void, *const core::ffi::c_void, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_strcmp(*const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_strlen(*const core::ffi::primitives::c_char) -> core::ffi::primitives::c_uint
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_strtol(*const core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_long
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_vfree(*mut core::ffi::c_void)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_ext::osal_vmalloc(core::ffi::primitives::c_ulong) -> *mut core::ffi::c_void
+pub mod hisi_rf_ws63::osal_queue
+pub struct hisi_rf_ws63::osal_queue::EventDiagnostic
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::bits: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::event: usize
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::last_mode: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::last_read_mask: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::last_write_mask: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::matches: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::reads: u32
+pub hisi_rf_ws63::osal_queue::EventDiagnostic::writes: u32
+#[repr(C)] pub struct hisi_rf_ws63::osal_queue::OsalEvent
+pub fn hisi_rf_ws63::osal_queue::event_diagnostics(&mut [hisi_rf_ws63::osal_queue::EventDiagnostic]) -> usize
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_clear(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_destroy(*mut hisi_rf_ws63::osal_queue::OsalEvent) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_init(*mut hisi_rf_ws63::osal_queue::OsalEvent) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_read(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_event_write(*mut hisi_rf_ws63::osal_queue::OsalEvent, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_create(*const core::ffi::primitives::c_char, u16, *mut core::ffi::primitives::c_ulong, core::ffi::primitives::c_uint, u16) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_delete(core::ffi::primitives::c_ulong)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_get_msg_num(core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_uint
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_is_full(core::ffi::primitives::c_ulong) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_read_copy(core::ffi::primitives::c_ulong, *mut core::ffi::c_void, *mut core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_queue::osal_msg_queue_write_copy(core::ffi::primitives::c_ulong, *mut core::ffi::c_void, core::ffi::primitives::c_uint, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+pub mod hisi_rf_ws63::osal_sync
+#[repr(C)] pub struct hisi_rf_ws63::osal_sync::OsalAtomic
+#[repr(C)] pub struct hisi_rf_ws63::osal_sync::OsalMutex
+#[repr(C)] pub struct hisi_rf_ws63::osal_sync::OsalSemaphore
+#[repr(C)] pub struct hisi_rf_ws63::osal_sync::OsalSpinlock
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_dec(*mut hisi_rf_ws63::osal_sync::OsalAtomic)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_dec_return(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_inc(*mut hisi_rf_ws63::osal_sync::OsalAtomic)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_inc_return(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_read(*mut hisi_rf_ws63::osal_sync::OsalAtomic) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_atomic_set(*mut hisi_rf_ws63::osal_sync::OsalAtomic, core::ffi::primitives::c_int)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_mutex_destroy(*mut hisi_rf_ws63::osal_sync::OsalMutex)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_mutex_init(*mut hisi_rf_ws63::osal_sync::OsalMutex) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_mutex_lock(*mut hisi_rf_ws63::osal_sync::OsalMutex) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_mutex_lock_timeout(*mut hisi_rf_ws63::osal_sync::OsalMutex, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_mutex_unlock(*mut hisi_rf_ws63::osal_sync::OsalMutex)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_binary_sem_init(*mut hisi_rf_ws63::osal_sync::OsalSemaphore, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_destroy(*mut hisi_rf_ws63::osal_sync::OsalSemaphore)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_down(*mut hisi_rf_ws63::osal_sync::OsalSemaphore) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_down_timeout(*mut hisi_rf_ws63::osal_sync::OsalSemaphore, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_init(*mut hisi_rf_ws63::osal_sync::OsalSemaphore, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_sem_up(*mut hisi_rf_ws63::osal_sync::OsalSemaphore)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_lock(*mut hisi_rf_ws63::osal_sync::OsalSpinlock)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_lock_bh(*mut hisi_rf_ws63::osal_sync::OsalSpinlock)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_lock_destroy(*mut hisi_rf_ws63::osal_sync::OsalSpinlock)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_lock_init(*mut hisi_rf_ws63::osal_sync::OsalSpinlock) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_lock_irqsave(*mut hisi_rf_ws63::osal_sync::OsalSpinlock, *mut core::ffi::primitives::c_ulong)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_unlock(*mut hisi_rf_ws63::osal_sync::OsalSpinlock)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_unlock_bh(*mut hisi_rf_ws63::osal_sync::OsalSpinlock)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_sync::osal_spin_unlock_irqrestore(*mut hisi_rf_ws63::osal_sync::OsalSpinlock, *mut core::ffi::primitives::c_ulong)
+pub mod hisi_rf_ws63::osal_wait
+#[repr(C)] pub struct hisi_rf_ws63::osal_wait::OsalWait
+pub hisi_rf_ws63::osal_wait::OsalWait::wait: *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_destroy(*mut hisi_rf_ws63::osal_wait::OsalWait)
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_init(*mut hisi_rf_ws63::osal_wait::OsalWait) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_interruptible(*mut hisi_rf_ws63::osal_wait::OsalWait, hisi_rf_ws63::osal_wait::WaitConditionFunc, *const core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_timeout_interruptible(*mut hisi_rf_ws63::osal_wait::OsalWait, hisi_rf_ws63::osal_wait::WaitConditionFunc, *const core::ffi::c_void, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_uninterruptible(*mut hisi_rf_ws63::osal_wait::OsalWait, hisi_rf_ws63::osal_wait::WaitConditionFunc, *const core::ffi::c_void) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::osal_wait::osal_wait_wakeup(*mut hisi_rf_ws63::osal_wait::OsalWait)
+pub type hisi_rf_ws63::osal_wait::WaitConditionFunc = core::option::Option<fn(*const core::ffi::c_void) -> core::ffi::primitives::c_int>
+pub mod hisi_rf_ws63::timer
+#[repr(C)] pub struct hisi_rf_ws63::timer::OsalTimer
+pub hisi_rf_ws63::timer::OsalTimer::data: core::ffi::primitives::c_ulong
+pub hisi_rf_ws63::timer::OsalTimer::handler: core::option::Option<fn(core::ffi::primitives::c_ulong)>
+pub hisi_rf_ws63::timer::OsalTimer::interval: core::ffi::primitives::c_uint
+pub hisi_rf_ws63::timer::OsalTimer::timer: *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_adapt_timer_destroy(*mut hisi_rf_ws63::timer::OsalTimer) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_adapt_timer_init(*mut hisi_rf_ws63::timer::OsalTimer, *mut core::ffi::c_void, core::ffi::primitives::c_ulong, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_adapt_timer_mod(*mut hisi_rf_ws63::timer::OsalTimer, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_timer_destroy(*mut hisi_rf_ws63::timer::OsalTimer) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_timer_init(*mut hisi_rf_ws63::timer::OsalTimer) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_timer_mod(*mut hisi_rf_ws63::timer::OsalTimer, core::ffi::primitives::c_uint) -> core::ffi::primitives::c_int
+#[no_mangle] pub c fn hisi_rf_ws63::timer::osal_timer_stop(*mut hisi_rf_ws63::timer::OsalTimer) -> core::ffi::primitives::c_int
+pub mod hisi_rf_ws63::uapi
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::get_dev_addr(*mut u8, u8, u8) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::get_tcxo_freq() -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_at_bt_register_cmd(*const core::ffi::c_void, u16) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_at_print(*const core::ffi::primitives::c_char) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_drv_cipher_trng_get_random(*mut u32) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_drv_cipher_trng_get_random_bytes(*mut u8, u32) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_efuse_read_bit(*mut u8, u32, u8) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_efuse_read_buffer(*mut u8, u32, u16) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_nv_read(u16, u16, *mut u16, *mut u8) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_nv_write(u16, *const u8, u16) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_tsensor_get_current_temp(*mut i8) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_wifi_softap_stop() -> i32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_wifi_sta_stop() -> i32
+pub mod hisi_rf_ws63::wifi
+pub enum hisi_rf_ws63::wifi::Error
+pub hisi_rf_ws63::wifi::Error::AlreadyInitialized
+pub hisi_rf_ws63::wifi::Error::Busy
+pub hisi_rf_ws63::wifi::Error::ConfigureSecurity(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::ConnectFailed(u16)
+pub hisi_rf_ws63::wifi::Error::CreateStation(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::Crypto(u32)
+pub hisi_rf_ws63::wifi::Error::CryptoInitialize(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::Disconnected(u16)
+pub hisi_rf_ws63::wifi::Error::Initialize(u32)
+pub hisi_rf_ws63::wifi::Error::InvalidPassphrase
+pub hisi_rf_ws63::wifi::Error::InvalidSsid
+pub hisi_rf_ws63::wifi::Error::OpenNetwork
+pub hisi_rf_ws63::wifi::Error::OpenStation(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::ProtectedNetwork
+pub hisi_rf_ws63::wifi::Error::RegisterEvents(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::Runtime(hisi_rf_rtos_driver::Error)
+pub hisi_rf_ws63::wifi::Error::ScanFailed(hisi_rf_ws63::wifi::ScanStatus)
+pub hisi_rf_ws63::wifi::Error::StartConnect(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::StartDisconnect(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::StartScan(core::ffi::primitives::c_int)
+pub hisi_rf_ws63::wifi::Error::TaskAdmission(hisi_rf_rtos_driver::TaskAdmissionError)
+pub hisi_rf_ws63::wifi::Error::Timebase(u32)
+pub hisi_rf_ws63::wifi::Error::Timeout
+pub hisi_rf_ws63::wifi::Error::UnsupportedSecurity(i32)
+pub hisi_rf_ws63::wifi::Error::UnsupportedTarget
+pub enum hisi_rf_ws63::wifi::ScanSecurity
+pub hisi_rf_ws63::wifi::ScanSecurity::Open
+pub hisi_rf_ws63::wifi::ScanSecurity::Protected
+pub enum hisi_rf_ws63::wifi::ScanStatus
+pub hisi_rf_ws63::wifi::ScanStatus::Failed
+pub hisi_rf_ws63::wifi::ScanStatus::Refused
+pub hisi_rf_ws63::wifi::ScanStatus::Success
+pub hisi_rf_ws63::wifi::ScanStatus::Timeout
+pub hisi_rf_ws63::wifi::ScanStatus::Unknown(u32)
+pub struct hisi_rf_ws63::wifi::ConnectionInfo
+pub hisi_rf_ws63::wifi::ConnectionInfo::bssid: [u8; 6]
+pub hisi_rf_ws63::wifi::ConnectionInfo::frequency_mhz: u16
+pub struct hisi_rf_ws63::wifi::OpenNetwork
+impl hisi_rf_ws63::wifi::OpenNetwork
+pub fn hisi_rf_ws63::wifi::OpenNetwork::from_scan(&hisi_rf_ws63::wifi::ScanResult) -> core::result::Result<Self, hisi_rf_ws63::wifi::Error>
+pub fn hisi_rf_ws63::wifi::OpenNetwork::ssid(&self) -> &[u8]
+pub struct hisi_rf_ws63::wifi::ScanResult
+pub hisi_rf_ws63::wifi::ScanResult::bssid: [u8; 6]
+pub hisi_rf_ws63::wifi::ScanResult::frequency_mhz: u16
+pub hisi_rf_ws63::wifi::ScanResult::rssi_dbm: i16
+impl hisi_rf_ws63::wifi::ScanResult
+pub const fn hisi_rf_ws63::wifi::ScanResult::channel(&self) -> u8
+pub const fn hisi_rf_ws63::wifi::ScanResult::empty() -> Self
+pub const fn hisi_rf_ws63::wifi::ScanResult::security(&self) -> hisi_rf_ws63::wifi::ScanSecurity
+pub fn hisi_rf_ws63::wifi::ScanResult::ssid(&self) -> &[u8]
+pub const fn hisi_rf_ws63::wifi::ScanResult::supports_wpa2_personal(&self) -> bool
+pub const fn hisi_rf_ws63::wifi::ScanResult::supports_wpa2_wpa3_transition(&self) -> bool
+pub const fn hisi_rf_ws63::wifi::ScanResult::supports_wpa3_personal(&self) -> bool
+pub struct hisi_rf_ws63::wifi::Wifi<'d>
+impl<'d> hisi_rf_ws63::wifi::Wifi<'d>
+pub fn hisi_rf_ws63::wifi::Wifi<'d>::connect_open(&mut self, &hisi_rf_ws63::wifi::OpenNetwork, u32) -> core::result::Result<hisi_rf_ws63::wifi::ConnectionInfo, hisi_rf_ws63::wifi::Error>
+pub fn hisi_rf_ws63::wifi::Wifi<'d>::initialize(hisi_hal::peripherals::ws63_only::Efuse<'d>) -> core::result::Result<Self, hisi_rf_ws63::wifi::Error>
+pub fn hisi_rf_ws63::wifi::Wifi<'d>::interface_name(&self) -> &[u8]
+pub fn hisi_rf_ws63::wifi::Wifi<'d>::scan(&mut self, &mut [hisi_rf_ws63::wifi::ScanResult], u32) -> core::result::Result<usize, hisi_rf_ws63::wifi::Error>
+pub const hisi_rf_ws63::wifi::MAX_SCAN_RESULTS: usize
+pub macro hisi_rf_ws63::declare_ble_b1_storage!
+pub macro hisi_rf_ws63::declare_radio_arena!
+pub macro hisi_rf_ws63::declare_radio_storage!
+pub const hisi_rf_ws63::OSAL_NOK: i32
+pub const hisi_rf_ws63::OSAL_OK: i32
+pub const hisi_rf_ws63::OSAL_SYS_WAIT_FOREVER: u32
+pub const hisi_rf_ws63::WS63_SHARED_RADIO_ARENA_BYTES: usize
+pub unsafe fn hisi_rf_ws63::prepare_vendor_memory()
+pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics
+pub fn hisi_rf_ws63::set_log_sink(hisi_rf_ws63::LogSink)
+pub type hisi_rf_ws63::LogSink = fn(&[u8])

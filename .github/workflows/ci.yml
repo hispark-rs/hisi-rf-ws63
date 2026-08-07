@@ -55,6 +55,14 @@ jobs:
         run: uv run --script .github/scripts/check-public-api.py --target x86_64-unknown-linux-gnu --profile wpa2
       - name: Check WPA3 public API snapshot and hidden implementation types
         run: uv run --script .github/scripts/check-public-api.py --target x86_64-unknown-linux-gnu --profile wpa3
+      - name: Freeze the internal BLE B3 migration surface
+        run: uv run --script .github/scripts/check-public-api.py --target x86_64-unknown-linux-gnu --profile ble-b3
+      - name: Compile the internal BLE B3 migration contract
+        run: cargo test --locked --target x86_64-unknown-linux-gnu --test radio_stage_contract --features ble-init
+      - name: Freeze the internal SLE S3 migration surface
+        run: uv run --script .github/scripts/check-public-api.py --target x86_64-unknown-linux-gnu --profile sle-s3
+      - name: Compile the internal SLE S3 migration contract
+        run: cargo test --locked --target x86_64-unknown-linux-gnu --test radio_stage_contract --features sle-init
 
   profile:
     runs-on: ubuntu-latest

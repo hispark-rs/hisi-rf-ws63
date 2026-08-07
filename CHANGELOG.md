@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Freeze the internal BLE B3 and SLE S3 migration inputs with host compile
+  contracts and documented public-API snapshots. The stage types remain
+  `#[doc(hidden)]`; this evidence supports the future `hisi-rf` composition
+  root without declaring the backend API stable.
+- Keep the SLE UUID type available to host rustdoc/API builds, and keep the
+  target-only BLE callback queue warning-free under host clippy.
+
 ## [0.1.0-alpha.74] - 2026-08-07
 
 ### Added

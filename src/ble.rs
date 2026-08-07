@@ -203,6 +203,7 @@ impl BleEventQueue {
         }
     }
 
+    #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
     fn push(&self, event: BleB2Event) {
         let accepted = critical_section::with(|cs| {
             let mut ring = self.ring.borrow(cs).borrow_mut();
