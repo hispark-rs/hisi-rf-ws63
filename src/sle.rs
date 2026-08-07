@@ -9,6 +9,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
+use hisi_rf_core::sle::{AnnounceConfig, SeekConfig};
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -36,6 +37,73 @@ pub const SLE_S1_MINIMUM_TASK_STACK_BYTES: usize = 512;
 pub const SLE_S1_EVENT_DATA_CAPACITY: usize = 64;
 
 const EVENT_CAPACITY: usize = 32;
+
+#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+struct SleS1OperationStorage {
+    announce_data: [u8; SLE_S1_EVENT_DATA_CAPACITY],
+    announce_len: u16,
+    seek_response_data: [u8; SLE_S1_EVENT_DATA_CAPACITY],
+    seek_response_len: u16,
+    #[cfg(target_arch = "riscv32")]
+    announce_parameters: AnnounceParameters,
+    #[cfg(target_arch = "riscv32")]
+    seek_parameters: SeekParameters,
+}
+
+impl SleS1OperationStorage {
+    const fn new() -> Self {
+        Self {
+            announce_data: [0; SLE_S1_EVENT_DATA_CAPACITY],
+            announce_len: 0,
+            seek_response_data: [0; SLE_S1_EVENT_DATA_CAPACITY],
+            seek_response_len: 0,
+            #[cfg(target_arch = "riscv32")]
+            announce_parameters: AnnounceParameters {
+                announce_handle: 1,
+                announce_mode: 0x03,
+                announce_gt_role: 0,
+                announce_level: 1,
+                announce_interval_min: 0xc8,
+                announce_interval_max: 0xc8,
+                announce_channel_map: 0x07,
+                announce_tx_power: 20,
+                own_address: Address {
+                    address_type: 0,
+                    bytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+                },
+                peer_address: Address {
+                    address_type: 0,
+                    bytes: [0; 6],
+                },
+                connection_interval_min: 0x14,
+                connection_interval_max: 0x14,
+                connection_max_latency: 0x1f3,
+                connection_supervision_timeout: 0x1f4,
+                extended_parameters: core::ptr::null_mut(),
+            },
+            #[cfg(target_arch = "riscv32")]
+            seek_parameters: SeekParameters {
+                own_address_type: 0,
+                filter_duplicates: 0,
+                filter_policy: 0,
+                phys: 1,
+                seek_type: [0, 0, 0],
+                interval: [100, 0, 0],
+                window: [100, 0, 0],
+            },
+        }
+    }
+
+    #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
+    fn store_announce_payloads(&mut self, config: &AnnounceConfig) {
+        let data = config.data().as_bytes();
+        let seek_response = config.seek_response().as_bytes();
+        self.announce_data[..data.len()].copy_from_slice(data);
+        self.announce_len = data.len() as u16;
+        self.seek_response_data[..seek_response.len()].copy_from_slice(seek_response);
+        self.seek_response_len = seek_response.len() as u16;
+    }
+}
 #[cfg(any(target_arch = "riscv32", test))]
 const TASK_COUNT: usize = 4;
 #[cfg(any(target_arch = "riscv32", test))]
@@ -186,6 +254,8 @@ impl EventRing {
 struct EventQueue {
     ring: critical_section::Mutex<RefCell<EventRing>>,
     dropped: AtomicU32,
+    enable_seen: AtomicBool,
+    enable_status: AtomicU32,
 }
 
 impl EventQueue {
@@ -193,7 +263,15 @@ impl EventQueue {
         Self {
             ring: critical_section::Mutex::new(RefCell::new(EventRing::new())),
             dropped: AtomicU32::new(0),
+            enable_seen: AtomicBool::new(false),
+            enable_status: AtomicU32::new(0),
         }
+    }
+
+    fn enable_status(&self) -> Option<u32> {
+        self.enable_seen
+            .load(Ordering::Acquire)
+            .then(|| self.enable_status.load(Ordering::Relaxed))
     }
 
     #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
@@ -259,6 +337,7 @@ impl<const N: usize> Default for SleS1ArenaStorage<N> {
 pub struct SleS1ControlStorage {
     crypto: StaticCell<Ws63CryptoStorage>,
     events: StaticCell<EventQueue>,
+    operations: StaticCell<SleS1OperationStorage>,
 }
 
 impl SleS1ControlStorage {
@@ -266,6 +345,7 @@ impl SleS1ControlStorage {
         Self {
             crypto: StaticCell::new(),
             events: StaticCell::new(),
+            operations: StaticCell::new(),
         }
     }
 }
@@ -309,6 +389,7 @@ impl<const N: usize> SleS1Storage<N> {
         Ok(InstalledSleS1Storage {
             crypto: self.control.crypto.init(Ws63CryptoStorage::new()),
             events: self.control.events.init(EventQueue::new()),
+            operations: self.control.operations.init(SleS1OperationStorage::new()),
         })
     }
 }
@@ -319,6 +400,8 @@ pub struct InstalledSleS1Storage {
     crypto: &'static mut Ws63CryptoStorage,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     events: &'static EventQueue,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    operations: &'static mut SleS1OperationStorage,
 }
 
 impl InstalledSleS1Storage {
@@ -368,6 +451,8 @@ impl SleS1Resources {
 pub struct SleS1Controller {
     _efuse: Efuse<'static>,
     events: &'static EventQueue,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    operations: &'static mut SleS1OperationStorage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -384,6 +469,39 @@ impl SleS1Controller {
 
     pub fn dropped_events(&self) -> u32 {
         self.events.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Return the asynchronous vendor enable result without consuming its event.
+    #[doc(hidden)]
+    pub fn enable_status(&self) -> Option<u32> {
+        self.events.enable_status()
+    }
+
+    /// Start announcing from an owned, validated U2 request.
+    ///
+    /// Payloads and raw parameter blocks are copied into process-lifetime
+    /// backend storage before the vendor stack receives their pointers.
+    #[cfg(target_arch = "riscv32")]
+    pub fn start_announce_config(
+        &mut self,
+        config: AnnounceConfig,
+    ) -> Result<(), SleS1OperationError> {
+        self.operations.store_announce_payloads(&config);
+        let timing = config.timing();
+        self.operations.announce_parameters.announce_interval_min = timing.minimum().as_units();
+        self.operations.announce_parameters.announce_interval_max = timing.maximum().as_units();
+        self.operations.announce_parameters.announce_channel_map = config.channels().bits();
+        self.start_announce_stored()
+    }
+
+    /// Start seeking from an owned, validated U2 request.
+    #[cfg(target_arch = "riscv32")]
+    pub fn start_seek_config(&mut self, config: SeekConfig) -> Result<(), SleS1OperationError> {
+        let timing = config.timing();
+        self.operations.seek_parameters.filter_duplicates = u8::from(config.filter_duplicates());
+        self.operations.seek_parameters.interval[0] = timing.interval().as_units();
+        self.operations.seek_parameters.window[0] = timing.window().as_units();
+        self.start_seek_stored()
     }
 
     #[cfg(target_arch = "riscv32")]
@@ -421,47 +539,41 @@ impl SleS1Controller {
         announce_data: &'static mut [u8],
         seek_response_data: &'static mut [u8],
     ) -> Result<(), SleS1OperationError> {
+        let data = hisi_rf_core::sle::AnnouncePayload::try_from_slice(announce_data).ok_or(
+            SleS1OperationError::AnnounceDataTooLong {
+                length: announce_data.len(),
+            },
+        )?;
+        let seek_response = hisi_rf_core::sle::AnnouncePayload::try_from_slice(seek_response_data)
+            .ok_or(SleS1OperationError::SeekResponseDataTooLong {
+                length: seek_response_data.len(),
+            })?;
+        let interval = hisi_rf_core::sle::AnnounceInterval::try_from_units(0xc8).unwrap();
+        self.start_announce_config(AnnounceConfig::new(
+            hisi_rf_core::sle::AnnounceTiming::try_new(interval, interval).unwrap(),
+            hisi_rf_core::sle::AnnounceChannels::ALL,
+            data,
+            seek_response,
+        ))
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    fn start_announce_stored(&mut self) -> Result<(), SleS1OperationError> {
         const HANDLE: u8 = 1;
-        let parameters = AnnounceParameters {
-            announce_handle: HANDLE,
-            announce_mode: 0x03,
-            announce_gt_role: 0,
-            announce_level: 1,
-            announce_interval_min: 0xc8,
-            announce_interval_max: 0xc8,
-            announce_channel_map: 0x07,
-            announce_tx_power: 20,
-            own_address: Address {
-                address_type: 0,
-                bytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
-            },
-            peer_address: Address {
-                address_type: 0,
-                bytes: [0; 6],
-            },
-            connection_interval_min: 0x14,
-            connection_interval_max: 0x14,
-            connection_max_latency: 0x1f3,
-            connection_supervision_timeout: 0x1f4,
-            extended_parameters: core::ptr::null_mut(),
+        let status = unsafe {
+            ws63_radio_sys::sle::sle_set_announce_param(
+                HANDLE,
+                &self.operations.announce_parameters,
+            )
         };
-        let status = unsafe { ws63_radio_sys::sle::sle_set_announce_param(HANDLE, &parameters) };
         if status != 0 {
             return Err(SleS1OperationError::SetAnnounceParameters(status));
         }
         let data = AnnounceData {
-            announce_data_len: announce_data.len().try_into().map_err(|_| {
-                SleS1OperationError::AnnounceDataTooLong {
-                    length: announce_data.len(),
-                }
-            })?,
-            seek_response_data_len: seek_response_data.len().try_into().map_err(|_| {
-                SleS1OperationError::SeekResponseDataTooLong {
-                    length: seek_response_data.len(),
-                }
-            })?,
-            announce_data: announce_data.as_mut_ptr(),
-            seek_response_data: seek_response_data.as_mut_ptr(),
+            announce_data_len: self.operations.announce_len,
+            seek_response_data_len: self.operations.seek_response_len,
+            announce_data: self.operations.announce_data.as_mut_ptr(),
+            seek_response_data: self.operations.seek_response_data.as_mut_ptr(),
         };
         let status = unsafe { ws63_radio_sys::sle::sle_set_announce_data(HANDLE, &data) };
         if status != 0 {
@@ -476,16 +588,18 @@ impl SleS1Controller {
 
     #[cfg(target_arch = "riscv32")]
     pub fn start_seek(&mut self) -> Result<(), SleS1OperationError> {
-        let mut parameters = SeekParameters {
-            own_address_type: 0,
-            filter_duplicates: 0,
-            filter_policy: 0,
-            phys: 1,
-            seek_type: [0, 0, 0],
-            interval: [100, 0, 0],
-            window: [100, 0, 0],
+        let interval = hisi_rf_core::sle::SeekInterval::try_from_units(100).unwrap();
+        self.start_seek_config(SeekConfig::new(
+            hisi_rf_core::sle::SeekTiming::try_new(interval, interval).unwrap(),
+            false,
+        ))
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    fn start_seek_stored(&mut self) -> Result<(), SleS1OperationError> {
+        let status = unsafe {
+            ws63_radio_sys::sle::sle_set_seek_param(&raw mut self.operations.seek_parameters)
         };
-        let status = unsafe { ws63_radio_sys::sle::sle_set_seek_param(&raw mut parameters) };
         if status != 0 {
             return Err(SleS1OperationError::SetSeekParameters(status));
         }
@@ -494,6 +608,16 @@ impl SleS1Controller {
             return Err(SleS1OperationError::StartSeek(status));
         }
         Ok(())
+    }
+
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn start_announce_config(&mut self, _: AnnounceConfig) -> Result<(), SleS1OperationError> {
+        Err(SleS1OperationError::UnsupportedTarget)
+    }
+
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn start_seek_config(&mut self, _: SeekConfig) -> Result<(), SleS1OperationError> {
+        Err(SleS1OperationError::UnsupportedTarget)
     }
 
     #[cfg(target_arch = "riscv32")]
@@ -780,6 +904,7 @@ pub enum SleS1OperationError {
     DiscoverSsapServices(u32),
     ReadSsap(u32),
     WriteSsap(u32),
+    UnsupportedTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -814,6 +939,13 @@ fn push_event(event: SleS1Event) {
 
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" fn enabled(status: u32) {
+    let queue = EVENT_QUEUE.load(Ordering::Acquire);
+    if !queue.is_null() {
+        // SAFETY: initialization publishes process-lifetime queue storage.
+        let queue = unsafe { &*queue };
+        queue.enable_status.store(status, Ordering::Relaxed);
+        queue.enable_seen.store(true, Ordering::Release);
+    }
     push_event(SleS1Event::Enabled { status });
 }
 #[cfg(target_arch = "riscv32")]
@@ -1273,6 +1405,7 @@ pub fn init_sle_s1(
     Ok(SleS1Controller {
         _efuse: resources.efuse,
         events: storage.events,
+        operations: storage.operations,
     })
 }
 
@@ -1297,6 +1430,26 @@ mod tests {
     }
 
     #[test]
+    fn typed_announce_payloads_move_into_backend_storage() {
+        let data = hisi_rf_core::sle::AnnouncePayload::try_from_slice(b"announce").unwrap();
+        let response = hisi_rf_core::sle::AnnouncePayload::try_from_slice(b"response").unwrap();
+        let interval = hisi_rf_core::sle::AnnounceInterval::try_from_units(0x20).unwrap();
+        let mut storage = SleS1OperationStorage::new();
+        {
+            let config = AnnounceConfig::new(
+                hisi_rf_core::sle::AnnounceTiming::try_new(interval, interval).unwrap(),
+                hisi_rf_core::sle::AnnounceChannels::ALL,
+                data,
+                response,
+            );
+            storage.store_announce_payloads(&config);
+        }
+
+        assert_eq!(&storage.announce_data[..8], b"announce");
+        assert_eq!(&storage.seek_response_data[..8], b"response");
+    }
+
+    #[test]
     fn event_queue_is_bounded_and_fifo() {
         let queue = EventQueue::new();
         for status in 0..EVENT_CAPACITY as u32 {
@@ -1308,5 +1461,17 @@ mod tests {
             assert_eq!(queue.pop(), Some(SleS1Event::Enabled { status }));
         }
         assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn enable_status_does_not_consume_the_public_event() {
+        let queue = EventQueue::new();
+        assert_eq!(queue.enable_status(), None);
+        queue.enable_status.store(0, Ordering::Relaxed);
+        queue.enable_seen.store(true, Ordering::Release);
+        queue.push(SleS1Event::Enabled { status: 0 });
+        assert_eq!(queue.enable_status(), Some(0));
+        assert_eq!(queue.pop(), Some(SleS1Event::Enabled { status: 0 }));
+        assert_eq!(queue.enable_status(), Some(0));
     }
 }

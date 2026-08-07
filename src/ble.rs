@@ -16,6 +16,9 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
 #[cfg(target_arch = "riscv32")]
+use hisi_rf_core::ble::ScanMode;
+use hisi_rf_core::ble::{AdvertisingConfig, ScanConfig};
+#[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
@@ -57,6 +60,59 @@ const OWNER_BT_SERVICE: u32 = 0x424c_4504;
 const BLE_B2_EVENT_CAPACITY: usize = 32;
 const BLE_B2_ADV_DATA_CAPACITY: usize = 31;
 const BLE_B3_VALUE_CAPACITY: usize = 32;
+
+#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+struct BleB2OperationStorage {
+    advertising_data: [u8; BLE_B2_ADV_DATA_CAPACITY],
+    advertising_len: u8,
+    #[cfg(target_arch = "riscv32")]
+    advertising_parameters: GapBleAdvertisingParameters,
+    #[cfg(target_arch = "riscv32")]
+    scan_parameters: GapBleScanParameters,
+}
+
+impl BleB2OperationStorage {
+    const fn new() -> Self {
+        Self {
+            advertising_data: [0; BLE_B2_ADV_DATA_CAPACITY],
+            advertising_len: 0,
+            #[cfg(target_arch = "riscv32")]
+            advertising_parameters: GapBleAdvertisingParameters {
+                min_interval: 0x20,
+                max_interval: 0x60,
+                advertising_type: 0,
+                own_address: BdAddr {
+                    addr: [0; 6],
+                    address_type: 0,
+                },
+                peer_address: BdAddr {
+                    addr: [0; 6],
+                    address_type: 0,
+                },
+                channel_map: 0x07,
+                filter_policy: 0,
+                tx_power: 0,
+                duration: 0,
+                max_events: 0,
+            },
+            #[cfg(target_arch = "riscv32")]
+            scan_parameters: GapBleScanParameters {
+                interval: 0x48,
+                window: 0x48,
+                scan_type: 0,
+                phy: 1,
+                filter_policy: 0,
+            },
+        }
+    }
+
+    #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
+    fn store_advertising_payload(&mut self, config: &AdvertisingConfig) {
+        let payload = config.payload().as_bytes();
+        self.advertising_data[..payload.len()].copy_from_slice(payload);
+        self.advertising_len = payload.len() as u8;
+    }
+}
 
 /// UUID used by the bounded B3 interoperability service.
 pub const BLE_B3_SERVICE_UUID: u16 = 0xABCD;
@@ -193,6 +249,8 @@ impl BleEventRing {
 struct BleEventQueue {
     ring: critical_section::Mutex<RefCell<BleEventRing>>,
     dropped: AtomicU32,
+    enable_seen: AtomicBool,
+    enable_status: AtomicU32,
 }
 
 impl BleEventQueue {
@@ -200,7 +258,15 @@ impl BleEventQueue {
         Self {
             ring: critical_section::Mutex::new(RefCell::new(BleEventRing::new())),
             dropped: AtomicU32::new(0),
+            enable_seen: AtomicBool::new(false),
+            enable_status: AtomicU32::new(0),
         }
+    }
+
+    fn enable_status(&self) -> Option<u32> {
+        self.enable_seen
+            .load(Ordering::Acquire)
+            .then(|| self.enable_status.load(Ordering::Relaxed))
     }
 
     #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
@@ -268,6 +334,7 @@ impl<const N: usize> Default for BleB1ArenaStorage<N> {
 pub struct BleB1ControlStorage {
     crypto: StaticCell<Ws63CryptoStorage>,
     events: StaticCell<BleEventQueue>,
+    operations: StaticCell<BleB2OperationStorage>,
 }
 
 impl BleB1ControlStorage {
@@ -276,6 +343,7 @@ impl BleB1ControlStorage {
         Self {
             crypto: StaticCell::new(),
             events: StaticCell::new(),
+            operations: StaticCell::new(),
         }
     }
 }
@@ -322,7 +390,12 @@ impl<const N: usize> BleB1Storage<N> {
         }
         let crypto = self.control.crypto.init(Ws63CryptoStorage::new());
         let events = self.control.events.init(BleEventQueue::new());
-        Ok(InstalledBleB1Storage { crypto, events })
+        let operations = self.control.operations.init(BleB2OperationStorage::new());
+        Ok(InstalledBleB1Storage {
+            crypto,
+            events,
+            operations,
+        })
     }
 }
 
@@ -332,6 +405,8 @@ pub struct InstalledBleB1Storage {
     crypto: &'static mut Ws63CryptoStorage,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     events: &'static BleEventQueue,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    operations: &'static mut BleB2OperationStorage,
 }
 
 impl InstalledBleB1Storage {
@@ -388,6 +463,8 @@ impl BleB1Resources {
 pub struct BleB1Controller {
     _efuse: Efuse<'static>,
     events: &'static BleEventQueue,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    operations: &'static mut BleB2OperationStorage,
 }
 
 /// Handles allocated by the pinned WS63 GATT server for the B3 service.
@@ -421,20 +498,72 @@ impl BleB1Controller {
         self.events.dropped.load(Ordering::Relaxed)
     }
 
+    /// Return the asynchronous vendor enable result without consuming its event.
+    #[doc(hidden)]
+    pub fn enable_status(&self) -> Option<u32> {
+        self.events.enable_status()
+    }
+
+    /// Start advertising from an owned, validated U2 request.
+    ///
+    /// The request is copied into process-lifetime backend storage before any
+    /// pointer is handed to the vendor stack.
+    #[cfg(target_arch = "riscv32")]
+    pub fn start_advertising_config(
+        &mut self,
+        config: AdvertisingConfig,
+    ) -> Result<(), BleB2Error> {
+        self.operations.store_advertising_payload(&config);
+        let timing = config.timing();
+        self.operations.advertising_parameters.min_interval = timing.minimum().as_units().into();
+        self.operations.advertising_parameters.max_interval = timing.maximum().as_units().into();
+        self.operations.advertising_parameters.channel_map = config.channels().bits();
+        self.start_advertising_stored()
+    }
+
+    /// Start scanning from an owned, validated U2 request.
+    #[cfg(target_arch = "riscv32")]
+    pub fn start_scanning_config(&mut self, config: ScanConfig) -> Result<(), BleB2Error> {
+        if config.filter_duplicates() {
+            return Err(BleB2Error::DuplicateFilteringUnsupported);
+        }
+        let timing = config.timing();
+        self.operations.scan_parameters.interval = timing.interval().as_units();
+        self.operations.scan_parameters.window = timing.window().as_units();
+        self.operations.scan_parameters.scan_type = match config.mode() {
+            ScanMode::Passive => 0,
+            ScanMode::Active => 1,
+        };
+        self.start_scanning_stored()
+    }
+
     /// Configure legacy advertising data and start advertising handle zero.
     ///
     /// The buffer is process-lifetime data because the vendor API may consume
     /// it asynchronously after the command returns.
     #[cfg(target_arch = "riscv32")]
     pub fn start_advertising(&mut self, advertising_data: &'static [u8]) -> Result<(), BleB2Error> {
-        if advertising_data.len() > BLE_B2_ADV_DATA_CAPACITY {
-            return Err(BleB2Error::AdvertisingDataTooLong {
+        let payload = hisi_rf_core::ble::AdvertisingPayload::try_from_slice(advertising_data)
+            .ok_or(BleB2Error::AdvertisingDataTooLong {
                 length: advertising_data.len(),
-            });
-        }
+            })?;
+        let timing = hisi_rf_core::ble::AdvertisingTiming::try_new(
+            hisi_rf_core::ble::AdvertisingInterval::try_from_units(0x20).unwrap(),
+            hisi_rf_core::ble::AdvertisingInterval::try_from_units(0x60).unwrap(),
+        )
+        .unwrap();
+        self.start_advertising_config(AdvertisingConfig::new(
+            timing,
+            hisi_rf_core::ble::AdvertisingChannels::ALL,
+            payload,
+        ))
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    fn start_advertising_stored(&mut self) -> Result<(), BleB2Error> {
         let data = GapBleAdvertisingData {
-            advertising_length: advertising_data.len() as u16,
-            advertising_data: advertising_data.as_ptr().cast_mut(),
+            advertising_length: self.operations.advertising_len.into(),
+            advertising_data: self.operations.advertising_data.as_mut_ptr(),
             scan_response_length: 0,
             scan_response_data: core::ptr::null_mut(),
         };
@@ -443,25 +572,8 @@ impl BleB1Controller {
             return Err(BleB2Error::SetAdvertisingData(status));
         }
 
-        let parameters = GapBleAdvertisingParameters {
-            min_interval: 0x20,
-            max_interval: 0x60,
-            advertising_type: 0,
-            own_address: BdAddr {
-                addr: [0; 6],
-                address_type: 0,
-            },
-            peer_address: BdAddr {
-                addr: [0; 6],
-                address_type: 0,
-            },
-            channel_map: 0x07,
-            filter_policy: 0,
-            tx_power: 0,
-            duration: 0,
-            max_events: 0,
-        };
-        let status = unsafe { gap_ble_set_adv_param(0, &raw const parameters) };
+        let status =
+            unsafe { gap_ble_set_adv_param(0, &raw const self.operations.advertising_parameters) };
         if status != 0 {
             return Err(BleB2Error::SetAdvertisingParameters(status));
         }
@@ -475,14 +587,18 @@ impl BleB1Controller {
     /// Configure continuous passive 1M scanning and start the scanner.
     #[cfg(target_arch = "riscv32")]
     pub fn start_scanning(&mut self) -> Result<(), BleB2Error> {
-        let parameters = GapBleScanParameters {
-            interval: 0x48,
-            window: 0x48,
-            scan_type: 0,
-            phy: 1,
-            filter_policy: 0,
-        };
-        let status = unsafe { gap_ble_set_scan_parameters(&raw const parameters) };
+        let interval = hisi_rf_core::ble::ScanInterval::try_from_units(0x48).unwrap();
+        self.start_scanning_config(ScanConfig::new(
+            hisi_rf_core::ble::ScanTiming::try_new(interval, interval).unwrap(),
+            ScanMode::Passive,
+            false,
+        ))
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    fn start_scanning_stored(&mut self) -> Result<(), BleB2Error> {
+        let status =
+            unsafe { gap_ble_set_scan_parameters(&raw const self.operations.scan_parameters) };
         if status != 0 {
             return Err(BleB2Error::SetScanParameters(status));
         }
@@ -731,6 +847,18 @@ impl BleB1Controller {
         Err(BleB2Error::UnsupportedTarget)
     }
 
+    /// Host builds cannot invoke the WS63 typed GAP implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn start_advertising_config(&mut self, _: AdvertisingConfig) -> Result<(), BleB2Error> {
+        Err(BleB2Error::UnsupportedTarget)
+    }
+
+    /// Host builds cannot invoke the WS63 typed GAP implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn start_scanning_config(&mut self, _: ScanConfig) -> Result<(), BleB2Error> {
+        Err(BleB2Error::UnsupportedTarget)
+    }
+
     /// Host builds cannot invoke the WS63 GAP/GATT implementation.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
@@ -796,6 +924,8 @@ pub enum BleB2Error {
     SetScanParameters(u32),
     /// The vendor stack rejected the scan start request synchronously.
     StartScanning(u32),
+    /// This WS63 ABI slice does not expose duplicate filtering yet.
+    DuplicateFilteringUnsupported,
     /// BLE B2 operations require WS63 target firmware.
     UnsupportedTarget,
 }
@@ -1173,6 +1303,13 @@ fn push_ble_event(event: BleB2Event) {
 
 #[cfg(target_arch = "riscv32")]
 extern "C" fn ble_enable_callback(status: u32) {
+    let queue = BLE_EVENT_QUEUE.load(Ordering::Acquire);
+    if !queue.is_null() {
+        // SAFETY: initialization publishes process-lifetime queue storage.
+        let queue = unsafe { &*queue };
+        queue.enable_status.store(status, Ordering::Relaxed);
+        queue.enable_seen.store(true, Ordering::Release);
+    }
     push_ble_event(BleB2Event::Enabled { status });
 }
 
@@ -1663,6 +1800,7 @@ pub fn init_ble_b1(
     Ok(BleB1Controller {
         _efuse: resources.efuse,
         events: storage.events,
+        operations: storage.operations,
     })
 }
 
@@ -1699,6 +1837,24 @@ mod tests {
     }
 
     #[test]
+    fn typed_advertising_payload_moves_into_backend_storage() {
+        let payload = hisi_rf_core::ble::AdvertisingPayload::try_from_slice(b"u2-payload").unwrap();
+        let interval = hisi_rf_core::ble::AdvertisingInterval::try_from_units(0x20).unwrap();
+        let mut storage = BleB2OperationStorage::new();
+        {
+            let config = AdvertisingConfig::new(
+                hisi_rf_core::ble::AdvertisingTiming::try_new(interval, interval).unwrap(),
+                hisi_rf_core::ble::AdvertisingChannels::ALL,
+                payload,
+            );
+            storage.store_advertising_payload(&config);
+        }
+
+        assert_eq!(storage.advertising_len, 10);
+        assert_eq!(&storage.advertising_data[..10], b"u2-payload");
+    }
+
+    #[test]
     fn b1_task_groups_form_one_atomic_plan() {
         let groups = [
             task_group(OWNER_BT, STACK_BT).unwrap(),
@@ -1723,6 +1879,18 @@ mod tests {
             assert_eq!(queue.pop(), Some(BleB2Event::Enabled { status }));
         }
         assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn enable_status_does_not_consume_the_public_event() {
+        let queue = BleEventQueue::new();
+        assert_eq!(queue.enable_status(), None);
+        queue.enable_status.store(0, Ordering::Relaxed);
+        queue.enable_seen.store(true, Ordering::Release);
+        queue.push(BleB2Event::Enabled { status: 0 });
+        assert_eq!(queue.enable_status(), Some(0));
+        assert_eq!(queue.pop(), Some(BleB2Event::Enabled { status: 0 }));
+        assert_eq!(queue.enable_status(), Some(0));
     }
 
     #[test]

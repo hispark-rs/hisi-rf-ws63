@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root without declaring the backend API stable.
 - Keep the SLE UUID type available to host rustdoc/API builds, and keep the
   target-only BLE callback queue warning-free under host clippy.
+- Add typed BLE advertising/scanning and SLE announce/seek adapters for the U2
+  facade runner. Vendor-visible payloads and raw parameter blocks now live in
+  caller-owned process-lifetime storage instead of borrowing a queued command
+  or a temporary stack frame.
 
 ## [0.1.0-alpha.74] - 2026-08-07
 
