@@ -92,6 +92,11 @@ pub enum SleS1Event {
         pair_state: u32,
         disconnect_reason: u32,
     },
+    PairComplete {
+        connection_id: u16,
+        address: Address,
+        status: u32,
+    },
     SsapServiceStarted {
         server_id: u8,
         service_handle: u16,
@@ -513,6 +518,15 @@ impl SleS1Controller {
     }
 
     #[cfg(target_arch = "riscv32")]
+    pub fn pair(&mut self, address: &Address) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_pair_remote_device(address) };
+        if status != 0 {
+            return Err(SleS1OperationError::Pair(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
     pub fn configure_ssap_server(
         &mut self,
         property_value: &'static mut [u8],
@@ -747,6 +761,7 @@ pub enum SleS1OperationError {
     SetConnectionParameters(u32),
     Connect(u32),
     Disconnect(u32),
+    Pair(u32),
     SsapValueTooLong { length: usize },
     RegisterSsapServer(u32),
     AddSsapService(u32),
@@ -874,6 +889,18 @@ unsafe extern "C" fn connection_state_changed(
         connection_state,
         pair_state,
         disconnect_reason,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn pair_complete(connection_id: u16, address: *const Address, status: u32) {
+    let Some(address) = (unsafe { address.as_ref() }).copied() else {
+        return;
+    };
+    push_event(SleS1Event::PairComplete {
+        connection_id,
+        address,
+        status,
     });
 }
 
@@ -1049,7 +1076,7 @@ static mut CONNECTION_CALLBACKS: ConnectionCallbacks = ConnectionCallbacks {
     connection_parameter_update_request: None,
     connection_parameter_update: None,
     authentication_complete: None,
-    pair_complete: None,
+    pair_complete: Some(pair_complete),
     read_rssi: None,
     low_latency: None,
     set_phy: None,
