@@ -311,6 +311,7 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         "memset" => "__ws63_rom_memset",
         "mem_news" => "osal_kmalloc",
         "mem_frees" => "osal_kfree",
+        "smp_rand" => "uapi_drv_cipher_trng_get_random_bytes",
         "strlen" => "__ws63_rom_strlen",
         name if matches!(
             name,

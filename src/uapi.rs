@@ -325,6 +325,7 @@ pub extern "C" fn uapi_drv_cipher_trng_get_random_bytes(randnum: *mut u8, size: 
     let output = unsafe { core::slice::from_raw_parts_mut(randnum, size as usize) };
     #[cfg(any(
         feature = "ble-init",
+        feature = "sle-init",
         feature = "wifi-wpa2-personal",
         feature = "upstream-supplicant-port"
     ))]
@@ -335,6 +336,7 @@ pub extern "C" fn uapi_drv_cipher_trng_get_random_bytes(randnum: *mut u8, size: 
     }
     #[cfg(not(any(
         feature = "ble-init",
+        feature = "sle-init",
         feature = "wifi-wpa2-personal",
         feature = "upstream-supplicant-port"
     )))]
