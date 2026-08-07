@@ -93,9 +93,22 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     let Some((service_connection, handle)) = service else {
                         fail(b"RFDBG_SLE_S3_CLIENT_SERVICE_MISSING\r\n");
                     };
+                    static mut WRITE_VALUE: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
+                    let data = unsafe { &mut *core::ptr::addr_of_mut!(WRITE_VALUE) };
                     if service_connection != connection_id
-                        || controller.read_ssap(connection_id, handle).is_err()
+                        || controller.write_ssap(connection_id, handle, data).is_err()
                     {
+                        fail(b"RFDBG_SLE_S3_CLIENT_WRITE_ERR\r\n");
+                    }
+                }
+                hisi_rf_ws63::SleS1Event::SsapWriteComplete {
+                    connection_id,
+                    handle,
+                    status: 0,
+                    ..
+                } => {
+                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_WRITE_OK\r\n");
+                    if controller.read_ssap(connection_id, handle).is_err() {
                         fail(b"RFDBG_SLE_S3_CLIENT_READ_ERR\r\n");
                     }
                 }

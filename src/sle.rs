@@ -21,9 +21,9 @@ use ws63_radio_sys::sle::{
 };
 #[cfg(target_arch = "riscv32")]
 use ws63_radio_sys::ssap::{
-    ClientCallbacks, ClientHandleValue, ExchangeInfo, FindServiceResult, FindStructureParameters,
-    FindStructureResult, NotifyIndicate, ServerCallbacks, ServerPropertyInfo, ServerReadRequest,
-    Uuid,
+    ClientCallbacks, ClientHandleValue, ClientWriteParameters, ClientWriteResult, ExchangeInfo,
+    FindServiceResult, FindStructureParameters, FindStructureResult, NotifyIndicate,
+    ServerCallbacks, ServerPropertyInfo, ServerReadRequest, Uuid,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -120,6 +120,13 @@ pub enum SleS1Event {
         server_id: u8,
         connection_id: u16,
         request_id: u16,
+        handle: u16,
+        property_type: u8,
+        status: u32,
+    },
+    SsapWriteComplete {
+        client_id: u8,
+        connection_id: u16,
         handle: u16,
         property_type: u8,
         status: u32,
@@ -622,7 +629,10 @@ impl SleS1Controller {
             find_type: ws63_radio_sys::ssap::FIND_TYPE_PRIMARY_SERVICE,
             start_handle: 1,
             end_handle: u16::MAX,
-            uuid: short_uuid(0),
+            uuid: Uuid {
+                len: 0,
+                bytes: [0; ws63_radio_sys::ssap::UUID_BYTES],
+            },
             reserved: 0,
         };
         let status = unsafe {
@@ -650,6 +660,31 @@ impl SleS1Controller {
         };
         if status != 0 {
             return Err(SleS1OperationError::ReadSsap(status));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn write_ssap(
+        &mut self,
+        connection_id: u16,
+        handle: u16,
+        data: &'static mut [u8],
+    ) -> Result<(), SleS1OperationError> {
+        let data_len = data
+            .len()
+            .try_into()
+            .map_err(|_| SleS1OperationError::SsapValueTooLong { length: data.len() })?;
+        let mut parameters = ClientWriteParameters {
+            handle,
+            property_type: ws63_radio_sys::ssap::PROPERTY_TYPE_VALUE,
+            data_len,
+            data: data.as_mut_ptr(),
+        };
+        let status =
+            unsafe { ws63_radio_sys::ssap::ssapc_write_req(0, connection_id, &raw mut parameters) };
+        if status != 0 {
+            return Err(SleS1OperationError::WriteSsap(status));
         }
         Ok(())
     }
@@ -688,6 +723,7 @@ pub enum SleS1OperationError {
     ExchangeSsapInfo(u32),
     DiscoverSsapServices(u32),
     ReadSsap(u32),
+    WriteSsap(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -920,6 +956,25 @@ unsafe extern "C" fn ssap_read_requested(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_write_complete(
+    client_id: u8,
+    connection_id: u16,
+    result: *mut ClientWriteResult,
+    status: u32,
+) {
+    let Some(result) = (unsafe { result.as_ref() }) else {
+        return;
+    };
+    push_event(SleS1Event::SsapWriteComplete {
+        client_id,
+        connection_id,
+        handle: result.handle,
+        property_type: result.property_type,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -967,7 +1022,7 @@ static mut SSAP_CLIENT_CALLBACKS: ClientCallbacks = ClientCallbacks {
     find_structure_complete: Some(ssap_discovery_complete),
     read_confirmed: None,
     read_by_uuid_complete: None,
-    write_confirmed: None,
+    write_confirmed: Some(ssap_write_complete),
     exchange_info: Some(ssap_exchange_complete),
     notification: Some(ssap_notification),
     indication: None,
