@@ -120,9 +120,10 @@ pub fn hisi_rf_ws63::netif_smoltcp::rx_push(&[u8])
 pub fn hisi_rf_ws63::netif_smoltcp::set_tx_sink(fn(&[u8]))
 pub fn hisi_rf_ws63::netif_smoltcp::tx_count() -> u32
 pub mod hisi_rf_ws63::oal
-#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_alloc(core::ffi::primitives::c_int, core::ffi::primitives::c_uint, core::ffi::primitives::c_uchar) -> *mut core::ffi::c_void
-#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_free(*mut core::ffi::c_void, core::ffi::primitives::c_uchar)
+#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_alloc(core::ffi::primitives::c_uint) -> *mut core::ffi::c_void
+#[no_mangle] pub c fn hisi_rf_ws63::oal::oal_mem_free(*mut core::ffi::c_void) -> core::ffi::primitives::c_uint
 pub mod hisi_rf_ws63::osal
+#[no_mangle] pub c fn hisi_rf_ws63::osal::__rt_irq_dispatch(u32)
 #[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_flush_all()
 #[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_region_clean(*mut core::ffi::c_void, u32)
 #[no_mangle] pub c fn hisi_rf_ws63::osal::osal_dcache_region_inv(*mut core::ffi::c_void, u32)
@@ -267,6 +268,7 @@ pub mod hisi_rf_ws63::uapi
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::get_tcxo_freq() -> u32
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_at_bt_register_cmd(*const core::ffi::c_void, u16) -> u32
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_at_print(*const core::ffi::primitives::c_char) -> u32
+#[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_drv_cipher_trng_get_random(*mut u32) -> u32
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_drv_cipher_trng_get_random_bytes(*mut u8, u32) -> u32
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_efuse_read_bit(*mut u8, u32, u8) -> u32
 #[no_mangle] pub c fn hisi_rf_ws63::uapi::uapi_efuse_read_buffer(*mut u8, u32, u16) -> u32
