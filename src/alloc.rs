@@ -184,6 +184,7 @@ pub(crate) fn install_arena<P: Profile>(arena: RadioArena<P>) -> Result<(), Aren
 
 #[cfg(any(
     feature = "ble-init",
+    feature = "sle-init",
     feature = "upstream-authenticator-wpa2",
     feature = "upstream-authenticator-wpa3"
 ))]
@@ -197,7 +198,7 @@ pub(crate) fn heap_metrics() -> HeapMetrics {
     HEAP.metrics()
 }
 
-#[cfg(feature = "ble-init")]
+#[cfg(any(feature = "ble-init", feature = "sle-init"))]
 pub(crate) fn largest_allocatable(alignment: usize) -> usize {
     HEAP.largest_allocatable(alignment)
 }

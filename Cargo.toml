@@ -72,6 +72,16 @@ name = "ble_gatt_client_smoke"
 path = "examples/ble_gatt_client_smoke.rs"
 required-features = ["ble-init", "firmware-example"]
 
+[[example]]
+name = "sle_announce_smoke"
+path = "examples/sle_announce_smoke.rs"
+required-features = ["sle-init", "firmware-example"]
+
+[[example]]
+name = "sle_seek_smoke"
+path = "examples/sle_seek_smoke.rs"
+required-features = ["sle-init", "firmware-example"]
+
 [dependencies]
 hisi-alloc = "0.1.0-alpha.3"
 hisi-storage = "0.1.0-alpha.1"
@@ -103,6 +113,15 @@ default = []
 wifi = ["ws63-radio-sys/wifi"]
 ble-init = [
     "ws63-radio-sys/ble",
+    "dep:hisi-crypto",
+    "dep:hisi-crypto-ws63",
+    "hisi-crypto-ws63/cipher",
+    "hisi-crypto-ws63/hash",
+    "hisi-crypto-ws63/pbkdf2",
+    "hisi-crypto-ws63/hal-trng",
+]
+sle-init = [
+    "ws63-radio-sys/sle",
     "dep:hisi-crypto",
     "dep:hisi-crypto-ws63",
     "hisi-crypto-ws63/cipher",

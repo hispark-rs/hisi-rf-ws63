@@ -10,6 +10,7 @@ pub(crate) use hisi_crypto::CryptoError;
     target_arch = "riscv32",
     any(
         feature = "ble-init",
+        feature = "sle-init",
         feature = "wifi-wpa2-personal",
         feature = "upstream-supplicant-port",
         feature = "upstream-authenticator-wpa2",

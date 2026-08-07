@@ -114,7 +114,7 @@ compile_error!("select exactly one AP authenticator security profile");
 compile_error!("select exactly one WS63 Personal profile");
 
 #[cfg(all(
-    feature = "ble-init",
+    any(feature = "ble-init", feature = "sle-init"),
     any(
         feature = "wifi",
         feature = "wifi-personal",
@@ -123,7 +123,10 @@ compile_error!("select exactly one WS63 Personal profile");
         feature = "upstream-authenticator-wpa3"
     )
 ))]
-compile_error!("the BLE B1 init profile is standalone until coexistence resources are proven");
+compile_error!("the BGLE init profiles are standalone until coexistence resources are proven");
+
+#[cfg(all(feature = "ble-init", feature = "sle-init"))]
+compile_error!("select exactly one standalone WS63 BGLE protocol profile");
 
 #[cfg(all(
     feature = "net",
@@ -164,7 +167,8 @@ use critical_section::Mutex;
         feature = "upstream-supplicant-port",
         feature = "upstream-authenticator-wpa2",
         feature = "upstream-authenticator-wpa3",
-        feature = "ble-init"
+        feature = "ble-init",
+        feature = "sle-init"
     )
 ))]
 mod link_contract {
@@ -194,10 +198,17 @@ pub fn ensure_ble_init_link_contract() {
     link_contract::ensure();
 }
 
+/// Force the internal SLE S1 archive and ROM contract into a firmware link.
+#[cfg(all(target_arch = "riscv32", feature = "sle-init"))]
+#[doc(hidden)]
+pub fn ensure_sle_init_link_contract() {
+    link_contract::ensure();
+}
+
 pub mod alloc;
 #[cfg(feature = "ble-init")]
 mod ble;
-#[cfg(feature = "ble-init")]
+#[cfg(any(feature = "ble-init", feature = "sle-init"))]
 mod ble_compat;
 #[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
 mod ble_init_diag;
@@ -218,11 +229,23 @@ mod blocking_diagnostics;
 mod compiler_rt;
 #[cfg(any(
     feature = "ble-init",
+    feature = "sle-init",
     feature = "wifi-wpa2-personal",
     feature = "upstream-supplicant-port",
     feature = "upstream-authenticator-wpa2",
     feature = "upstream-authenticator-wpa3"
 ))]
+#[cfg_attr(
+    all(
+        feature = "sle-init",
+        not(feature = "ble-init"),
+        not(feature = "wifi-wpa2-personal"),
+        not(feature = "upstream-supplicant-port"),
+        not(feature = "upstream-authenticator-wpa2"),
+        not(feature = "upstream-authenticator-wpa3")
+    ),
+    allow(dead_code)
+)]
 mod crypto;
 #[cfg(feature = "rf-eloop-diag")]
 #[doc(hidden)]
@@ -250,6 +273,8 @@ mod pmp;
 #[cfg(feature = "rf-init-diag")]
 #[doc(hidden)]
 pub mod rf_init_diag;
+#[cfg(feature = "sle-init")]
+mod sle;
 #[cfg(feature = "station-pm-diag")]
 #[doc(hidden)]
 mod station_pm_diag;
@@ -651,7 +676,7 @@ pub const WS63_SHARED_RADIO_ARENA_BYTES: usize = 296 * 1024;
 
 #[cfg(any(feature = "data-path-diag", feature = "rf-eloop-diag"))]
 mod wlmac_diag;
-#[cfg(any(feature = "wifi-personal", feature = "ble-init"))]
+#[cfg(any(feature = "wifi-personal", feature = "ble-init", feature = "sle-init"))]
 mod wpa_compat;
 mod ws63_runtime_compat;
 
@@ -664,6 +689,13 @@ pub use ble::{
     BleB3Error, BleGattClient, BleGattServer, InstalledBleB1Storage, init_ble_b1,
 };
 pub use pmp::prepare_vendor_memory;
+#[cfg(feature = "sle-init")]
+#[doc(hidden)]
+pub use sle::{
+    InstalledSleS1Storage, SLE_S1_ARENA_BYTES, SLE_S1_EVENT_DATA_CAPACITY,
+    SLE_S1_MINIMUM_TASK_STACK_BYTES, SleS1ArenaStorage, SleS1ControlStorage, SleS1Controller,
+    SleS1Event, SleS1InitError, SleS1OperationError, SleS1Resources, SleS1Storage, init_sle_s1,
+};
 
 /// Declare caller-owned storage for the internal BLE B1 init profile.
 #[cfg(feature = "ble-init")]
@@ -680,6 +712,25 @@ macro_rules! declare_ble_b1_storage {
             static ARENA: $crate::BleB1ArenaStorage<{ $crate::BLE_B1_ARENA_BYTES }> =
                 $crate::BleB1ArenaStorage::new();
             $crate::BleB1Storage::from_parts(&CONTROL, &ARENA)
+        };
+    };
+}
+
+/// Declare caller-owned storage for the internal SLE S1 init profile.
+#[cfg(feature = "sle-init")]
+#[macro_export]
+macro_rules! declare_sle_s1_storage {
+    ($(#[$meta:meta])* $vis:vis static $name:ident) => {
+        $(#[$meta])*
+        $vis static $name: $crate::SleS1Storage<{ $crate::SLE_S1_ARENA_BYTES }> = {
+            static CONTROL: $crate::SleS1ControlStorage = $crate::SleS1ControlStorage::new();
+            #[cfg_attr(
+                target_arch = "riscv32",
+                unsafe(link_section = ".hisi.shared-arena")
+            )]
+            static ARENA: $crate::SleS1ArenaStorage<{ $crate::SLE_S1_ARENA_BYTES }> =
+                $crate::SleS1ArenaStorage::new();
+            $crate::SleS1Storage::from_parts(&CONTROL, &ARENA)
         };
     };
 }

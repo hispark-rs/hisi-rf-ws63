@@ -280,7 +280,7 @@ pub extern "C" fn osal_msg_queue_get_msg_num(queue_id: c_ulong) -> c_uint {
     })
 }
 
-#[cfg(feature = "ble-init")]
+#[cfg(any(feature = "ble-init", feature = "sle-init"))]
 pub(crate) fn osal_msg_queue_item_size(queue_id: c_ulong) -> c_uint {
     let q = queue_id as *mut MsgQueue;
     if q.is_null() {
