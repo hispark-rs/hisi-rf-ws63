@@ -23,6 +23,7 @@ fn main() -> ! {
 
 fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
     let mut handles = None;
+    let mut notified = false;
     loop {
         while let Some(event) = controller.next_event() {
             match event {
@@ -72,6 +73,7 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     {
                         fail(b"RFDBG_SLE_S3_SERVER_NOTIFY_ERR\r\n");
                     }
+                    notified = true;
                     sle_firmware::log(b"RFDBG_SLE_S3_SERVER_NOTIFY_OK\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::SsapWriteRequested { status: 0, .. } => {
@@ -79,9 +81,31 @@ fn run_server(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
                     connection_state: CONNECTION_STATE_DISCONNECTED,
+                    pair_state,
+                    disconnect_reason,
                     ..
                 } => {
-                    sle_firmware::log(b"RFDBG_SLE_S3_SERVER_DISCONNECTED\r\n");
+                    if notified {
+                        sle_firmware::log(b"RFDBG_SLE_S3_SERVER_DISCONNECTED\r\n");
+                    } else {
+                        sle_firmware::log_status(
+                            b"RFDBG_SLE_S3_SERVER_UNEXPECTED_DISCONNECT pair=0x",
+                            pair_state,
+                        );
+                        sle_firmware::log_status(
+                            b"RFDBG_SLE_S3_SERVER_DISCONNECT_REASON reason=0x",
+                            disconnect_reason,
+                        );
+                        sle_firmware::stop();
+                    }
+                }
+                hisi_rf_ws63::SleS1Event::AuthenticationComplete { status, .. } if status != 0 => {
+                    sle_firmware::log_status(b"RFDBG_SLE_S3_SERVER_AUTH_ERR status=0x", status);
+                    sle_firmware::stop();
+                }
+                hisi_rf_ws63::SleS1Event::PairComplete { status, .. } if status != 0 => {
+                    sle_firmware::log_status(b"RFDBG_SLE_S3_SERVER_PAIR_ERR status=0x", status);
+                    sle_firmware::stop();
                 }
                 _ => {}
             }

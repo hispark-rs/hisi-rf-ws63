@@ -5,7 +5,10 @@
 
 use hisi_panic_handler as _;
 use hisi_riscv_rt::entry;
-use ws63_radio_sys::sle::{Address, CONNECTION_STATE_CONNECTED, CONNECTION_STATE_DISCONNECTED};
+use ws63_radio_sys::sle::{
+    Address, CONNECTION_STATE_CONNECTED, CONNECTION_STATE_DISCONNECTED, PAIR_STATE_NONE,
+    PAIR_STATE_PAIRED,
+};
 
 #[path = "support/sle_firmware.rs"]
 mod sle_firmware;
@@ -29,6 +32,7 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
     let mut seeking = false;
     let mut connect_after_stop = false;
     let mut service = None;
+    let mut data_received = false;
     loop {
         while let Some(event) = controller.next_event() {
             match event {
@@ -56,12 +60,26 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     connect_after_stop = false;
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
+                    connection_id,
                     connection_state: CONNECTION_STATE_CONNECTED,
+                    pair_state,
                     ..
                 } => {
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_CONNECTED\r\n");
-                    if controller.pair(&SERVER_ADDRESS).is_err() {
-                        fail(b"RFDBG_SLE_S3_CLIENT_PAIR_ERR\r\n");
+                    match pair_state {
+                        PAIR_STATE_NONE => {
+                            if controller.pair(&SERVER_ADDRESS).is_err() {
+                                fail(b"RFDBG_SLE_S3_CLIENT_PAIR_ERR\r\n");
+                            }
+                        }
+                        PAIR_STATE_PAIRED => security_ready(controller, connection_id),
+                        other => {
+                            sle_firmware::log_status(
+                                b"RFDBG_SLE_S3_CLIENT_PAIR_STATE_ERR state=0x",
+                                other,
+                            );
+                            sle_firmware::stop();
+                        }
                     }
                 }
                 hisi_rf_ws63::SleS1Event::PairComplete {
@@ -70,9 +88,7 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     status: 0,
                 } if address == SERVER_ADDRESS => {
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_PAIR_OK\r\n");
-                    if controller.exchange_ssap_info(connection_id).is_err() {
-                        fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
-                    }
+                    security_ready(controller, connection_id);
                 }
                 hisi_rf_ws63::SleS1Event::AuthenticationComplete {
                     address, status, ..
@@ -139,6 +155,7 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     data,
                     ..
                 } if data[..8] == PAYLOAD => {
+                    data_received = true;
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_DATA_OK\r\n");
                     if controller.disconnect(&SERVER_ADDRESS).is_err() {
                         fail(b"RFDBG_SLE_S3_CLIENT_DISCONNECT_ERR\r\n");
@@ -149,9 +166,23 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
                     connection_state: CONNECTION_STATE_DISCONNECTED,
+                    pair_state,
+                    disconnect_reason,
                     ..
                 } => {
-                    sle_firmware::log(b"RFDBG_SLE_S3_DATA_DISCONNECT_OK\r\n");
+                    if data_received {
+                        sle_firmware::log(b"RFDBG_SLE_S3_DATA_DISCONNECT_OK\r\n");
+                    } else {
+                        sle_firmware::log_status(
+                            b"RFDBG_SLE_S3_CLIENT_UNEXPECTED_DISCONNECT pair=0x",
+                            pair_state,
+                        );
+                        sle_firmware::log_status(
+                            b"RFDBG_SLE_S3_CLIENT_DISCONNECT_REASON reason=0x",
+                            disconnect_reason,
+                        );
+                        sle_firmware::stop();
+                    }
                 }
                 _ => {}
             }
@@ -160,6 +191,13 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
             fail(b"RFDBG_SLE_S3_CLIENT_EVENT_DROP\r\n");
         }
         sle_firmware::sleep();
+    }
+}
+
+fn security_ready(controller: &mut hisi_rf_ws63::SleS1Controller, connection_id: u16) {
+    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_SECURITY_READY\r\n");
+    if controller.exchange_ssap_info(connection_id).is_err() {
+        fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
     }
 }
 
