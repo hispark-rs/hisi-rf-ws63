@@ -5,10 +5,7 @@
 
 use hisi_panic_handler as _;
 use hisi_riscv_rt::entry;
-use ws63_radio_sys::sle::{
-    Address, CONNECTION_STATE_CONNECTED, CONNECTION_STATE_DISCONNECTED, PAIR_STATE_NONE,
-    PAIR_STATE_PAIRED,
-};
+use ws63_radio_sys::sle::{Address, CONNECTION_STATE_CONNECTED, CONNECTION_STATE_DISCONNECTED};
 
 #[path = "support/sle_firmware.rs"]
 mod sle_firmware;
@@ -62,33 +59,13 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
                     connection_id,
                     connection_state: CONNECTION_STATE_CONNECTED,
-                    pair_state,
                     ..
                 } => {
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_CONNECTED\r\n");
-                    match pair_state {
-                        PAIR_STATE_NONE => {
-                            if controller.pair(&SERVER_ADDRESS).is_err() {
-                                fail(b"RFDBG_SLE_S3_CLIENT_PAIR_ERR\r\n");
-                            }
-                        }
-                        PAIR_STATE_PAIRED => security_ready(controller, connection_id),
-                        other => {
-                            sle_firmware::log_status(
-                                b"RFDBG_SLE_S3_CLIENT_PAIR_STATE_ERR state=0x",
-                                other,
-                            );
-                            sle_firmware::stop();
-                        }
+                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_LINK_READY\r\n");
+                    if controller.exchange_ssap_info(connection_id).is_err() {
+                        fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
                     }
-                }
-                hisi_rf_ws63::SleS1Event::PairComplete {
-                    connection_id,
-                    address,
-                    status: 0,
-                } if address == SERVER_ADDRESS => {
-                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_PAIR_OK\r\n");
-                    security_ready(controller, connection_id);
                 }
                 hisi_rf_ws63::SleS1Event::AuthenticationComplete {
                     address, status, ..
@@ -130,24 +107,12 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     let Some((service_connection, handle)) = service else {
                         fail(b"RFDBG_SLE_S3_CLIENT_SERVICE_MISSING\r\n");
                     };
-                    static mut WRITE_VALUE: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
-                    let data = unsafe { &mut *core::ptr::addr_of_mut!(WRITE_VALUE) };
                     if service_connection != connection_id
-                        || controller.write_ssap(connection_id, handle, data).is_err()
+                        || controller.read_ssap(connection_id, handle).is_err()
                     {
-                        fail(b"RFDBG_SLE_S3_CLIENT_WRITE_ERR\r\n");
-                    }
-                }
-                hisi_rf_ws63::SleS1Event::SsapWriteComplete {
-                    connection_id,
-                    handle,
-                    status: 0,
-                    ..
-                } => {
-                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_WRITE_OK\r\n");
-                    if controller.read_ssap(connection_id, handle).is_err() {
                         fail(b"RFDBG_SLE_S3_CLIENT_READ_ERR\r\n");
                     }
+                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_READ_OK\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::SsapNotification {
                     status: 0,
@@ -191,13 +156,6 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
             fail(b"RFDBG_SLE_S3_CLIENT_EVENT_DROP\r\n");
         }
         sle_firmware::sleep();
-    }
-}
-
-fn security_ready(controller: &mut hisi_rf_ws63::SleS1Controller, connection_id: u16) {
-    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_SECURITY_READY\r\n");
-    if controller.exchange_ssap_info(connection_id).is_err() {
-        fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
     }
 }
 
