@@ -659,8 +659,8 @@ mod ws63_runtime_compat;
 #[doc(hidden)]
 pub use ble::{
     BLE_B1_ARENA_BYTES, BLE_B1_MINIMUM_TASK_STACK_BYTES, BleB1ArenaStorage, BleB1ControlStorage,
-    BleB1Controller, BleB1InitError, BleB1Resources, BleB1Storage, InstalledBleB1Storage,
-    init_ble_b1,
+    BleB1Controller, BleB1InitError, BleB1Resources, BleB1Storage, BleB2Error, BleB2Event,
+    InstalledBleB1Storage, init_ble_b1,
 };
 pub use pmp::prepare_vendor_memory;
 

@@ -1,4 +1,4 @@
-//! Credential-free WS63 BLE B1 controller/host init smoke.
+//! Credential-free WS63 BLE B1 init and B2 advertising/scanning smoke.
 
 #![no_std]
 #![no_main]
@@ -22,6 +22,10 @@ use hisi_panic_handler as _;
 use hisi_riscv_rt::entry;
 
 hisi_rf_ws63::declare_ble_b1_storage!(static BLE_STORAGE);
+
+static B2_ADVERTISING_DATA: &[u8] = &[
+    2, 0x01, 0x06, 8, 0x09, b'H', b'I', b'S', b'I', b'B', b'2', b'X',
+];
 
 #[entry]
 fn main() -> ! {
@@ -83,7 +87,10 @@ fn main() -> ! {
 
     let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.TRNG);
     match hisi_rf_ws63::init_ble_b1(resources, storage) {
-        Ok(_controller) => uart.write(b"RFDBG_BLE_B1_INIT_OK\r\n"),
+        Ok(mut controller) => {
+            uart.write(b"RFDBG_BLE_B1_INIT_OK\r\n");
+            run_ble_b2(&uart, &mut controller)
+        }
         Err(error) => {
             uart.write(b"RFDBG_BLE_B1_INIT_ERR code=0x");
             uart.write(&hex8(error_code(error)));
@@ -93,6 +100,71 @@ fn main() -> ! {
 
     loop {
         core::hint::spin_loop();
+    }
+}
+
+fn run_ble_b2(
+    uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
+    controller: &mut hisi_rf_ws63::BleB1Controller,
+) -> ! {
+    let mut advertising_data_ok = false;
+    let mut advertising_parameters_ok = false;
+    let mut advertising_started = false;
+    let mut commands_started = false;
+
+    loop {
+        while let Some(event) = controller.next_event() {
+            match event {
+                hisi_rf_ws63::BleB2Event::Enabled { status: 0 } if !commands_started => {
+                    commands_started = true;
+                    if controller.start_advertising(B2_ADVERTISING_DATA).is_err()
+                        || controller.start_scanning().is_err()
+                    {
+                        uart.write(b"RFDBG_BLE_B2_COMMAND_ERR\r\n");
+                        loop {
+                            core::hint::spin_loop();
+                        }
+                    }
+                    uart.write(b"RFDBG_BLE_B2_COMMANDS_OK\r\n");
+                }
+                hisi_rf_ws63::BleB2Event::Enabled { status } => {
+                    uart.write(b"RFDBG_BLE_B2_ENABLE_ERR code=0x");
+                    uart.write(&hex8(status));
+                    uart.write(b"\r\n");
+                }
+                hisi_rf_ws63::BleB2Event::AdvertisingData { status: 0, .. } => {
+                    advertising_data_ok = true;
+                }
+                hisi_rf_ws63::BleB2Event::AdvertisingParameters { status: 0, .. } => {
+                    advertising_parameters_ok = true;
+                }
+                hisi_rf_ws63::BleB2Event::AdvertisingState { status: 1, .. } => {
+                    advertising_started = true;
+                }
+                hisi_rf_ws63::BleB2Event::ScanParameters { status: 0 } => {
+                    uart.write(b"RFDBG_BLE_B2_SCAN_READY\r\n");
+                }
+                hisi_rf_ws63::BleB2Event::ScanResult { data_len, data, .. } => {
+                    let data_len = usize::from(data_len).min(data.len());
+                    if data[..data_len] == *B2_ADVERTISING_DATA {
+                        uart.write(b"RFDBG_BLE_B2_SCAN_MATCH\r\n");
+                    }
+                }
+                _ => uart.write(b"RFDBG_BLE_B2_ASYNC_ERR\r\n"),
+            }
+        }
+        if advertising_data_ok && advertising_parameters_ok && advertising_started {
+            uart.write(b"RFDBG_BLE_B2_ADV_OK\r\n");
+            advertising_data_ok = false;
+            advertising_parameters_ok = false;
+            advertising_started = false;
+        }
+        if controller.dropped_events() != 0 {
+            uart.write(b"RFDBG_BLE_B2_EVENT_DROP count=0x");
+            uart.write(&hex8(controller.dropped_events()));
+            uart.write(b"\r\n");
+        }
+        let _ = hisi_rf_rtos_driver::sleep_ms(NonZeroU32::new(10).unwrap());
     }
 }
 
@@ -300,6 +372,8 @@ fn error_code(error: hisi_rf_ws63::BleB1InitError) -> u32 {
         BleB1InitError::TaskHandoff => 10,
         BleB1InitError::Crypto => 8,
         BleB1InitError::Enable(status) => status,
+        BleB1InitError::EventSinkAlreadyInstalled => 11,
+        BleB1InitError::RegisterCallbacks(status) => status,
         BleB1InitError::UnsupportedTarget => 9,
     }
 }
