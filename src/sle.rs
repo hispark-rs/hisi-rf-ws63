@@ -21,7 +21,8 @@ use ws63_radio_sys::sle::{
 };
 #[cfg(target_arch = "riscv32")]
 use ws63_radio_sys::ssap::{
-    ClientCallbacks, ClientHandleValue, NotifyIndicate, ServerCallbacks, ServerPropertyInfo, Uuid,
+    ClientCallbacks, ClientHandleValue, ExchangeInfo, NotifyIndicate, ServerCallbacks,
+    ServerPropertyInfo, Uuid,
 };
 
 /// Caller-owned heap shared by the SLE host, controller, and RTOS objects.
@@ -92,6 +93,13 @@ pub enum SleS1Event {
     SsapServiceStarted {
         server_id: u8,
         service_handle: u16,
+        status: u32,
+    },
+    SsapExchangeComplete {
+        client_id: u8,
+        connection_id: u16,
+        mtu_size: u32,
+        version: u16,
         status: u32,
     },
     SsapNotification {
@@ -518,6 +526,14 @@ impl SleS1Controller {
         if status != 0 {
             return Err(SleS1OperationError::AddSsapProperty(status));
         }
+        let mut exchange = ExchangeInfo {
+            mtu_size: 1_500,
+            version: 1,
+        };
+        let status = unsafe { ws63_radio_sys::ssap::ssaps_set_info(server_id, &raw mut exchange) };
+        if status != 0 {
+            return Err(SleS1OperationError::SetSsapInfo(status));
+        }
         let status =
             unsafe { ws63_radio_sys::ssap::ssaps_start_service(server_id, service_handle) };
         if status != 0 {
@@ -559,6 +575,21 @@ impl SleS1Controller {
         }
         Ok(())
     }
+
+    #[cfg(target_arch = "riscv32")]
+    pub fn exchange_ssap_info(&mut self, connection_id: u16) -> Result<(), SleS1OperationError> {
+        let mut exchange = ExchangeInfo {
+            mtu_size: 1_500,
+            version: 1,
+        };
+        let status = unsafe {
+            ws63_radio_sys::ssap::ssapc_exchange_info_req(1, connection_id, &raw mut exchange)
+        };
+        if status != 0 {
+            return Err(SleS1OperationError::ExchangeSsapInfo(status));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -588,8 +619,10 @@ pub enum SleS1OperationError {
     RegisterSsapServer(u32),
     AddSsapService(u32),
     AddSsapProperty(u32),
+    SetSsapInfo(u32),
     StartSsapService(u32),
     NotifySsap(u32),
+    ExchangeSsapInfo(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -746,6 +779,28 @@ unsafe extern "C" fn ssap_notification(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ssap_exchange_complete(
+    client_id: u8,
+    connection_id: u16,
+    parameters: *mut ExchangeInfo,
+    status: u32,
+) {
+    let parameters = unsafe { parameters.as_ref() }
+        .copied()
+        .unwrap_or(ExchangeInfo {
+            mtu_size: 0,
+            version: 0,
+        });
+    push_event(SleS1Event::SsapExchangeComplete {
+        client_id,
+        connection_id,
+        mtu_size: parameters.mtu_size,
+        version: parameters.version,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
 static mut CALLBACKS: AnnounceSeekCallbacks = AnnounceSeekCallbacks {
     enable: Some(enabled),
     disable: Some(disabled),
@@ -794,7 +849,7 @@ static mut SSAP_CLIENT_CALLBACKS: ClientCallbacks = ClientCallbacks {
     read_confirmed: None,
     read_by_uuid_complete: None,
     write_confirmed: None,
-    exchange_info: None,
+    exchange_info: Some(ssap_exchange_complete),
     notification: Some(ssap_notification),
     indication: None,
 };

@@ -55,10 +55,17 @@ fn run_client(controller: &mut hisi_rf_ws63::SleS1Controller) -> ! {
                     connect_after_stop = false;
                 }
                 hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
+                    connection_id,
                     connection_state: CONNECTION_STATE_CONNECTED,
                     ..
                 } => {
                     sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_CONNECTED\r\n");
+                    if controller.exchange_ssap_info(connection_id).is_err() {
+                        fail(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_ERR\r\n");
+                    }
+                }
+                hisi_rf_ws63::SleS1Event::SsapExchangeComplete { status: 0, .. } => {
+                    sle_firmware::log(b"RFDBG_SLE_S3_CLIENT_EXCHANGE_OK\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::SsapNotification {
                     status: 0,
