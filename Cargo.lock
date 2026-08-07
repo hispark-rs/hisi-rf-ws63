@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-riscv-rt"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3edeb2974dcda702538ac45e6def9caf14bb54c2ed5aa1a65e898f0c56d9a6e8"
+checksum = "d0116d646eeb95230d55298ea9e72755bfd669be1130ad3ca5a379dc7dc7bc6e"
 dependencies = [
  "critical-section",
  "riscv",
