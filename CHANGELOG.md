@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.75] - 2026-08-09
+
+- Add internal BLE advertising/scan and SLE announce/seek stop operations for
+  generation-tagged facade lifecycle cancellation. BLE advertising and SLE
+  stop callbacks remain copied into the existing bounded backend event queues.
 - Freeze the internal BLE B3 and SLE S3 migration inputs with host compile
   contracts and documented public-API snapshots. The stage types remain
   `#[doc(hidden)]`; this evidence supports the future `hisi-rf` composition

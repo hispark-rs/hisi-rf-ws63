@@ -20,6 +20,8 @@ fn ble_b3_migration_inputs_compile() {
     let _ = hisi_rf_ws63::init_ble_b1;
     let _ = hisi_rf_ws63::BleB1Controller::next_event;
     let _ = hisi_rf_ws63::BleB1Controller::dropped_events;
+    let _ = hisi_rf_ws63::BleB1Controller::stop_advertising;
+    let _ = hisi_rf_ws63::BleB1Controller::stop_scanning;
 }
 
 #[cfg(feature = "sle-init")]
@@ -33,4 +35,6 @@ fn sle_s3_migration_inputs_compile() {
     let _ = hisi_rf_ws63::init_sle_s1;
     let _ = hisi_rf_ws63::SleS1Controller::next_event;
     let _ = hisi_rf_ws63::SleS1Controller::dropped_events;
+    let _ = hisi_rf_ws63::SleS1Controller::stop_announce;
+    let _ = hisi_rf_ws63::SleS1Controller::stop_seek;
 }

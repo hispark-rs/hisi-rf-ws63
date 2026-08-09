@@ -161,6 +161,8 @@ pub enum BleB2Event {
     AdvertisingParameters { adv_id: u8, status: u32 },
     /// Advertising entered the reported vendor state.
     AdvertisingState { adv_id: u8, status: u32 },
+    /// Advertising stopped for the reported handle.
+    AdvertisingStopped { adv_id: u8, status: u32 },
     /// Scan parameters were accepted or rejected.
     ScanParameters { status: u32 },
     /// A scan result copied into caller-independent bounded storage.
@@ -638,6 +640,26 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Stop advertising handle zero.
+    #[cfg(target_arch = "riscv32")]
+    pub fn stop_advertising(&mut self) -> Result<(), BleB2Error> {
+        let status = unsafe { gap_ble_stop_adv(0) };
+        if status != 0 {
+            return Err(BleB2Error::StopAdvertising(status));
+        }
+        Ok(())
+    }
+
+    /// Stop the active scan. The vendor API has no separate stop callback.
+    #[cfg(target_arch = "riscv32")]
+    pub fn stop_scanning(&mut self) -> Result<(), BleB2Error> {
+        let status = unsafe { gap_ble_stop_scan() };
+        if status != 0 {
+            return Err(BleB2Error::StopScanning(status));
+        }
+        Ok(())
+    }
+
     /// Stop scanning and connect to one copied scan-result address.
     #[cfg(target_arch = "riscv32")]
     pub fn connect(&mut self, address: [u8; 6], address_type: u8) -> Result<(), BleB3Error> {
@@ -942,6 +964,18 @@ impl BleB1Controller {
         Err(BleB2Error::UnsupportedTarget)
     }
 
+    /// Host builds cannot invoke the WS63 advertising stop implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn stop_advertising(&mut self) -> Result<(), BleB2Error> {
+        Err(BleB2Error::UnsupportedTarget)
+    }
+
+    /// Host builds cannot invoke the WS63 scan stop implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn stop_scanning(&mut self) -> Result<(), BleB2Error> {
+        Err(BleB2Error::UnsupportedTarget)
+    }
+
     /// Host builds cannot invoke the WS63 GAP/GATT implementation.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
@@ -1018,6 +1052,10 @@ pub enum BleB2Error {
     SetScanParameters(u32),
     /// The vendor stack rejected the scan start request synchronously.
     StartScanning(u32),
+    /// The vendor stack rejected the advertising stop request synchronously.
+    StopAdvertising(u32),
+    /// The vendor stack rejected the scan stop request synchronously.
+    StopScanning(u32),
     /// This WS63 ABI slice does not expose duplicate filtering yet.
     DuplicateFilteringUnsupported,
     /// BLE B2 operations require WS63 target firmware.
@@ -1304,7 +1342,7 @@ struct GapBleCallbacks {
     set_advertising_parameters: Option<extern "C" fn(u8, u32)>,
     set_scan_parameters: Option<extern "C" fn(u32)>,
     start_advertising: Option<extern "C" fn(u8, u32)>,
-    stop_advertising: *const c_void,
+    stop_advertising: Option<extern "C" fn(u8, u32)>,
     scan_result: Option<extern "C" fn(*const GapBleScanResult)>,
     connection_state: Option<extern "C" fn(u16, *const BdAddr, u32, u32, u32)>,
     pairing_result: *const c_void,
@@ -1326,7 +1364,7 @@ impl GapBleCallbacks {
             set_advertising_parameters: Some(ble_set_advertising_parameters_callback),
             set_scan_parameters: Some(ble_set_scan_parameters_callback),
             start_advertising: Some(ble_start_advertising_callback),
-            stop_advertising: core::ptr::null(),
+            stop_advertising: Some(ble_stop_advertising_callback),
             scan_result: Some(ble_scan_result_callback),
             connection_state: Some(ble_connection_state_callback),
             pairing_result: core::ptr::null(),
@@ -1472,6 +1510,14 @@ extern "C" fn ble_set_scan_parameters_callback(status: u32) {
 #[cfg(target_arch = "riscv32")]
 extern "C" fn ble_start_advertising_callback(advertising_id: u8, status: u32) {
     push_ble_event(BleB2Event::AdvertisingState {
+        adv_id: advertising_id,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_stop_advertising_callback(advertising_id: u8, status: u32) {
+    push_ble_event(BleB2Event::AdvertisingStopped {
         adv_id: advertising_id,
         status,
     });
@@ -1710,6 +1756,7 @@ unsafe extern "C" {
         parameters: *const GapBleAdvertisingParameters,
     ) -> u32;
     fn gap_ble_start_adv(advertising_id: u8) -> u32;
+    fn gap_ble_stop_adv(advertising_id: u8) -> u32;
     fn gap_ble_set_scan_parameters(parameters: *const GapBleScanParameters) -> u32;
     fn gap_ble_start_scan() -> u32;
     fn gap_ble_stop_scan() -> u32;
@@ -1950,7 +1997,10 @@ pub fn init_ble_b1(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use std::boxed::Box;
 
     #[test]
     fn b1_task_inventory_matches_archive_profile() {
@@ -2075,6 +2125,25 @@ mod tests {
         queue.push(event);
         assert_eq!(queue.pop(), Some(event));
         assert_eq!(queue.dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn host_stop_operations_fail_closed() {
+        let events = Box::leak(Box::new(BleEventQueue::new()));
+        let operations = Box::leak(Box::new(BleB2OperationStorage::new()));
+        let mut controller = BleB1Controller {
+            _efuse: unsafe { Efuse::steal() },
+            events,
+            operations,
+        };
+        assert_eq!(
+            controller.stop_advertising(),
+            Err(BleB2Error::UnsupportedTarget)
+        );
+        assert_eq!(
+            controller.stop_scanning(),
+            Err(BleB2Error::UnsupportedTarget)
+        );
     }
 }
 

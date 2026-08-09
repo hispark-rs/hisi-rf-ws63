@@ -616,6 +616,16 @@ impl SleS1Controller {
         Ok(())
     }
 
+    /// Stop announce handle one.
+    #[cfg(target_arch = "riscv32")]
+    pub fn stop_announce(&mut self) -> Result<(), SleS1OperationError> {
+        let status = unsafe { ws63_radio_sys::sle::sle_stop_announce(1) };
+        if status != 0 {
+            return Err(SleS1OperationError::StopAnnounce(status));
+        }
+        Ok(())
+    }
+
     #[cfg(target_arch = "riscv32")]
     pub fn start_seek(&mut self) -> Result<(), SleS1OperationError> {
         let interval = hisi_rf_core::sle::SeekInterval::try_from_units(100).unwrap();
@@ -647,6 +657,16 @@ impl SleS1Controller {
 
     #[cfg(not(target_arch = "riscv32"))]
     pub fn start_seek_config(&mut self, _: SeekConfig) -> Result<(), SleS1OperationError> {
+        Err(SleS1OperationError::UnsupportedTarget)
+    }
+
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn stop_announce(&mut self) -> Result<(), SleS1OperationError> {
+        Err(SleS1OperationError::UnsupportedTarget)
+    }
+
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn stop_seek(&mut self) -> Result<(), SleS1OperationError> {
         Err(SleS1OperationError::UnsupportedTarget)
     }
 
@@ -1042,6 +1062,7 @@ pub enum SleS1OperationError {
     SetAnnounceParameters(u32),
     SetAnnounceData(u32),
     StartAnnounce(u32),
+    StopAnnounce(u32),
     SetSeekParameters(u32),
     StartSeek(u32),
     StopSeek(u32),
@@ -1581,7 +1602,10 @@ pub fn init_sle_s1(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use std::boxed::Box;
 
     #[test]
     fn task_inventory_matches_shared_bgle_controller_profile() {
@@ -1667,5 +1691,24 @@ mod tests {
         assert_eq!(queue.enable_status(), Some(0));
         assert_eq!(queue.pop(), Some(SleS1Event::Enabled { status: 0 }));
         assert_eq!(queue.enable_status(), Some(0));
+    }
+
+    #[test]
+    fn host_stop_operations_fail_closed() {
+        let events = Box::leak(Box::new(EventQueue::new()));
+        let operations = Box::leak(Box::new(SleS1OperationStorage::new()));
+        let mut controller = SleS1Controller {
+            _efuse: unsafe { Efuse::steal() },
+            events,
+            operations,
+        };
+        assert_eq!(
+            controller.stop_announce(),
+            Err(SleS1OperationError::UnsupportedTarget)
+        );
+        assert_eq!(
+            controller.stop_seek(),
+            Err(SleS1OperationError::UnsupportedTarget)
+        );
     }
 }
