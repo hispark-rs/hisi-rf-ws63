@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reviewed KM/keyslot/KLAD lifecycle and its one-update HMAC-SM3 and
   AES-128-CMAC sequences. Unsupported algorithms and stale handles fail closed;
   SPACC execution remains outside critical sections.
+- Add an opt-in BLE initialization diagnostic that exercises the exact
+  archive-facing HMAC-SM3, AES-128-CMAC, P-256 public-key and ECDH UAPI hooks
+  with independent known-answer vectors on real WS63 silicon.
 
 ### Changed
 

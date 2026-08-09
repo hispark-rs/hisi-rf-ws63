@@ -2110,6 +2110,13 @@ pub fn init_ble_b1(
     )
     .map_err(|_| BleB1InitError::Crypto)?;
     crate::log_emit(b"RFDBG_BLE_B1_CRYPTO_OK\r\n");
+    #[cfg(feature = "ble-init-diag")]
+    if crate::ble_compat::ble_crypto_compat_self_test() {
+        crate::log_emit(b"RFDBG_BLE_U5B_CRYPTO_COMPAT_OK\r\n");
+    } else {
+        crate::log_emit(b"RFDBG_BLE_U5B_CRYPTO_COMPAT_ERR\r\n");
+        return Err(BleB1InitError::Crypto);
+    }
 
     BLE_EVENT_QUEUE
         .compare_exchange(

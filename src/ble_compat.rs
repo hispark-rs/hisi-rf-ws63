@@ -123,6 +123,33 @@ unsafe impl Sync for BleCryptoStorage {}
 
 static BLE_CRYPTO: BleCryptoStorage = BleCryptoStorage(UnsafeCell::new(BleCryptoState::new()));
 
+#[cfg(any(test, all(target_arch = "riscv32", feature = "ble-init-diag")))]
+fn reset_ble_crypto_state() {
+    with_ble_crypto(|state| {
+        for slot in &mut state.keyslots {
+            let generation = slot.generation;
+            slot.key.fill(0);
+            *slot = KeyslotState {
+                generation,
+                ..KeyslotState::EMPTY
+            };
+        }
+        for slot in &mut state.klads {
+            let generation = slot.generation;
+            *slot = KladState {
+                generation,
+                ..KladState::EMPTY
+            };
+        }
+        for slot in &mut state.hashes {
+            slot.clear();
+        }
+        for slot in &mut state.macs {
+            slot.clear();
+        }
+    });
+}
+
 fn next_generation(current: u32) -> u32 {
     let next = current.wrapping_add(1) & 0x00ff_ffff;
     next.max(1)
@@ -1523,9 +1550,219 @@ pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_ecdh_key(
     }
 }
 
+#[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
+pub(crate) fn ble_crypto_compat_self_test() -> bool {
+    const HMAC_KEY: [u8; 20] = [0x0b; 20];
+    const HMAC_EXPECTED: [u8; 32] = [
+        0x8e, 0xc4, 0xd9, 0xf9, 0xe5, 0x15, 0x9d, 0x52, 0xd8, 0xb7, 0xf8, 0xe8, 0xe6, 0x81, 0xa6,
+        0x2e, 0xcd, 0x2f, 0xb0, 0xcb, 0x58, 0xba, 0x55, 0x4e, 0xe5, 0x6c, 0x96, 0x2d, 0x0f, 0xa5,
+        0xda, 0xa1,
+    ];
+    const CMAC_KEY: [u8; 16] = [
+        0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f,
+        0x3c,
+    ];
+    const CMAC_MESSAGE: [u8; 16] = [
+        0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17,
+        0x2a,
+    ];
+    const CMAC_EXPECTED: [u8; 16] = [
+        0x07, 0x0a, 0x16, 0xb4, 0x6b, 0x4d, 0x41, 0x44, 0xf7, 0x9b, 0xdd, 0x9d, 0xd0, 0x4a, 0x28,
+        0x7c,
+    ];
+    const GENERATOR_X: [u8; 32] = [
+        0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4, 0x40,
+        0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98,
+        0xc2, 0x96,
+    ];
+    const GENERATOR_Y: [u8; 32] = [
+        0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e,
+        0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf,
+        0x51, 0xf5,
+    ];
+    const DOUBLE_GENERATOR_X: [u8; 32] = [
+        0x7c, 0xf2, 0x7b, 0x18, 0x8d, 0x03, 0x4f, 0x7e, 0x8a, 0x52, 0x38, 0x03, 0x04, 0xb5, 0x1a,
+        0xc3, 0xc0, 0x89, 0x69, 0xe2, 0x77, 0xf2, 0x1b, 0x35, 0xa6, 0x0b, 0x48, 0xfc, 0x47, 0x66,
+        0x99, 0x78,
+    ];
+    const DOUBLE_GENERATOR_Y: [u8; 32] = [
+        0x07, 0x77, 0x55, 0x10, 0xdb, 0x8e, 0xd0, 0x40, 0x29, 0x3d, 0x9a, 0xc6, 0x9f, 0x74, 0x30,
+        0xdb, 0xba, 0x7d, 0xad, 0xe6, 0x3c, 0xe9, 0x82, 0x29, 0x9e, 0x04, 0xb7, 0x9d, 0x22, 0x78,
+        0x73, 0xd1,
+    ];
+
+    fn buffer(bytes: &[u8]) -> CipherBufferAttribute {
+        CipherBufferAttribute {
+            memory_handle: 0,
+            address_offset: 0,
+            kernel_memory_handle: core::ptr::null_mut(),
+            physical_address: bytes.as_ptr() as usize,
+            virtual_address: bytes.as_ptr(),
+            security: 0,
+        }
+    }
+
+    reset_ble_crypto_state();
+    let hmac_ok = (|| {
+        let mut keyslot = 0;
+        let mut klad = 0;
+        let mut hash = 0;
+        let mut output = [0u8; 32];
+        let mut output_len = output.len() as u32;
+        let klad_attribute = KladAttribute {
+            root_key: 0,
+            engine: KLAD_ENGINE_SM3_HMAC,
+            decrypt_support: false,
+            encrypt_support: false,
+            key_security: [false; 6],
+            rkp_software_config: 0,
+        };
+        let clear_key = KladClearKey {
+            key: HMAC_KEY.as_ptr(),
+            key_length: HMAC_KEY.len() as u32,
+            key_parity: false,
+            hmac_type: KLAD_HMAC_SM3,
+        };
+        if uapi_drv_km_init() != OK
+            || uapi_drv_keyslot_create(&mut keyslot, KEYSLOT_HMAC) != OK
+            || uapi_drv_klad_create(&mut klad) != OK
+            || uapi_drv_klad_attach(klad, KLAD_DEST_HMAC, keyslot) != OK
+            || uapi_drv_klad_set_attr(klad, (&klad_attribute as *const KladAttribute).cast()) != OK
+            || uapi_drv_klad_set_clear_key(klad, (&clear_key as *const KladClearKey).cast()) != OK
+        {
+            return false;
+        }
+        let hash_attribute = CipherHashAttribute {
+            key: core::ptr::null(),
+            key_len: 0,
+            keyslot_handle: keyslot,
+            hash_type: HASH_HMAC_SM3,
+            is_keyslot: true,
+            is_long_term: true,
+        };
+        let input = buffer(b"abc");
+        uapi_drv_cipher_hash_init() == OK
+            && uapi_drv_cipher_hash_start(
+                &mut hash,
+                (&hash_attribute as *const CipherHashAttribute).cast(),
+            ) == OK
+            && uapi_drv_cipher_hash_update(hash, (&input as *const CipherBufferAttribute).cast(), 3)
+                == OK
+            && uapi_drv_cipher_hash_finish(hash, output.as_mut_ptr(), &mut output_len) == OK
+            && output_len == 32
+            && output == HMAC_EXPECTED
+    })();
+
+    reset_ble_crypto_state();
+    let cmac_ok = (|| {
+        let mut keyslot = 0;
+        let mut klad = 0;
+        let mut mac = 0;
+        let mut output = [0u8; 16];
+        let mut output_len = output.len() as u32;
+        let klad_attribute = KladAttribute {
+            root_key: 0,
+            engine: KLAD_ENGINE_AES,
+            decrypt_support: false,
+            encrypt_support: true,
+            key_security: [false; 6],
+            rkp_software_config: 0,
+        };
+        let clear_key = KladClearKey {
+            key: CMAC_KEY.as_ptr(),
+            key_length: CMAC_KEY.len() as u32,
+            key_parity: false,
+            hmac_type: 0,
+        };
+        if uapi_drv_km_init() != OK
+            || uapi_drv_keyslot_create(&mut keyslot, KEYSLOT_MCIPHER) != OK
+            || uapi_drv_klad_create(&mut klad) != OK
+            || uapi_drv_klad_attach(klad, KLAD_DEST_MCIPHER, keyslot) != OK
+            || uapi_drv_klad_set_attr(klad, (&klad_attribute as *const KladAttribute).cast()) != OK
+            || uapi_drv_klad_set_clear_key(klad, (&clear_key as *const KladClearKey).cast()) != OK
+        {
+            return false;
+        }
+        let mac_attribute = CipherMacAttribute {
+            is_long_term: true,
+            symc_algorithm: SYMC_ALG_AES,
+            work_mode: SYMC_MODE_CMAC,
+            key_length: SYMC_KEY_128BIT,
+            keyslot_handle: keyslot,
+        };
+        let input = buffer(&CMAC_MESSAGE);
+        uapi_drv_cipher_symc_init() == OK
+            && uapi_drv_cipher_mac_start(
+                &mut mac,
+                (&mac_attribute as *const CipherMacAttribute).cast(),
+            ) == OK
+            && uapi_drv_cipher_mac_update(
+                mac,
+                (&input as *const CipherBufferAttribute).cast(),
+                CMAC_MESSAGE.len() as u32,
+            ) == OK
+            && uapi_drv_cipher_mac_finish(mac, output.as_mut_ptr(), &mut output_len) == OK
+            && output_len == 16
+            && output == CMAC_EXPECTED
+    })();
+
+    reset_ble_crypto_state();
+    let p256_ok = {
+        let mut scalar = [0u8; 32];
+        scalar[31] = 2;
+        let mut private_output = [0u8; 32];
+        let mut public_x = [0u8; 32];
+        let mut public_y = [0u8; 32];
+        let mut shared = [0u8; 32];
+        let input = CipherPkeData {
+            length: 32,
+            data: scalar.as_mut_ptr(),
+        };
+        let private = CipherPkeData {
+            length: 32,
+            data: private_output.as_mut_ptr(),
+        };
+        let public = CipherPkePoint {
+            x: public_x.as_mut_ptr(),
+            y: public_y.as_mut_ptr(),
+            length: 32,
+        };
+        let generator = CipherPkePoint {
+            x: GENERATOR_X.as_ptr().cast_mut(),
+            y: GENERATOR_Y.as_ptr().cast_mut(),
+            length: 32,
+        };
+        let shared_output = CipherPkeData {
+            length: 32,
+            data: shared.as_mut_ptr(),
+        };
+        uapi_drv_cipher_pke_ecc_gen_key(
+            PKE_FIPS_P256R,
+            (&input as *const CipherPkeData).cast(),
+            (&private as *const CipherPkeData).cast_mut().cast(),
+            (&public as *const CipherPkePoint).cast_mut().cast(),
+        ) == OK
+            && private_output == scalar
+            && public_x == DOUBLE_GENERATOR_X
+            && public_y == DOUBLE_GENERATOR_Y
+            && uapi_drv_cipher_pke_ecc_gen_ecdh_key(
+                PKE_FIPS_P256R,
+                (&generator as *const CipherPkePoint).cast(),
+                (&private as *const CipherPkeData).cast(),
+                (&shared_output as *const CipherPkeData).cast_mut().cast(),
+            ) == OK
+            && shared == DOUBLE_GENERATOR_X
+    };
+
+    reset_ble_crypto_state();
+    hmac_ok && cmac_ok && p256_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static CRYPTO_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn swtmr_control_block_matches_ws63_archive_abi() {
@@ -1550,6 +1787,8 @@ mod tests {
 
     #[test]
     fn b1_crypto_handles_are_bounded_and_stale_safe() {
+        let _guard = CRYPTO_TEST_LOCK.lock().unwrap();
+        reset_ble_crypto_state();
         let mut keyslot = 0;
         let mut klad = 0;
         let key = [0x5a; 16];
@@ -1609,10 +1848,13 @@ mod tests {
         assert_eq!(uapi_drv_keyslot_destroy(keyslot), OK);
         assert_eq!(uapi_drv_keyslot_destroy(keyslot), ERROR);
         assert_eq!(uapi_drv_km_deinit(), OK);
+        reset_ble_crypto_state();
     }
 
     #[test]
     fn unsupported_crypto_operations_fail_closed() {
+        let _guard = CRYPTO_TEST_LOCK.lock().unwrap();
+        reset_ble_crypto_state();
         let mut handle = 0;
         assert_eq!(uapi_drv_cipher_hash_init(), OK);
         assert_eq!(
@@ -1644,6 +1886,7 @@ mod tests {
             ),
             ERROR
         );
+        reset_ble_crypto_state();
     }
 
     #[test]

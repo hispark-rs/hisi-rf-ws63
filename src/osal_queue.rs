@@ -62,7 +62,7 @@ fn trace_queue_transfer(event: &[u8], queue_id: c_ulong, word: u32) {
     crate::log_emit(b"RFDBG_BLE_B1_QUEUE_");
     crate::log_emit(event);
     crate::log_emit(b" id=0x");
-    emit_hex32(queue_id as u32);
+    emit_hex32(queue_id);
     crate::log_emit(b" word=0x");
     emit_hex32(word);
     crate::log_emit(b"\r\n");
