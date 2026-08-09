@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Route the BLE archive's caller-provided NIST P-256 private-key and ECDH
+  compatibility calls through the uniquely installed `hisi-crypto-ws63` PKE
+  capability. Random key generation remains fail closed until a production
+  DRBG is explicitly injected.
+
+### Changed
+
+- Require the BLE profile to own the WS63 PKE peripheral instead of leaving
+  pairing key agreement backed by an unresolved or implicit resource.
+
 ## [0.1.0-alpha.75] - 2026-08-09
 
 - Add internal BLE advertising/scan and SLE announce/seek stop operations for

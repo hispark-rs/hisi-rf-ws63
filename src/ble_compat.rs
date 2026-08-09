@@ -741,26 +741,172 @@ pub extern "C" fn uapi_drv_cipher_mac_finish(
     ERROR
 }
 
-// Pairing crypto is outside B1. Returning failure keeps the boundary explicit;
-// B2 must replace these with hisi-crypto-ws63 PKE capabilities before pairing.
+#[cfg(any(target_arch = "riscv32", test))]
+const PKE_FIPS_P256R: u32 = 6;
+#[cfg(target_arch = "riscv32")]
+const P256_BYTES: usize = 32;
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct CipherPkeData {
+    length: u32,
+    data: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct CipherPkePoint {
+    x: *mut u8,
+    y: *mut u8,
+    length: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn read_pke_data(pointer: *const c_void) -> Option<&'static CipherPkeData> {
+    if pointer.is_null() {
+        None
+    } else {
+        // SAFETY: the pinned BLE archive passes the public SDK's aligned
+        // `uapi_drv_cipher_pke_data_t` object for the duration of this call.
+        Some(unsafe { &*pointer.cast::<CipherPkeData>() })
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn read_pke_point(pointer: *const c_void) -> Option<&'static CipherPkePoint> {
+    if pointer.is_null() {
+        None
+    } else {
+        // SAFETY: the pinned BLE archive passes the public SDK's aligned
+        // `uapi_drv_cipher_pke_ecc_point_t` object for this synchronous call.
+        Some(unsafe { &*pointer.cast::<CipherPkePoint>() })
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn pke_bytes(pointer: *const u8, length: u32) -> Option<[u8; P256_BYTES]> {
+    if pointer.is_null() || length != P256_BYTES as u32 {
+        return None;
+    }
+    let mut bytes = [0; P256_BYTES];
+    // SAFETY: the validated SDK descriptor promises exactly 32 readable bytes
+    // and the operation is synchronous.
+    bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(pointer, P256_BYTES) });
+    Some(bytes)
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn write_pke_bytes(pointer: *mut u8, bytes: &[u8; P256_BYTES]) -> Option<()> {
+    if pointer.is_null() {
+        return None;
+    }
+    // SAFETY: the validated SDK descriptor promises exactly 32 writable bytes
+    // and the operation is synchronous.
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer, P256_BYTES) };
+    Some(())
+}
+
+// The BLE archive uses caller-provided P-256 private scalars. Random key
+// generation (`input == NULL`) remains fail closed until a production DRBG is
+// injected; raw TRNG output is deliberately not treated as a CSPRNG.
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_key(
-    _curve: u32,
-    _input: *const c_void,
-    _private_key: *mut c_void,
-    _public_key: *mut c_void,
+    curve: u32,
+    input: *const c_void,
+    private_key: *mut c_void,
+    public_key: *mut c_void,
 ) -> u32 {
-    ERROR
+    #[cfg(target_arch = "riscv32")]
+    unsafe {
+        if curve != PKE_FIPS_P256R {
+            return ERROR;
+        }
+        let Some(input) = read_pke_data(input) else {
+            return ERROR;
+        };
+        let Some(output_private) = read_pke_data(private_key) else {
+            return ERROR;
+        };
+        let Some(output_public) = read_pke_point(public_key) else {
+            return ERROR;
+        };
+        if output_private.length != P256_BYTES as u32 || output_public.length != P256_BYTES as u32 {
+            return ERROR;
+        }
+        let Some(scalar) = pke_bytes(input.data, input.length) else {
+            return ERROR;
+        };
+        let Ok(private) = hisi_crypto::p256::P256PrivateKey::try_from_be_bytes(scalar) else {
+            return ERROR;
+        };
+        let Ok(public) = crate::crypto::p256_public_key_hardware(private) else {
+            return ERROR;
+        };
+        if write_pke_bytes(output_private.data, &scalar).is_none()
+            || write_pke_bytes(output_public.x, &public.x).is_none()
+            || write_pke_bytes(output_public.y, &public.y).is_none()
+        {
+            return ERROR;
+        }
+        OK
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        let _ = (curve, input, private_key, public_key);
+        ERROR
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_ecdh_key(
-    _curve: u32,
-    _public_key: *const c_void,
-    _private_key: *const c_void,
-    _shared_key: *mut c_void,
+    curve: u32,
+    public_key: *const c_void,
+    private_key: *const c_void,
+    shared_key: *mut c_void,
 ) -> u32 {
-    ERROR
+    #[cfg(target_arch = "riscv32")]
+    unsafe {
+        if curve != PKE_FIPS_P256R {
+            return ERROR;
+        }
+        let Some(public) = read_pke_point(public_key) else {
+            return ERROR;
+        };
+        let Some(private) = read_pke_data(private_key) else {
+            return ERROR;
+        };
+        let Some(output) = read_pke_data(shared_key) else {
+            return ERROR;
+        };
+        if public.length != P256_BYTES as u32 || output.length != P256_BYTES as u32 {
+            return ERROR;
+        }
+        let Some(x) = pke_bytes(public.x, public.length) else {
+            return ERROR;
+        };
+        let Some(y) = pke_bytes(public.y, public.length) else {
+            return ERROR;
+        };
+        let Some(scalar) = pke_bytes(private.data, private.length) else {
+            return ERROR;
+        };
+        let Ok(private) = hisi_crypto::p256::P256PrivateKey::try_from_be_bytes(scalar) else {
+            return ERROR;
+        };
+        let peer = hisi_crypto::sae::P256AffinePoint::new(x, y);
+        let Ok(secret) = crate::crypto::p256_ecdh_hardware(private, &peer) else {
+            return ERROR;
+        };
+        if write_pke_bytes(output.data, secret.expose_secret()).is_none() {
+            return ERROR;
+        }
+        OK
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        let _ = (curve, public_key, private_key, shared_key);
+        ERROR
+    }
 }
 
 #[cfg(test)]
@@ -802,6 +948,24 @@ mod tests {
         assert_eq!(uapi_drv_cipher_symc_init(), ERROR);
         assert_eq!(
             uapi_drv_cipher_mac_start(&mut handle, core::ptr::null()),
+            ERROR
+        );
+        assert_eq!(
+            uapi_drv_cipher_pke_ecc_gen_key(
+                PKE_FIPS_P256R,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            ),
+            ERROR
+        );
+        assert_eq!(
+            uapi_drv_cipher_pke_ecc_gen_ecdh_key(
+                PKE_FIPS_P256R,
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null_mut(),
+            ),
             ERROR
         );
     }

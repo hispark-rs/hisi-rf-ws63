@@ -16,7 +16,7 @@ use core::mem::MaybeUninit;
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
-use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
+use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 #[cfg(target_arch = "riscv32")]
 use hisi_rf_core::ble::{AddressType, ScanMode};
 use hisi_rf_core::ble::{
@@ -491,6 +491,8 @@ pub struct BleB1Resources {
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     spacc: Spacc<'static>,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    pke: Pke<'static>,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     trng: Trng<'static>,
 }
 
@@ -500,12 +502,14 @@ impl BleB1Resources {
         efuse: Efuse<'static>,
         km: Km<'static>,
         spacc: Spacc<'static>,
+        pke: Pke<'static>,
         trng: Trng<'static>,
     ) -> Self {
         Self {
             efuse,
             km,
             spacc,
+            pke,
             trng,
         }
     }
@@ -2100,7 +2104,7 @@ pub fn init_ble_b1(
     crate::crypto::install_hardware_crypto(
         resources.km,
         resources.spacc,
-        None,
+        Some(resources.pke),
         resources.trng,
         storage.crypto,
     )

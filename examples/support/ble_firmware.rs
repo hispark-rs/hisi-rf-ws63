@@ -57,7 +57,7 @@ pub fn run(role: fn(&mut hisi_rf_ws63::BleB1Controller) -> !) -> ! {
     unsafe { interrupt::enable_global() };
     hisi_rtos::request_reschedule();
 
-    let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.TRNG);
+    let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG);
     match hisi_rf_ws63::init_ble_b1(resources, storage) {
         Ok(mut controller) => {
             log(b"RFDBG_BLE_B3_INIT_OK\r\n");

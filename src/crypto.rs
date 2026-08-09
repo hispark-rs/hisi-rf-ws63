@@ -19,6 +19,8 @@ pub(crate) use hisi_crypto::CryptoError;
 ))]
 use hisi_crypto::Pbkdf2HmacSha1;
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
+use hisi_crypto::p256::{P256PrivateKey, P256SharedSecret, TryP256KeyAgreement};
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto::sae::{
     P256AffinePoint, P256FieldElement, P256PointResult, TryP256ComputeYSquared, TryP256FieldMul,
     TryP256FieldPow, TryP256PointAdd, TryP256PointInvert, TryP256PointMul, TryP256PointValidate,
@@ -288,6 +290,47 @@ pub(super) fn p256_point_mul_hardware(
             .p256
             .session(&service.backend)
             .point_mul(point, scalar, output)
+    });
+    record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
+    if result.is_err() {
+        P256_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Derive a P-256 public point from a caller-provided private scalar.
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
+pub(super) fn p256_public_key_hardware(
+    private: P256PrivateKey,
+) -> Result<P256AffinePoint, CryptoError> {
+    P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let started = crypto_timing_start();
+    let result = with_crypto_service(|service| {
+        service
+            .p256
+            .session(&service.backend)
+            .try_public_from_private(&private)
+    });
+    record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
+    if result.is_err() {
+        P256_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Derive the P-256 ECDH x-coordinate without software fallback.
+#[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
+pub(super) fn p256_ecdh_hardware(
+    private: P256PrivateKey,
+    peer_public: &P256AffinePoint,
+) -> Result<P256SharedSecret, CryptoError> {
+    P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let started = crypto_timing_start();
+    let result = with_crypto_service(|service| {
+        service
+            .p256
+            .session(&service.backend)
+            .try_agree(&private, peer_public)
     });
     record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
     if result.is_err() {
@@ -857,6 +900,7 @@ pub(crate) fn ws63_hash_self_test() -> Result<(), CryptoError> {
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
+#[cfg_attr(feature = "ble-init", allow(dead_code))]
 pub(crate) fn ws63_p256_self_test() -> Result<(), CryptoError> {
     const GENERATOR: P256AffinePoint = P256AffinePoint::new(
         [

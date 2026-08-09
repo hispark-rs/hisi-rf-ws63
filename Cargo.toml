@@ -108,7 +108,7 @@ hisi-storage = "0.1.0-alpha.1"
 hisi-nvs = "0.1.0-alpha.1"
 hisi-rf-core = "=0.1.0-alpha.22"
 hisi-rf-rtos-driver = "=0.1.0-alpha.19"
-hisi-crypto = { version = "0.1.0-alpha.4", optional = true }
+hisi-crypto = { version = "0.1.0-alpha.5", optional = true }
 hisi-crypto-ws63 = { version = "=0.1.0-alpha.3", optional = true, default-features = false }
 ws63-radio-sys = { version = "=0.1.0-alpha.17", default-features = false }
 hisi-hal = { version = "0.7.0-alpha.6", features = ["chip-ws63", "unstable"] }
@@ -139,6 +139,7 @@ ble-init = [
     "hisi-crypto-ws63/hash",
     "hisi-crypto-ws63/pbkdf2",
     "hisi-crypto-ws63/hal-trng",
+    "wpa3-crypto",
 ]
 sle-init = [
     "ws63-radio-sys/sle",
@@ -217,7 +218,7 @@ upstream-authenticator-wpa3 = [
     "hisi-crypto-ws63/hal-trng",
     "wpa3-crypto",
 ]
-# Shared SAE/P-256 crypto ABI for STA and AP profiles. This is an internal
+# Shared P-256 crypto ABI for SAE and BLE pairing profiles. This is an internal
 # composition feature; the role features above select the target archive.
 wpa3-crypto = ["hisi-crypto-ws63/p256"]
 # Portable provider and host oracle. WS63 firmware defaults to unified-cipher.

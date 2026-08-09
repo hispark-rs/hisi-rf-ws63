@@ -85,7 +85,7 @@ fn main() -> ! {
     #[cfg(feature = "ble-init-diag")]
     start_task_diagnostics();
 
-    let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.TRNG);
+    let resources = hisi_rf_ws63::BleB1Resources::new(efuse, p.KM, p.SPACC, p.PKE, p.TRNG);
     match hisi_rf_ws63::init_ble_b1(resources, storage) {
         Ok(mut controller) => {
             uart.write(b"RFDBG_BLE_B1_INIT_OK\r\n");
