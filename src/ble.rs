@@ -3,8 +3,10 @@
 //! B1 is deliberately narrower than a public BLE API: it installs the fixed
 //! vendor task set, platform services, and controller/host runtime, then proves
 //! that `enable_ble` completes. B2 adds advertising, scanning, and a bounded
-//! copied-event queue. B3 adds an unpaired GATT client/server smoke contract;
-//! pairing and user callbacks remain out of scope.
+//! copied-event queue. B3 adds an unpaired GATT client/server smoke contract.
+//! U5A adds a typed pairing/bond-control boundary and copies secret-free
+//! completion metadata out of vendor callbacks. Hardware crypto integration,
+//! persistent bond storage, pairing responders, and pairing HIL remain gated.
 
 use core::cell::{RefCell, UnsafeCell};
 #[cfg(target_arch = "riscv32")]
@@ -16,10 +18,15 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
 #[cfg(target_arch = "riscv32")]
-use hisi_rf_core::ble::ScanMode;
-use hisi_rf_core::ble::{AdvertisingConfig, GattServerDefinition, ScanConfig};
+use hisi_rf_core::ble::{AddressType, ScanMode};
+use hisi_rf_core::ble::{
+    AdvertisingConfig, BluetoothAddress, GattServerDefinition, PairingState, ScanConfig,
+    SecurityConfig,
+};
 #[cfg(any(target_arch = "riscv32", test))]
-use hisi_rf_core::ble::{GattPermissions, GattProperties, GattUuid};
+use hisi_rf_core::ble::{
+    Bonding, GattPermissions, GattProperties, GattUuid, IoCapability, SecurityRequirement,
+};
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -181,6 +188,21 @@ pub enum BleB2Event {
         connected: bool,
         pair_state: u32,
         reason: u32,
+    },
+    /// Pairing reached a terminal vendor result. No key bytes are exposed.
+    PairingComplete {
+        conn_id: u16,
+        address: [u8; 6],
+        address_type: u8,
+        status: u32,
+    },
+    /// Link authentication completed. Key material remains inside the backend.
+    AuthenticationComplete {
+        conn_id: u16,
+        address: [u8; 6],
+        address_type: u8,
+        status: u32,
+        key_material_present: bool,
     },
     /// The local B3 service start request completed.
     GattServiceStarted {
@@ -940,6 +962,59 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Configure the vendor GAP host from a chip-neutral pairing policy.
+    #[cfg(target_arch = "riscv32")]
+    pub fn configure_security(&mut self, config: SecurityConfig) -> Result<(), BleSecurityError> {
+        let mut parameters = GapBleSecurityParameters::from_config(config);
+        let status = unsafe { gap_ble_set_sec_param(&raw mut parameters) };
+        if status != 0 {
+            return Err(BleSecurityError::Configure(status));
+        }
+        Ok(())
+    }
+
+    /// Start pairing with one validated peer address.
+    #[cfg(target_arch = "riscv32")]
+    pub fn pair(&mut self, peer: BluetoothAddress) -> Result<(), BleSecurityError> {
+        let address = BdAddr::from_typed(peer);
+        let status = unsafe { gap_ble_pair_remote_device(&raw const address) };
+        if status != 0 {
+            return Err(BleSecurityError::Pair(status));
+        }
+        Ok(())
+    }
+
+    /// Query the current pairing state without exposing vendor values.
+    #[cfg(target_arch = "riscv32")]
+    pub fn pairing_state(
+        &mut self,
+        peer: BluetoothAddress,
+    ) -> Result<PairingState, BleSecurityError> {
+        let address = BdAddr::from_typed(peer);
+        let mut state = 0u32;
+        let status = unsafe { gap_ble_get_pair_state(&raw const address, &raw mut state) };
+        if status != 0 {
+            return Err(BleSecurityError::Query(status));
+        }
+        match state {
+            1 => Ok(PairingState::NotPaired),
+            2 => Ok(PairingState::Pairing),
+            3 => Ok(PairingState::Paired),
+            value => Err(BleSecurityError::UnknownPairingState(value)),
+        }
+    }
+
+    /// Remove the stored relationship with one peer.
+    #[cfg(target_arch = "riscv32")]
+    pub fn remove_bond(&mut self, peer: BluetoothAddress) -> Result<(), BleSecurityError> {
+        let address = BdAddr::from_typed(peer);
+        let status = unsafe { gap_ble_remove_pair(&raw const address) };
+        if status != 0 {
+            return Err(BleSecurityError::RemoveBond(status));
+        }
+        Ok(())
+    }
+
     /// Host builds cannot invoke the WS63 GAP implementation.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn start_advertising(&mut self, _: &'static [u8]) -> Result<(), BleB2Error> {
@@ -996,6 +1071,47 @@ impl BleB1Controller {
     pub fn register_gatt_client(&mut self) -> Result<BleGattClient, BleB3Error> {
         Err(BleB3Error::UnsupportedTarget)
     }
+
+    /// Host builds cannot configure the WS63 GAP security host.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn configure_security(&mut self, _: SecurityConfig) -> Result<(), BleSecurityError> {
+        Err(BleSecurityError::UnsupportedTarget)
+    }
+
+    /// Host builds cannot start WS63 pairing.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn pair(&mut self, _: BluetoothAddress) -> Result<(), BleSecurityError> {
+        Err(BleSecurityError::UnsupportedTarget)
+    }
+
+    /// Host builds cannot query WS63 pairing state.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn pairing_state(&mut self, _: BluetoothAddress) -> Result<PairingState, BleSecurityError> {
+        Err(BleSecurityError::UnsupportedTarget)
+    }
+
+    /// Host builds cannot remove WS63 bonds.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn remove_bond(&mut self, _: BluetoothAddress) -> Result<(), BleSecurityError> {
+        Err(BleSecurityError::UnsupportedTarget)
+    }
+}
+
+/// Fail-closed errors from the bounded BLE pairing contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BleSecurityError {
+    /// The vendor host rejected the security policy.
+    Configure(u32),
+    /// The vendor host rejected the pairing request.
+    Pair(u32),
+    /// Querying pairing state failed.
+    Query(u32),
+    /// The vendor host returned a pairing-state value outside its reviewed ABI.
+    UnknownPairingState(u32),
+    /// Removing the stored peer relationship failed.
+    RemoveBond(u32),
+    /// The operation is unavailable outside WS63 target firmware.
+    UnsupportedTarget,
 }
 
 /// Fail-closed errors from the bounded B3 GATT contract.
@@ -1105,6 +1221,60 @@ pub enum BleB1InitError {
 struct BdAddr {
     addr: [u8; 6],
     address_type: u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl BdAddr {
+    fn from_typed(address: BluetoothAddress) -> Self {
+        Self {
+            addr: address.bytes(),
+            address_type: match address.address_type() {
+                AddressType::Public => 0,
+                AddressType::RandomStatic => 1,
+            },
+        }
+    }
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+#[repr(C)]
+struct GapBleSecurityParameters {
+    bondable: u8,
+    io_capability: u8,
+    secure_connections: u8,
+    security_mode: u8,
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+impl GapBleSecurityParameters {
+    fn from_config(config: SecurityConfig) -> Self {
+        Self {
+            bondable: u8::from(matches!(config.bonding(), Bonding::Enabled)),
+            io_capability: match config.io_capability() {
+                IoCapability::DisplayOnly => 0,
+                IoCapability::DisplayYesNo => 1,
+                IoCapability::KeyboardOnly => 2,
+                IoCapability::NoInputNoOutput => 3,
+                IoCapability::KeyboardDisplay => 4,
+            },
+            secure_connections: u8::from(matches!(
+                config.requirement(),
+                SecurityRequirement::SecureConnectionsAuthenticated
+            )),
+            security_mode: match config.requirement() {
+                SecurityRequirement::Encrypted => 1,
+                SecurityRequirement::Authenticated => 2,
+                SecurityRequirement::SecureConnectionsAuthenticated => 3,
+            },
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct BleAuthInfoEvent {
+    key_length: u8,
+    key: [u8; 16],
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1345,10 +1515,11 @@ struct GapBleCallbacks {
     stop_advertising: Option<extern "C" fn(u8, u32)>,
     scan_result: Option<extern "C" fn(*const GapBleScanResult)>,
     connection_state: Option<extern "C" fn(u16, *const BdAddr, u32, u32, u32)>,
-    pairing_result: *const c_void,
+    pairing_result: Option<extern "C" fn(u16, *const BdAddr, u32)>,
     read_rssi: *const c_void,
     terminate_advertising: *const c_void,
-    authentication_complete: *const c_void,
+    authentication_complete:
+        Option<extern "C" fn(u16, *const BdAddr, u32, *const BleAuthInfoEvent)>,
     connection_parameters: *const c_void,
     set_data_filter: *const c_void,
     clean_data_filter: *const c_void,
@@ -1367,10 +1538,10 @@ impl GapBleCallbacks {
             stop_advertising: Some(ble_stop_advertising_callback),
             scan_result: Some(ble_scan_result_callback),
             connection_state: Some(ble_connection_state_callback),
-            pairing_result: core::ptr::null(),
+            pairing_result: Some(ble_pairing_result_callback),
             read_rssi: core::ptr::null(),
             terminate_advertising: core::ptr::null(),
-            authentication_complete: core::ptr::null(),
+            authentication_complete: Some(ble_authentication_complete_callback),
             connection_parameters: core::ptr::null(),
             set_data_filter: core::ptr::null(),
             clean_data_filter: core::ptr::null(),
@@ -1564,6 +1735,40 @@ extern "C" fn ble_connection_state_callback(
         connected: state == 1,
         pair_state,
         reason,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_pairing_result_callback(conn_id: u16, address: *const BdAddr, status: u32) {
+    let Some(address) = (unsafe { address.as_ref() }) else {
+        return;
+    };
+    push_ble_event(BleB2Event::PairingComplete {
+        conn_id,
+        address: address.addr,
+        address_type: address.address_type,
+        status,
+    });
+}
+
+#[cfg(target_arch = "riscv32")]
+extern "C" fn ble_authentication_complete_callback(
+    conn_id: u16,
+    address: *const BdAddr,
+    status: u32,
+    authentication: *const BleAuthInfoEvent,
+) {
+    let Some(address) = (unsafe { address.as_ref() }) else {
+        return;
+    };
+    let key_material_present =
+        unsafe { authentication.as_ref() }.is_some_and(|event| event.key_length != 0);
+    push_ble_event(BleB2Event::AuthenticationComplete {
+        conn_id,
+        address: address.addr,
+        address_type: address.address_type,
+        status,
+        key_material_present,
     });
 }
 
@@ -1762,6 +1967,10 @@ unsafe extern "C" {
     fn gap_ble_stop_scan() -> u32;
     fn gap_ble_connect_remote_device(address: *const BdAddr) -> u32;
     fn gap_ble_disconnect_remote_device(address: *const BdAddr) -> u32;
+    fn gap_ble_set_sec_param(parameters: *mut GapBleSecurityParameters) -> u32;
+    fn gap_ble_pair_remote_device(address: *const BdAddr) -> u32;
+    fn gap_ble_get_pair_state(address: *const BdAddr, state: *mut u32) -> u32;
+    fn gap_ble_remove_pair(address: *const BdAddr) -> u32;
     fn gatts_register_callbacks(callbacks: *mut GattsCallbacks) -> u32;
     fn gatts_register_server(app_uuid: *mut BtUuid, server_id: *mut u8) -> u32;
     fn gatts_add_service_sync(
@@ -2071,6 +2280,20 @@ mod tests {
     }
 
     #[test]
+    fn typed_security_policy_maps_to_the_reviewed_ws63_gap_abi() {
+        let parameters = GapBleSecurityParameters::from_config(SecurityConfig::new(
+            Bonding::Enabled,
+            IoCapability::NoInputNoOutput,
+            SecurityRequirement::SecureConnectionsAuthenticated,
+        ));
+        assert_eq!(core::mem::size_of::<GapBleSecurityParameters>(), 4);
+        assert_eq!(parameters.bondable, 1);
+        assert_eq!(parameters.io_capability, 3);
+        assert_eq!(parameters.secure_connections, 1);
+        assert_eq!(parameters.security_mode, 3);
+    }
+
+    #[test]
     fn b1_task_groups_form_one_atomic_plan() {
         let groups = [
             task_group(OWNER_BT, STACK_BT).unwrap(),
@@ -2155,5 +2378,7 @@ const _: () = {
     assert!(core::mem::size_of::<GapBleScanParameters>() == 8);
     assert!(core::mem::size_of::<GapBleScanResult>() == 28);
     assert!(core::mem::offset_of!(GapBleScanResult, advertising_data) == 24);
+    assert!(core::mem::size_of::<GapBleSecurityParameters>() == 4);
+    assert!(core::mem::size_of::<BleAuthInfoEvent>() == 17);
     assert!(core::mem::size_of::<GapBleCallbacks>() == 64);
 };
