@@ -23,6 +23,205 @@ const OS_ERROR_TIMEOUT: c_int = -2;
 const OS_ERROR_PARAMETER: c_int = -4;
 const WAIT_FOREVER: u32 = u32::MAX;
 
+const BLE_CRYPTO_SLOT_COUNT: usize = 2;
+const BLE_CRYPTO_KEY_BYTES: usize = 64;
+const HANDLE_INDEX_MASK: u32 = 0xff;
+
+#[derive(Clone, Copy)]
+struct KeyslotState {
+    generation: u32,
+    kind: u32,
+    key_len: u8,
+    in_use: bool,
+    key: [u8; BLE_CRYPTO_KEY_BYTES],
+}
+
+impl KeyslotState {
+    const EMPTY: Self = Self {
+        generation: 0,
+        kind: 0,
+        key_len: 0,
+        in_use: false,
+        key: [0; BLE_CRYPTO_KEY_BYTES],
+    };
+}
+
+#[derive(Clone, Copy)]
+struct KladState {
+    generation: u32,
+    destination: u32,
+    keyslot: u32,
+    engine: u32,
+    in_use: bool,
+}
+
+impl KladState {
+    const EMPTY: Self = Self {
+        generation: 0,
+        destination: u32::MAX,
+        keyslot: 0,
+        engine: u32::MAX,
+        in_use: false,
+    };
+}
+
+#[derive(Clone, Copy)]
+struct CryptoOpState {
+    generation: u32,
+    state: u8,
+    key_len: u8,
+    result_len: u8,
+    key: [u8; BLE_CRYPTO_KEY_BYTES],
+    result: [u8; 32],
+}
+
+impl CryptoOpState {
+    const EMPTY: Self = Self {
+        generation: 0,
+        state: 0,
+        key_len: 0,
+        result_len: 0,
+        key: [0; BLE_CRYPTO_KEY_BYTES],
+        result: [0; 32],
+    };
+
+    fn clear(&mut self) {
+        let generation = self.generation;
+        self.key.fill(0);
+        self.result.fill(0);
+        *self = Self {
+            generation,
+            ..Self::EMPTY
+        };
+    }
+}
+
+struct BleCryptoState {
+    keyslots: [KeyslotState; BLE_CRYPTO_SLOT_COUNT],
+    klads: [KladState; BLE_CRYPTO_SLOT_COUNT],
+    hashes: [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    macs: [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+}
+
+impl BleCryptoState {
+    const fn new() -> Self {
+        Self {
+            keyslots: [KeyslotState::EMPTY; BLE_CRYPTO_SLOT_COUNT],
+            klads: [KladState::EMPTY; BLE_CRYPTO_SLOT_COUNT],
+            hashes: [CryptoOpState::EMPTY; BLE_CRYPTO_SLOT_COUNT],
+            macs: [CryptoOpState::EMPTY; BLE_CRYPTO_SLOT_COUNT],
+        }
+    }
+}
+
+struct BleCryptoStorage(UnsafeCell<BleCryptoState>);
+
+// SAFETY: every access to the contained state is serialized by a critical
+// section, while hardware execution occurs only after an operation is marked
+// busy and outside the critical section.
+unsafe impl Sync for BleCryptoStorage {}
+
+static BLE_CRYPTO: BleCryptoStorage = BleCryptoStorage(UnsafeCell::new(BleCryptoState::new()));
+
+fn next_generation(current: u32) -> u32 {
+    let next = current.wrapping_add(1) & 0x00ff_ffff;
+    next.max(1)
+}
+
+fn encode_handle(index: usize, generation: u32) -> u32 {
+    (generation << 8) | (index as u32 + 1)
+}
+
+fn decode_handle(handle: u32) -> Option<(usize, u32)> {
+    let raw_index = handle & HANDLE_INDEX_MASK;
+    let generation = handle >> 8;
+    if raw_index == 0 || raw_index as usize > BLE_CRYPTO_SLOT_COUNT || generation == 0 {
+        None
+    } else {
+        Some((raw_index as usize - 1, generation))
+    }
+}
+
+fn with_ble_crypto<T>(operation: impl FnOnce(&mut BleCryptoState) -> T) -> T {
+    critical_section::with(|_| {
+        // SAFETY: BLE_CRYPTO is accessed only under this critical section.
+        operation(unsafe { &mut *BLE_CRYPTO.0.get() })
+    })
+}
+
+fn allocate_crypto_op(
+    slots: &mut [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    key: &[u8],
+) -> Option<u32> {
+    let (index, slot) = slots
+        .iter_mut()
+        .enumerate()
+        .find(|(_, slot)| slot.state == 0)?;
+    slot.generation = next_generation(slot.generation);
+    slot.state = 1;
+    slot.key_len = u8::try_from(key.len()).ok()?;
+    slot.key[..key.len()].copy_from_slice(key);
+    Some(encode_handle(index, slot.generation))
+}
+
+#[cfg(target_arch = "riscv32")]
+fn begin_crypto_update(
+    slots: &mut [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    handle: u32,
+) -> Option<([u8; BLE_CRYPTO_KEY_BYTES], usize, usize, u32)> {
+    let (index, generation) = decode_handle(handle)?;
+    let slot = &mut slots[index];
+    if slot.generation != generation || slot.state != 1 {
+        return None;
+    }
+    slot.state = 2;
+    Some((slot.key, slot.key_len.into(), index, generation))
+}
+
+#[cfg(target_arch = "riscv32")]
+fn complete_crypto_update(
+    slots: &mut [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    index: usize,
+    generation: u32,
+    result: &[u8],
+) -> bool {
+    let slot = &mut slots[index];
+    if slot.generation != generation || slot.state != 2 || result.len() > slot.result.len() {
+        return false;
+    }
+    slot.result[..result.len()].copy_from_slice(result);
+    slot.result_len = result.len() as u8;
+    slot.state = 3;
+    true
+}
+
+#[cfg(target_arch = "riscv32")]
+fn fail_crypto_update(
+    slots: &mut [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    index: usize,
+    generation: u32,
+) {
+    let slot = &mut slots[index];
+    if slot.generation == generation && slot.state == 2 {
+        slot.clear();
+    }
+}
+
+fn take_crypto_result(
+    slots: &mut [CryptoOpState; BLE_CRYPTO_SLOT_COUNT],
+    handle: u32,
+) -> Option<([u8; 32], usize)> {
+    let (index, generation) = decode_handle(handle)?;
+    let slot = &mut slots[index];
+    if slot.generation != generation || slot.state != 3 {
+        return None;
+    }
+    let result = slot.result;
+    let length = slot.result_len.into();
+    slot.clear();
+    Some((result, length))
+}
+
 fn wait_timeout(ticks: u32) -> WaitTimeout {
     if ticks == WAIT_FOREVER {
         WaitTimeout::Forever
@@ -615,130 +814,545 @@ pub extern "C" fn global_isr_time_statistics_get() -> u64 {
     0
 }
 
-// The mask-ROM BTC data ABI contains function tables that reference the
-// vendor unified-cipher service layer. B1 does not perform pairing or encrypted
-// link setup, but the table entries must still resolve to valid functions.
-// Keep these signatures aligned with the public SDK headers and fail closed
-// until B2 replaces them with hisi-crypto-ws63 keyslot/hash/MAC capabilities.
+// The mask-ROM BTC data ABI references a narrow subset of the vendor
+// unified-cipher API. These structs and handles model only the archive-proven
+// HMAC-SM3 and AES-128-CMAC call sequences. Other algorithms fail closed.
+const KEYSLOT_MCIPHER: u32 = 0;
+const KEYSLOT_HMAC: u32 = 1;
+const KLAD_DEST_MCIPHER: u32 = 0;
+const KLAD_DEST_HMAC: u32 = 1;
+const KLAD_ENGINE_AES: u32 = 0x20;
+const KLAD_ENGINE_SM3_HMAC: u32 = 0xa2;
+const KLAD_HMAC_SM3: u32 = 0x30;
+
+#[repr(C)]
+struct KladAttribute {
+    root_key: u32,
+    engine: u32,
+    decrypt_support: bool,
+    encrypt_support: bool,
+    key_security: [bool; 6],
+    rkp_software_config: u32,
+}
+
+#[repr(C)]
+struct KladClearKey {
+    key: *const u8,
+    key_length: u32,
+    key_parity: bool,
+    hmac_type: u32,
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_km_init() -> u32 {
-    ERROR
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_km_deinit() -> u32 {
-    ERROR
+    OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_keyslot_create(_handle: *mut u32, _kind: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_keyslot_create(handle: *mut u32, kind: u32) -> u32 {
+    if handle.is_null() || !matches!(kind, KEYSLOT_MCIPHER | KEYSLOT_HMAC) {
+        return ERROR;
+    }
+    let allocated = with_ble_crypto(|state| {
+        let (index, slot) = state
+            .keyslots
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| !slot.in_use)?;
+        slot.generation = next_generation(slot.generation);
+        slot.kind = kind;
+        slot.key_len = 0;
+        slot.in_use = true;
+        slot.key.fill(0);
+        Some(encode_handle(index, slot.generation))
+    });
+    let Some(allocated) = allocated else {
+        return ERROR;
+    };
+    // SAFETY: non-null output is owned by the synchronous C caller.
+    unsafe { *handle = allocated };
+    OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_keyslot_destroy(_handle: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_keyslot_destroy(handle: u32) -> u32 {
+    with_ble_crypto(|state| {
+        let Some((index, generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        if state
+            .klads
+            .iter()
+            .any(|klad| klad.in_use && klad.keyslot == handle)
+        {
+            return ERROR;
+        }
+        let slot = &mut state.keyslots[index];
+        if !slot.in_use || slot.generation != generation {
+            return ERROR;
+        }
+        slot.key.fill(0);
+        slot.key_len = 0;
+        slot.in_use = false;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_create(_handle: *mut u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_create(handle: *mut u32) -> u32 {
+    if handle.is_null() {
+        return ERROR;
+    }
+    let allocated = with_ble_crypto(|state| {
+        let (index, slot) = state
+            .klads
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| !slot.in_use)?;
+        slot.generation = next_generation(slot.generation);
+        slot.destination = u32::MAX;
+        slot.keyslot = 0;
+        slot.engine = u32::MAX;
+        slot.in_use = true;
+        Some(encode_handle(index, slot.generation))
+    });
+    let Some(allocated) = allocated else {
+        return ERROR;
+    };
+    // SAFETY: non-null output is owned by the synchronous C caller.
+    unsafe { *handle = allocated };
+    OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_destroy(_handle: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_destroy(handle: u32) -> u32 {
+    with_ble_crypto(|state| {
+        let Some((index, generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let slot = &mut state.klads[index];
+        if !slot.in_use || slot.generation != generation || slot.keyslot != 0 {
+            return ERROR;
+        }
+        slot.in_use = false;
+        slot.destination = u32::MAX;
+        slot.engine = u32::MAX;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_attach(_handle: u32, _destination: u32, _keyslot: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_attach(handle: u32, destination: u32, keyslot: u32) -> u32 {
+    with_ble_crypto(|state| {
+        let Some((klad_index, klad_generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let Some((key_index, key_generation)) = decode_handle(keyslot) else {
+            return ERROR;
+        };
+        let key = state.keyslots[key_index];
+        let klad = &mut state.klads[klad_index];
+        if !klad.in_use
+            || klad.generation != klad_generation
+            || klad.keyslot != 0
+            || !key.in_use
+            || key.generation != key_generation
+            || !matches!(
+                (destination, key.kind),
+                (KLAD_DEST_MCIPHER, KEYSLOT_MCIPHER) | (KLAD_DEST_HMAC, KEYSLOT_HMAC)
+            )
+        {
+            return ERROR;
+        }
+        klad.destination = destination;
+        klad.keyslot = keyslot;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_detach(_handle: u32, _destination: u32, _keyslot: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_detach(handle: u32, destination: u32, keyslot: u32) -> u32 {
+    with_ble_crypto(|state| {
+        let Some((index, generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let klad = &mut state.klads[index];
+        if !klad.in_use
+            || klad.generation != generation
+            || klad.destination != destination
+            || klad.keyslot != keyslot
+        {
+            return ERROR;
+        }
+        klad.destination = u32::MAX;
+        klad.keyslot = 0;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_set_attr(_handle: u32, _attribute: *const c_void) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_set_attr(handle: u32, attribute: *const c_void) -> u32 {
+    if attribute.is_null() {
+        return ERROR;
+    }
+    // SAFETY: the archive passes the public SDK's aligned attribute for this call.
+    let attribute = unsafe { &*attribute.cast::<KladAttribute>() };
+    if !matches!(attribute.engine, KLAD_ENGINE_AES | KLAD_ENGINE_SM3_HMAC) {
+        return ERROR;
+    }
+    with_ble_crypto(|state| {
+        let Some((index, generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let klad = &mut state.klads[index];
+        if !klad.in_use || klad.generation != generation {
+            return ERROR;
+        }
+        klad.engine = attribute.engine;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_klad_set_clear_key(_handle: u32, _key: *const c_void) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_klad_set_clear_key(handle: u32, key: *const c_void) -> u32 {
+    if key.is_null() {
+        return ERROR;
+    }
+    // SAFETY: the archive passes the public SDK's aligned clear-key descriptor.
+    let key = unsafe { &*key.cast::<KladClearKey>() };
+    let Ok(key_length) = usize::try_from(key.key_length) else {
+        return ERROR;
+    };
+    if key.key.is_null() || key_length == 0 || key_length > BLE_CRYPTO_KEY_BYTES {
+        return ERROR;
+    }
+    let mut material = [0u8; BLE_CRYPTO_KEY_BYTES];
+    // SAFETY: the validated descriptor promises key_length readable bytes.
+    material[..key_length]
+        .copy_from_slice(unsafe { core::slice::from_raw_parts(key.key, key_length) });
+    let status = with_ble_crypto(|state| {
+        let Some((klad_index, klad_generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let klad = state.klads[klad_index];
+        let Some((key_index, key_generation)) = decode_handle(klad.keyslot) else {
+            return ERROR;
+        };
+        let keyslot = &mut state.keyslots[key_index];
+        let valid_profile = match (klad.destination, klad.engine, keyslot.kind) {
+            (KLAD_DEST_HMAC, KLAD_ENGINE_SM3_HMAC, KEYSLOT_HMAC) => key.hmac_type == KLAD_HMAC_SM3,
+            (KLAD_DEST_MCIPHER, KLAD_ENGINE_AES, KEYSLOT_MCIPHER) => key_length == 16,
+            _ => false,
+        };
+        if !klad.in_use
+            || klad.generation != klad_generation
+            || !keyslot.in_use
+            || keyslot.generation != key_generation
+            || !valid_profile
+        {
+            return ERROR;
+        }
+        keyslot.key.fill(0);
+        keyslot.key[..key_length].copy_from_slice(&material[..key_length]);
+        keyslot.key_len = key_length as u8;
+        OK
+    });
+    material.fill(0);
+    status
+}
+
+const HASH_HMAC_SM3: u32 = 0x1216_9100;
+const SYMC_ALG_AES: u32 = 1;
+const SYMC_MODE_CMAC: u32 = 8;
+const SYMC_KEY_128BIT: u32 = 1;
+
+#[repr(C)]
+struct CipherHashAttribute {
+    key: *const u8,
+    key_len: u32,
+    keyslot_handle: u32,
+    hash_type: u32,
+    is_keyslot: bool,
+    is_long_term: bool,
+}
+
+#[repr(C)]
+struct CipherMacAttribute {
+    is_long_term: bool,
+    symc_algorithm: u32,
+    work_mode: u32,
+    key_length: u32,
+    keyslot_handle: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct CipherBufferAttribute {
+    memory_handle: u64,
+    address_offset: u64,
+    kernel_memory_handle: *mut c_void,
+    physical_address: usize,
+    virtual_address: *const u8,
+    security: u32,
+}
+
+fn keyslot_material(handle: u32, expected_kind: u32) -> Option<([u8; 64], usize)> {
+    with_ble_crypto(|state| {
+        let (index, generation) = decode_handle(handle)?;
+        let slot = state.keyslots[index];
+        if !slot.in_use
+            || slot.generation != generation
+            || slot.kind != expected_kind
+            || slot.key_len == 0
+        {
+            return None;
+        }
+        Some((slot.key, slot.key_len.into()))
+    })
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe fn cipher_input<'a>(source: *const c_void, length: u32) -> Option<&'a [u8]> {
+    if source.is_null() {
+        return None;
+    }
+    // SAFETY: the archive passes the public SDK buffer descriptor for this call.
+    let source = unsafe { &*source.cast::<CipherBufferAttribute>() };
+    let length = usize::try_from(length).ok()?;
+    if source.virtual_address.is_null() && length != 0 {
+        return None;
+    }
+    // SAFETY: the descriptor promises `length` readable bytes synchronously.
+    Some(unsafe { core::slice::from_raw_parts(source.virtual_address, length) })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_hash_init() -> u32 {
-    ERROR
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_hash_deinit() -> u32 {
-    ERROR
+    with_ble_crypto(|state| {
+        for slot in &mut state.hashes {
+            slot.clear();
+        }
+    });
+    OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_cipher_hash_start(_handle: *mut u32, _attribute: *const c_void) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_cipher_hash_start(handle: *mut u32, attribute: *const c_void) -> u32 {
+    if handle.is_null() || attribute.is_null() {
+        return ERROR;
+    }
+    // SAFETY: the archive passes the reviewed public SDK attribute.
+    let attribute = unsafe { &*attribute.cast::<CipherHashAttribute>() };
+    if attribute.hash_type != HASH_HMAC_SM3 || !attribute.is_keyslot {
+        return ERROR;
+    }
+    let Some((mut key, key_len)) = keyslot_material(attribute.keyslot_handle, KEYSLOT_HMAC) else {
+        return ERROR;
+    };
+    let allocated = with_ble_crypto(|state| allocate_crypto_op(&mut state.hashes, &key[..key_len]));
+    key.fill(0);
+    let Some(allocated) = allocated else {
+        return ERROR;
+    };
+    // SAFETY: non-null output is owned by the synchronous C caller.
+    unsafe { *handle = allocated };
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_hash_update(
-    _handle: u32,
-    _source: *const c_void,
-    _length: u32,
+    handle: u32,
+    source: *const c_void,
+    length: u32,
 ) -> u32 {
-    ERROR
+    #[cfg(target_arch = "riscv32")]
+    unsafe {
+        let Some(input) = cipher_input(source, length) else {
+            return ERROR;
+        };
+        let Some((mut key, key_len, index, generation)) =
+            with_ble_crypto(|state| begin_crypto_update(&mut state.hashes, handle))
+        else {
+            return ERROR;
+        };
+        let mut output = [0u8; 32];
+        let result = crate::crypto::hmac_sm3_hardware(&key[..key_len], input, &mut output);
+        key.fill(0);
+        let completed = with_ble_crypto(|state| {
+            if result.is_ok() {
+                complete_crypto_update(&mut state.hashes, index, generation, &output)
+            } else {
+                fail_crypto_update(&mut state.hashes, index, generation);
+                false
+            }
+        });
+        output.fill(0);
+        if completed { OK } else { ERROR }
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        let _ = (handle, source, length);
+        ERROR
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_hash_finish(
-    _handle: u32,
-    _output: *mut u8,
-    _length: *mut u32,
+    handle: u32,
+    output: *mut u8,
+    length: *mut u32,
 ) -> u32 {
-    ERROR
+    finish_crypto_op(handle, output, length, true)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_symc_init() -> u32 {
-    ERROR
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_symc_deinit() -> u32 {
-    ERROR
+    with_ble_crypto(|state| {
+        for slot in &mut state.macs {
+            slot.clear();
+        }
+    });
+    OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_cipher_symc_destroy(_handle: u32) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_cipher_symc_destroy(handle: u32) -> u32 {
+    with_ble_crypto(|state| {
+        let Some((index, generation)) = decode_handle(handle) else {
+            return ERROR;
+        };
+        let slot = &mut state.macs[index];
+        if slot.generation != generation || slot.state == 0 {
+            return ERROR;
+        }
+        slot.clear();
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_drv_cipher_mac_start(_handle: *mut u32, _attribute: *const c_void) -> u32 {
-    ERROR
+pub extern "C" fn uapi_drv_cipher_mac_start(handle: *mut u32, attribute: *const c_void) -> u32 {
+    if handle.is_null() || attribute.is_null() {
+        return ERROR;
+    }
+    // SAFETY: the archive passes the reviewed public SDK attribute.
+    let attribute = unsafe { &*attribute.cast::<CipherMacAttribute>() };
+    if attribute.symc_algorithm != SYMC_ALG_AES
+        || attribute.work_mode != SYMC_MODE_CMAC
+        || attribute.key_length != SYMC_KEY_128BIT
+    {
+        return ERROR;
+    }
+    let Some((mut key, key_len)) = keyslot_material(attribute.keyslot_handle, KEYSLOT_MCIPHER)
+    else {
+        return ERROR;
+    };
+    if key_len != 16 {
+        key.fill(0);
+        return ERROR;
+    }
+    let allocated = with_ble_crypto(|state| allocate_crypto_op(&mut state.macs, &key[..key_len]));
+    key.fill(0);
+    let Some(allocated) = allocated else {
+        return ERROR;
+    };
+    // SAFETY: non-null output is owned by the synchronous C caller.
+    unsafe { *handle = allocated };
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_mac_update(
-    _handle: u32,
-    _source: *const c_void,
-    _length: u32,
+    handle: u32,
+    source: *const c_void,
+    length: u32,
 ) -> u32 {
-    ERROR
+    #[cfg(target_arch = "riscv32")]
+    unsafe {
+        let Some(input) = cipher_input(source, length) else {
+            return ERROR;
+        };
+        let Some((mut key, key_len, index, generation)) =
+            with_ble_crypto(|state| begin_crypto_update(&mut state.macs, handle))
+        else {
+            return ERROR;
+        };
+        let mut output = [0u8; 16];
+        let result = crate::crypto::aes_cmac_hardware(&key[..key_len], input, &mut output);
+        key.fill(0);
+        let completed = with_ble_crypto(|state| {
+            if result.is_ok() {
+                complete_crypto_update(&mut state.macs, index, generation, &output)
+            } else {
+                fail_crypto_update(&mut state.macs, index, generation);
+                false
+            }
+        });
+        output.fill(0);
+        if completed { OK } else { ERROR }
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        let _ = (handle, source, length);
+        ERROR
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_mac_finish(
-    _handle: u32,
-    _output: *mut u8,
-    _length: *mut u32,
+    handle: u32,
+    output: *mut u8,
+    length: *mut u32,
 ) -> u32 {
-    ERROR
+    finish_crypto_op(handle, output, length, false)
+}
+
+fn finish_crypto_op(handle: u32, output: *mut u8, length: *mut u32, hash: bool) -> u32 {
+    if output.is_null() || length.is_null() {
+        return ERROR;
+    }
+    // SAFETY: non-null in/out length belongs to the synchronous C caller.
+    let capacity = unsafe { *length } as usize;
+    let expected = if hash { 32 } else { 16 };
+    if capacity < expected {
+        return ERROR;
+    }
+    let result = with_ble_crypto(|state| {
+        if hash {
+            take_crypto_result(&mut state.hashes, handle)
+        } else {
+            take_crypto_result(&mut state.macs, handle)
+        }
+    });
+    let Some((mut result, result_len)) = result else {
+        return ERROR;
+    };
+    if result_len != expected {
+        result.fill(0);
+        return ERROR;
+    }
+    // SAFETY: the caller advertises at least result_len writable bytes.
+    unsafe {
+        core::ptr::copy_nonoverlapping(result.as_ptr(), output, result_len);
+        *length = result_len as u32;
+    }
+    result.fill(0);
+    OK
 }
 
 #[cfg(any(target_arch = "riscv32", test))]
@@ -762,7 +1376,7 @@ struct CipherPkePoint {
 }
 
 #[cfg(target_arch = "riscv32")]
-unsafe fn read_pke_data(pointer: *const c_void) -> Option<&'static CipherPkeData> {
+unsafe fn read_pke_data<'a>(pointer: *const c_void) -> Option<&'a CipherPkeData> {
     if pointer.is_null() {
         None
     } else {
@@ -773,7 +1387,7 @@ unsafe fn read_pke_data(pointer: *const c_void) -> Option<&'static CipherPkeData
 }
 
 #[cfg(target_arch = "riscv32")]
-unsafe fn read_pke_point(pointer: *const c_void) -> Option<&'static CipherPkePoint> {
+unsafe fn read_pke_point<'a>(pointer: *const c_void) -> Option<&'a CipherPkePoint> {
     if pointer.is_null() {
         None
     } else {
@@ -935,21 +1549,83 @@ mod tests {
     }
 
     #[test]
-    fn b1_crypto_table_entries_fail_closed() {
+    fn b1_crypto_handles_are_bounded_and_stale_safe() {
+        let mut keyslot = 0;
+        let mut klad = 0;
+        let key = [0x5a; 16];
+        let attribute = KladAttribute {
+            root_key: 0,
+            engine: KLAD_ENGINE_SM3_HMAC,
+            decrypt_support: false,
+            encrypt_support: false,
+            key_security: [false; 6],
+            rkp_software_config: 0,
+        };
+        let clear_key = KladClearKey {
+            key: key.as_ptr(),
+            key_length: key.len() as u32,
+            key_parity: false,
+            hmac_type: KLAD_HMAC_SM3,
+        };
+        let hash_attribute = CipherHashAttribute {
+            key: core::ptr::null(),
+            key_len: 0,
+            keyslot_handle: 0,
+            hash_type: HASH_HMAC_SM3,
+            is_keyslot: true,
+            is_long_term: true,
+        };
+
+        assert_eq!(core::mem::size_of::<KladAttribute>(), 20);
+        assert_eq!(core::mem::offset_of!(KladAttribute, engine), 4);
+        assert_eq!(uapi_drv_km_init(), OK);
+        assert_eq!(uapi_drv_keyslot_create(&mut keyslot, KEYSLOT_HMAC), OK);
+        assert_ne!(keyslot, 0);
+        assert_eq!(uapi_drv_klad_create(&mut klad), OK);
+        assert_eq!(uapi_drv_klad_attach(klad, KLAD_DEST_HMAC, keyslot), OK);
+        assert_eq!(
+            uapi_drv_klad_set_attr(klad, (&attribute as *const KladAttribute).cast()),
+            OK
+        );
+        assert_eq!(
+            uapi_drv_klad_set_clear_key(klad, (&clear_key as *const KladClearKey).cast()),
+            OK
+        );
+        let mut hash_attribute = hash_attribute;
+        hash_attribute.keyslot_handle = keyslot;
+        let mut hash = 0;
+        assert_eq!(uapi_drv_cipher_hash_init(), OK);
+        assert_eq!(
+            uapi_drv_cipher_hash_start(
+                &mut hash,
+                (&hash_attribute as *const CipherHashAttribute).cast(),
+            ),
+            OK
+        );
+        assert_ne!(hash, 0);
+        assert_eq!(uapi_drv_cipher_hash_deinit(), OK);
+        assert_eq!(uapi_drv_klad_detach(klad, KLAD_DEST_HMAC, keyslot), OK);
+        assert_eq!(uapi_drv_klad_destroy(klad), OK);
+        assert_eq!(uapi_drv_keyslot_destroy(keyslot), OK);
+        assert_eq!(uapi_drv_keyslot_destroy(keyslot), ERROR);
+        assert_eq!(uapi_drv_km_deinit(), OK);
+    }
+
+    #[test]
+    fn unsupported_crypto_operations_fail_closed() {
         let mut handle = 0;
-        assert_eq!(uapi_drv_km_init(), ERROR);
-        assert_eq!(uapi_drv_keyslot_create(&mut handle, 0), ERROR);
-        assert_eq!(uapi_drv_klad_create(&mut handle), ERROR);
-        assert_eq!(uapi_drv_cipher_hash_init(), ERROR);
+        assert_eq!(uapi_drv_cipher_hash_init(), OK);
         assert_eq!(
             uapi_drv_cipher_hash_start(&mut handle, core::ptr::null()),
             ERROR
         );
-        assert_eq!(uapi_drv_cipher_symc_init(), ERROR);
+        assert_eq!(uapi_drv_cipher_hash_deinit(), OK);
+        assert_eq!(uapi_drv_cipher_symc_init(), OK);
         assert_eq!(
             uapi_drv_cipher_mac_start(&mut handle, core::ptr::null()),
             ERROR
         );
+        assert_eq!(uapi_drv_cipher_symc_deinit(), OK);
         assert_eq!(
             uapi_drv_cipher_pke_ecc_gen_key(
                 PKE_FIPS_P256R,

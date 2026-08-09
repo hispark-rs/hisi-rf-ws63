@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compatibility calls through the uniquely installed `hisi-crypto-ws63` PKE
   capability. Random key generation remains fail closed until a production
   DRBG is explicitly injected.
+- Add generation-tagged, bounded compatibility handles for the BLE archive's
+  reviewed KM/keyslot/KLAD lifecycle and its one-update HMAC-SM3 and
+  AES-128-CMAC sequences. Unsupported algorithms and stale handles fail closed;
+  SPACC execution remains outside critical sections.
 
 ### Changed
 

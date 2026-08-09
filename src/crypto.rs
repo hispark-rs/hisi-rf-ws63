@@ -26,7 +26,7 @@ use hisi_crypto::sae::{
     TryP256FieldPow, TryP256PointAdd, TryP256PointInvert, TryP256PointMul, TryP256PointValidate,
 };
 #[cfg(target_arch = "riscv32")]
-use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac};
+use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac, TryMacAlgorithm, algorithm};
 use hisi_crypto_ws63::Ws63CryptoStorage;
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto_ws63::Ws63P256;
@@ -592,6 +592,44 @@ where
     MAC_REQUESTS.fetch_add(1, Ordering::Relaxed);
     let started = crypto_timing_start();
     let result = with_hardware_crypto(|backend| TryMac::<N>::mac(backend, key, parts, output));
+    record_crypto_timing(started, &MAC_TOTAL_MS, &MAC_MAX_MS);
+    if result.is_err() {
+        MAC_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Compute the BLE archive's HMAC-SM3 primitive through SPACC.
+#[cfg(target_arch = "riscv32")]
+pub(super) fn hmac_sm3_hardware(
+    key: &[u8],
+    input: &[u8],
+    output: &mut [u8; 32],
+) -> Result<(), CryptoError> {
+    MAC_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let started = crypto_timing_start();
+    let result = with_hardware_crypto(|backend| {
+        TryMacAlgorithm::<algorithm::Sm3, 32>::mac(backend, key, &[input], output)
+    });
+    record_crypto_timing(started, &MAC_TOTAL_MS, &MAC_MAX_MS);
+    if result.is_err() {
+        MAC_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Compute the BLE archive's AES-128-CMAC primitive through SPACC.
+#[cfg(target_arch = "riscv32")]
+pub(super) fn aes_cmac_hardware(
+    key: &[u8],
+    input: &[u8],
+    output: &mut [u8; 16],
+) -> Result<(), CryptoError> {
+    MAC_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let started = crypto_timing_start();
+    let result = with_hardware_crypto(|backend| {
+        TryMacAlgorithm::<algorithm::AesCmac, 16>::mac(backend, key, &[input], output)
+    });
     record_crypto_timing(started, &MAC_TOTAL_MS, &MAC_MAX_MS);
     if result.is_err() {
         MAC_FAILURES.fetch_add(1, Ordering::Relaxed);
