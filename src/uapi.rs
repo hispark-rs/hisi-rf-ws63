@@ -126,9 +126,15 @@ impl WriteStorage for RomNvStorage {
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         let absolute = self.checked_range(offset, bytes.len())?;
         let length = u32::try_from(bytes.len()).map_err(|_| RomNvStorageError::OutOfBounds)?;
+        // The vendor SFC port holds mstatus.MIE clear across each program
+        // operation. Interrupt handlers execute from the same XIP flash and
+        // therefore cannot be allowed to preempt while the command path owns
+        // the controller.
+        let irq_state = crate::osal::osal_irq_lock();
         // SAFETY: the ROM ABI predates const-correctness but does not mutate
         // the input. The slice remains valid until the synchronous call ends.
         let result = unsafe { rom_sfc_reg_write(absolute, bytes.as_ptr().cast_mut(), length) };
+        crate::osal::osal_irq_restore(irq_state);
         if result == 0 {
             Ok(())
         } else {
