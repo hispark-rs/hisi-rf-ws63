@@ -316,7 +316,15 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         // it must not fall through to the missing-callback sentinel merely
         // because the archive census does not retain this indirect reference.
         "new0fun" => "new0fun",
+        // The mask-ROM SMP helpers reach these providers only through the
+        // ordered callback table. They are present in the selected BLE
+        // archives, but that indirect control flow is intentionally invisible
+        // to the ordinary undefined-symbol census.
+        "smp_aes128" => "smp_aes128",
+        "smp_cmac_reverse" => "smp_cmac_reverse",
         "smp_rand" => "uapi_drv_cipher_trng_get_random_bytes",
+        "smp_reverse_octets" => "smp_reverse_octets",
+        "smp_xor" => "smp_xor",
         "strlen" => "__ws63_rom_strlen",
         name if matches!(
             name,
@@ -438,6 +446,18 @@ fn main() {
         "new0fun",
         "BLE SMP allocation callback must resolve to the selected archive provider"
     );
+    for callback in [
+        "smp_aes128",
+        "smp_cmac_reverse",
+        "smp_reverse_octets",
+        "smp_xor",
+    ] {
+        assert_eq!(
+            callback_target(callback, &BTreeSet::new()),
+            callback,
+            "BLE SMP callback must resolve to the selected archive provider"
+        );
+    }
     let target = env::var("TARGET").expect("TARGET");
     if !target.starts_with("riscv32") {
         return;
