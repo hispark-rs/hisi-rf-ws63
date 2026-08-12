@@ -311,6 +311,11 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         "memset" => "__ws63_rom_memset",
         "mem_news" => "osal_kmalloc",
         "mem_frees" => "osal_kfree",
+        // `new0fun` is supplied by the selected BLE bg_common archive. The
+        // mask-ROM SMP path calls it through the ordered callback veneer, so
+        // it must not fall through to the missing-callback sentinel merely
+        // because the archive census does not retain this indirect reference.
+        "new0fun" => "new0fun",
         "smp_rand" => "uapi_drv_cipher_trng_get_random_bytes",
         "strlen" => "__ws63_rom_strlen",
         name if matches!(
@@ -428,6 +433,11 @@ fn write_link_contract(
 }
 
 fn main() {
+    assert_eq!(
+        callback_target("new0fun", &BTreeSet::new()),
+        "new0fun",
+        "BLE SMP allocation callback must resolve to the selected archive provider"
+    );
     let target = env::var("TARGET").expect("TARGET");
     if !target.starts_with("riscv32") {
         return;
