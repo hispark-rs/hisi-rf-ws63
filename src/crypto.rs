@@ -5,6 +5,8 @@
 //! SPACC AES primitives where proven on silicon. `hisi-crypto` owns the
 //! capability contract; RF owns only this WS63 service and C ABI shim.
 
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+use core::{cell::UnsafeCell, num::NonZeroU32};
 pub(crate) use hisi_crypto::CryptoError;
 #[cfg(all(
     target_arch = "riscv32",
@@ -19,12 +21,14 @@ pub(crate) use hisi_crypto::CryptoError;
 ))]
 use hisi_crypto::Pbkdf2HmacSha1;
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
-use hisi_crypto::p256::{P256PrivateKey, P256SharedSecret, TryP256KeyAgreement};
+use hisi_crypto::p256::{P256KeyPair, P256PrivateKey, P256SharedSecret, TryP256KeyAgreement};
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto::sae::{
     P256AffinePoint, P256FieldElement, P256PointResult, TryP256ComputeYSquared, TryP256FieldMul,
     TryP256FieldPow, TryP256PointAdd, TryP256PointInvert, TryP256PointMul, TryP256PointValidate,
 };
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+use hisi_crypto::{CryptoEntropySource, HmacSha256Drbg, ReseedingCryptoRng};
 #[cfg(target_arch = "riscv32")]
 use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac, TryMacAlgorithm, algorithm};
 use hisi_crypto_ws63::Ws63CryptoStorage;
@@ -48,14 +52,18 @@ mod crypto_sae;
 
 #[cfg(target_arch = "riscv32")]
 struct CryptoService {
-    backend: Ws63Crypto<'static>,
+    backend: &'static Ws63Crypto<'static>,
     #[cfg(feature = "wpa3-crypto")]
     p256: Ws63P256<'static>,
+    #[cfg(feature = "ble-init")]
+    drbg: UnsafeCell<ReseedingCryptoRng<HmacSha256Drbg, QualifiedWs63Entropy>>,
     mutex: MutexHandle,
 }
 
 #[cfg(target_arch = "riscv32")]
 static CRYPTO_CELL: StaticCell<CryptoService> = StaticCell::new();
+#[cfg(target_arch = "riscv32")]
+static CRYPTO_BACKEND_CELL: StaticCell<Ws63Crypto<'static>> = StaticCell::new();
 #[cfg(target_arch = "riscv32")]
 static CRYPTO_SERVICE: AtomicPtr<CryptoService> = AtomicPtr::new(core::ptr::null_mut());
 #[cfg(target_arch = "riscv32")]
@@ -188,6 +196,44 @@ struct CryptoContentionContext {
     waiter_result: AtomicU32,
 }
 
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[derive(Clone, Copy)]
+struct QualifiedWs63Entropy {
+    backend: &'static Ws63Crypto<'static>,
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+impl QualifiedWs63Entropy {
+    fn try_new(backend: &'static Ws63Crypto<'static>) -> Result<Self, CryptoError> {
+        let source = Self { backend };
+        let mut previous = [0u8; 16];
+        let mut current = [0u8; 16];
+        source.fill_entropy(&mut previous)?;
+        for _ in 0..3 {
+            source.fill_entropy(&mut current)?;
+            if current == previous {
+                previous.zeroize();
+                current.zeroize();
+                return Err(CryptoError::EntropyHealthCheckFailed);
+            }
+            previous.copy_from_slice(&current);
+        }
+        previous.zeroize();
+        current.zeroize();
+        Ok(source)
+    }
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+impl EntropySource for QualifiedWs63Entropy {
+    fn fill_entropy(&self, output: &mut [u8]) -> Result<(), CryptoError> {
+        self.backend.fill_entropy(output)
+    }
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+impl CryptoEntropySource for QualifiedWs63Entropy {}
+
 /// Install the unique HAL-owned KM/RKP and TRNG capabilities before radio initialization.
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn install_hardware_crypto(
@@ -203,10 +249,41 @@ pub(crate) fn install_hardware_crypto(
     let pke = pke.ok_or(CryptoError::InvalidValue)?;
     #[cfg(not(feature = "wpa3-crypto"))]
     let _ = pke;
+    let Some(backend) = CRYPTO_BACKEND_CELL.try_init(Ws63Crypto::new(Ws63CryptoResources::new(
+        km, spacc, trng, storage,
+    ))) else {
+        // SAFETY: this handle was just created above and has not escaped.
+        let _ = unsafe { hisi_rf_rtos_driver::mutex_destroy(mutex) };
+        return Err(CryptoError::InvalidValue);
+    };
+    #[cfg(feature = "ble-init")]
+    let entropy = match QualifiedWs63Entropy::try_new(backend) {
+        Ok(entropy) => entropy,
+        Err(error) => {
+            // SAFETY: this handle was just created above and has not escaped.
+            let _ = unsafe { hisi_rf_rtos_driver::mutex_destroy(mutex) };
+            return Err(error);
+        }
+    };
+    #[cfg(feature = "ble-init")]
+    let drbg = match ReseedingCryptoRng::<HmacSha256Drbg, _>::try_new(
+        entropy,
+        NonZeroU32::new(1_024).unwrap(),
+        b"hisi-rf-ws63/ble-p256/v1",
+    ) {
+        Ok(drbg) => drbg,
+        Err(error) => {
+            // SAFETY: this handle was just created above and has not escaped.
+            let _ = unsafe { hisi_rf_rtos_driver::mutex_destroy(mutex) };
+            return Err(error);
+        }
+    };
     let Some(service) = CRYPTO_CELL.try_init(CryptoService {
-        backend: Ws63Crypto::new(Ws63CryptoResources::new(km, spacc, trng, storage)),
+        backend,
         #[cfg(feature = "wpa3-crypto")]
         p256: Ws63P256::new(pke),
+        #[cfg(feature = "ble-init")]
+        drbg: UnsafeCell::new(drbg),
         mutex,
     }) else {
         // SAFETY: this handle was just created above and has not escaped.
@@ -250,7 +327,7 @@ fn with_crypto_service<T>(
 fn with_hardware_crypto<T>(
     operation: impl FnOnce(&Ws63Crypto<'static>) -> Result<T, CryptoError>,
 ) -> Result<T, CryptoError> {
-    with_crypto_service(|service| operation(&service.backend))
+    with_crypto_service(|service| operation(service.backend))
 }
 
 #[cfg(any(target_arch = "riscv32", test))]
@@ -288,7 +365,7 @@ pub(super) fn p256_point_mul_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .point_mul(point, scalar, output)
     });
     record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
@@ -308,7 +385,7 @@ pub(super) fn p256_public_key_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .try_public_from_private(&private)
     });
     record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
@@ -329,7 +406,7 @@ pub(super) fn p256_ecdh_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .try_agree(&private, peer_public)
     });
     record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
@@ -337,6 +414,37 @@ pub(super) fn p256_ecdh_hardware(
         P256_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
     result
+}
+
+/// Generate a P-256 keypair from the explicitly installed, health-checked DRBG.
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+pub(super) fn p256_generate_keypair_hardware() -> Result<P256KeyPair, CryptoError> {
+    P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let started = crypto_timing_start();
+    let result = with_crypto_service(|service| {
+        // SAFETY: every CryptoService operation holds `service.mutex`; the
+        // DRBG is private to this service and no reference escapes the closure.
+        let drbg = unsafe { &mut *service.drbg.get() };
+        service
+            .p256
+            .session(service.backend)
+            .try_generate_keypair(drbg)
+    });
+    record_crypto_timing(started, &P256_TOTAL_MS, &P256_MAX_MS);
+    if result.is_err() {
+        P256_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+/// Exercise the PKE lock-timeout branch and prove the engine remains reusable.
+#[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
+pub(super) fn p256_fault_recovery_self_test() -> Result<(), CryptoError> {
+    with_crypto_service(|service| {
+        service
+            .p256
+            .diagnostic_lock_timeout_recovery(service.backend)
+    })
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
@@ -351,7 +459,7 @@ pub(super) fn p256_point_add_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .point_add(a, b, output)
     });
     if let Some(elapsed) = crypto_timing_elapsed(started) {
@@ -409,7 +517,7 @@ pub(super) fn p256_field_mul_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .field_mul(a, b, output)
     });
     record_p256_field_result(started, P256FieldOperation::Multiply, &result);
@@ -427,7 +535,7 @@ pub(super) fn p256_field_square_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .field_square(value, output)
     });
     record_p256_field_result(started, P256FieldOperation::Square, &result);
@@ -446,7 +554,7 @@ pub(super) fn p256_field_pow_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .field_pow(base, exponent, output)
     });
     record_p256_field_result(started, P256FieldOperation::Pow, &result);
@@ -490,7 +598,7 @@ pub(super) fn p256_compute_y_squared_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .try_compute_y_squared(x, output)
     });
     record_p256_curve_result(started, P256CurveOperation::YSquared, result.is_err());
@@ -505,7 +613,7 @@ pub(super) fn p256_point_validate_hardware(point: &P256AffinePoint) -> Result<bo
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .try_point_is_on_curve(point)
     });
     record_p256_curve_result(started, P256CurveOperation::Validate, result.is_err());
@@ -523,7 +631,7 @@ pub(super) fn p256_point_invert_hardware(
     let result = with_crypto_service(|service| {
         service
             .p256
-            .session(&service.backend)
+            .session(service.backend)
             .try_point_invert(point, output)
     });
     record_p256_curve_result(started, P256CurveOperation::Invert, result.is_err());
@@ -1146,7 +1254,7 @@ extern "C" fn crypto_contention_holder(argument: *mut core::ffi::c_void) -> *mut
             0xf2, 0x00, 0x15, 0xad,
         ];
         let mut output = [0; 32];
-        let result = TryHash::<32>::hash(&service.backend, &[&b"abc"[..]], &mut output);
+        let result = TryHash::<32>::hash(service.backend, &[&b"abc"[..]], &mut output);
         let matches = output == SHA256_EXPECTED;
         output.zeroize();
         context.holder_releasing.store(1, Ordering::Release);

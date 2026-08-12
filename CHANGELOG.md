@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Route the BLE archive's caller-provided NIST P-256 private-key and ECDH
-  compatibility calls through the uniquely installed `hisi-crypto-ws63` PKE
-  capability. Random key generation remains fail closed until a production
-  DRBG is explicitly injected.
+- Route the BLE archive's caller-provided NIST P-256 private-key, random-key
+  generation, and ECDH compatibility calls through the uniquely installed
+  `hisi-crypto-ws63` PKE capability. Random private keys come from an explicit
+  HMAC-SHA256 DRBG seeded and periodically reseeded by a private, startup- and
+  continuously-health-checked WS63 TRNG adapter; raw TRNG output is never used
+  directly as a CSPRNG.
 - Add generation-tagged, bounded compatibility handles for the BLE archive's
   reviewed KM/keyslot/KLAD lifecycle and its one-update HMAC-SM3 and
   AES-128-CMAC sequences. Unsupported algorithms and stale handles fail closed;

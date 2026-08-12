@@ -14,6 +14,8 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int, c_ulong, c_void};
 use core::num::{NonZeroU32, NonZeroUsize};
 use hisi_rf_rtos_driver::{MutexHandle, SemaphoreHandle, WaitOutcome, WaitTimeout};
+#[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
+use zeroize::Zeroize;
 
 const OK: u32 = 0;
 const ERROR: u32 = 1;
@@ -1447,9 +1449,10 @@ unsafe fn write_pke_bytes(pointer: *mut u8, bytes: &[u8; P256_BYTES]) -> Option<
     Some(())
 }
 
-// The BLE archive uses caller-provided P-256 private scalars. Random key
-// generation (`input == NULL`) remains fail closed until a production DRBG is
-// injected; raw TRNG output is deliberately not treated as a CSPRNG.
+// The BLE archive supports both caller-provided P-256 private scalars and
+// random key generation (`input == NULL`). The random path uses only the
+// explicitly installed, health-checked and reseeding DRBG; raw TRNG output is
+// never treated as a CSPRNG.
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_key(
     curve: u32,
@@ -1462,9 +1465,6 @@ pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_key(
         if curve != PKE_FIPS_P256R {
             return ERROR;
         }
-        let Some(input) = read_pke_data(input) else {
-            return ERROR;
-        };
         let Some(output_private) = read_pke_data(private_key) else {
             return ERROR;
         };
@@ -1474,6 +1474,21 @@ pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_key(
         if output_private.length != P256_BYTES as u32 || output_public.length != P256_BYTES as u32 {
             return ERROR;
         }
+        if output_private.data.is_null() || output_public.x.is_null() || output_public.y.is_null() {
+            return ERROR;
+        }
+        if input.is_null() {
+            let Ok(keypair) = crate::crypto::p256_generate_keypair_hardware() else {
+                return ERROR;
+            };
+            let _ = write_pke_bytes(output_private.data, keypair.private().expose_secret());
+            let _ = write_pke_bytes(output_public.x, &keypair.public().x);
+            let _ = write_pke_bytes(output_public.y, &keypair.public().y);
+            return OK;
+        }
+        let Some(input) = read_pke_data(input) else {
+            return ERROR;
+        };
         let Some(scalar) = pke_bytes(input.data, input.length) else {
             return ERROR;
         };
@@ -1483,12 +1498,9 @@ pub extern "C" fn uapi_drv_cipher_pke_ecc_gen_key(
         let Ok(public) = crate::crypto::p256_public_key_hardware(private) else {
             return ERROR;
         };
-        if write_pke_bytes(output_private.data, &scalar).is_none()
-            || write_pke_bytes(output_public.x, &public.x).is_none()
-            || write_pke_bytes(output_public.y, &public.y).is_none()
-        {
-            return ERROR;
-        }
+        let _ = write_pke_bytes(output_private.data, &scalar);
+        let _ = write_pke_bytes(output_public.x, &public.x);
+        let _ = write_pke_bytes(output_public.y, &public.y);
         OK
     }
     #[cfg(not(target_arch = "riscv32"))]
@@ -1754,8 +1766,69 @@ pub(crate) fn ble_crypto_compat_self_test() -> bool {
             && shared == DOUBLE_GENERATOR_X
     };
 
+    let random_p256_ok = {
+        let mut private_one = [0u8; 32];
+        let mut public_one_x = [0u8; 32];
+        let mut public_one_y = [0u8; 32];
+        let mut private_two = [0u8; 32];
+        let mut public_two_x = [0u8; 32];
+        let mut public_two_y = [0u8; 32];
+        let output_private_one = CipherPkeData {
+            length: 32,
+            data: private_one.as_mut_ptr(),
+        };
+        let output_public_one = CipherPkePoint {
+            x: public_one_x.as_mut_ptr(),
+            y: public_one_y.as_mut_ptr(),
+            length: 32,
+        };
+        let output_private_two = CipherPkeData {
+            length: 32,
+            data: private_two.as_mut_ptr(),
+        };
+        let output_public_two = CipherPkePoint {
+            x: public_two_x.as_mut_ptr(),
+            y: public_two_y.as_mut_ptr(),
+            length: 32,
+        };
+        let first_status = uapi_drv_cipher_pke_ecc_gen_key(
+            PKE_FIPS_P256R,
+            core::ptr::null(),
+            (&output_private_one as *const CipherPkeData)
+                .cast_mut()
+                .cast(),
+            (&output_public_one as *const CipherPkePoint)
+                .cast_mut()
+                .cast(),
+        );
+        let second_status = uapi_drv_cipher_pke_ecc_gen_key(
+            PKE_FIPS_P256R,
+            core::ptr::null(),
+            (&output_private_two as *const CipherPkeData)
+                .cast_mut()
+                .cast(),
+            (&output_public_two as *const CipherPkePoint)
+                .cast_mut()
+                .cast(),
+        );
+        let first_private_valid =
+            hisi_crypto::p256::P256PrivateKey::try_from_be_bytes(private_one).is_ok();
+        let second_private_valid =
+            hisi_crypto::p256::P256PrivateKey::try_from_be_bytes(private_two).is_ok();
+        let result = first_status == OK
+            && second_status == OK
+            && first_private_valid
+            && second_private_valid
+            && private_one != private_two
+            && (public_one_x != public_two_x || public_one_y != public_two_y);
+        private_one.zeroize();
+        private_two.zeroize();
+        result
+    };
+    let p256_recovery_ok = crate::crypto::p256_fault_recovery_self_test().is_ok();
+
     reset_ble_crypto_state();
-    hmac_ok && cmac_ok && p256_ok
+    hmac_ok && cmac_ok && p256_ok && random_p256_ok && p256_recovery_ok
 }
 
 #[cfg(test)]
