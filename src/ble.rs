@@ -485,9 +485,6 @@ impl BleEventQueue {
 
 #[cfg(target_arch = "riscv32")]
 static BLE_EVENT_QUEUE: AtomicPtr<BleEventQueue> = AtomicPtr::new(core::ptr::null_mut());
-#[cfg(target_arch = "riscv32")]
-static BLE_BOND_RECORD_QUEUE: AtomicPtr<BleBondRecordQueue> = AtomicPtr::new(core::ptr::null_mut());
-
 /// Caller-owned B1 allocator bytes. They may be claimed exactly once.
 #[repr(C, align(64))]
 pub struct BleB1ArenaStorage<const N: usize> {
@@ -659,6 +656,7 @@ pub struct BleB1Controller {
     _efuse: Efuse<'static>,
     events: &'static BleEventQueue,
     bond_records: &'static BleBondRecordQueue,
+    observed_bond_peers: [Option<([u8; 6], u8)>; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     operations: &'static mut BleB2OperationStorage,
 }
@@ -701,6 +699,21 @@ impl BleB1Controller {
     /// transfer persistence ownership to Rust.
     #[doc(hidden)]
     pub fn next_vendor_bond_record(&mut self) -> Option<SmpRecord> {
+        if let Some(record) = self.bond_records.pop() {
+            return Some(record);
+        }
+        let mut snapshot = ws63_radio_sys::ble::snapshot_smp_records().ok()?;
+        for index in 0..snapshot.len() {
+            let record = &snapshot.records()[index];
+            let identity = (record.peer_address(), record.remote_initial_address_type());
+            if self.observed_bond_peers.contains(&Some(identity)) {
+                continue;
+            }
+            let slot = self.observed_bond_peers.iter().position(Option::is_none)?;
+            self.observed_bond_peers[slot] = Some(identity);
+            self.bond_records.push(snapshot.take(index)?);
+            break;
+        }
         self.bond_records.pop()
     }
 
@@ -1424,8 +1437,6 @@ pub enum BleB1InitError {
     RegisterGattServerCallbacks(u32),
     /// GATT client callback registration returned a vendor error.
     RegisterGattClientCallbacks(u32),
-    /// Internal GAP event-19 observer registration returned a vendor error.
-    RegisterBondRecordObserver(u32),
     /// BLE B1 is executable only on WS63 target firmware.
     UnsupportedTarget,
 }
@@ -1860,22 +1871,6 @@ fn push_ble_event(event: BleB2Event) {
         // before registering callbacks, and never replaces or frees it.
         unsafe { &*queue }.push(event);
     }
-}
-
-#[cfg(target_arch = "riscv32")]
-unsafe extern "C" fn ble_bond_record_callback(_event: u16, record: *const SmpRecord) {
-    let queue = BLE_BOND_RECORD_QUEUE.load(Ordering::Acquire);
-    if queue.is_null() {
-        return;
-    }
-    // SAFETY: internal GAP event 19 passes a callback-owned 71-byte SMP record.
-    // Copying it synchronously prevents the vendor pointer from escaping.
-    let Some(record) = (unsafe { SmpRecord::copy_from_ptr(record.cast()) }) else {
-        return;
-    };
-    // SAFETY: initialization publishes process-lifetime StaticCell storage and
-    // never replaces or frees it.
-    unsafe { &*queue }.push(record);
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -2354,14 +2349,6 @@ pub fn init_ble_b1(
             Ordering::Acquire,
         )
         .map_err(|_| BleB1InitError::EventSinkAlreadyInstalled)?;
-    BLE_BOND_RECORD_QUEUE
-        .compare_exchange(
-            core::ptr::null_mut(),
-            (storage.bond_records as *const BleBondRecordQueue).cast_mut(),
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .map_err(|_| BleB1InitError::EventSinkAlreadyInstalled)?;
     let callback_status =
         unsafe { gap_ble_register_callbacks(core::ptr::addr_of_mut!(BLE_CALLBACKS)) };
     if callback_status != 0 {
@@ -2434,24 +2421,15 @@ pub fn init_ble_b1(
     if status != 0 {
         return Err(BleB1InitError::Enable(status));
     }
-    // The internal callback list belongs to the vendor host and is initialized
-    // by its BLE startup path. Register only after enable_ble accepted startup;
-    // pairing cannot produce event 19 before the application requests it.
-    let callback_status = unsafe {
-        ws63_radio_sys::ble::ble_gap_internal_callback_regist(
-            ws63_radio_sys::ble::INTERNAL_GAP_CALLBACK_GROUP,
-            ws63_radio_sys::ble::INTERNAL_GAP_SMP_RECORD_EVENT,
-            Some(ble_bond_record_callback),
-        )
-    };
-    if callback_status != 0 {
-        return Err(BleB1InitError::RegisterBondRecordObserver(callback_status));
-    }
-    crate::log_emit(b"RFDBG_BLE_U5C_RECORD_OBSERVER_OK\r\n");
+    // Event 19 is a single callback slot owned by the vendor service manager's
+    // automatic-save path. Observe its bounded table from runner context rather
+    // than replacing that callback with a second consumer.
+    crate::log_emit(b"RFDBG_BLE_U5C_RECORD_SNAPSHOT_OK\r\n");
     Ok(BleB1Controller {
         _efuse: resources.efuse,
         events: storage.events,
         bond_records: storage.bond_records,
+        observed_bond_peers: [None; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],
         operations: storage.operations,
     })
 }
@@ -2650,6 +2628,7 @@ mod tests {
             _efuse: unsafe { Efuse::steal() },
             events,
             bond_records: Box::leak(Box::new(BleBondRecordQueue::new())),
+            observed_bond_peers: [None; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],
             operations,
         };
         assert_eq!(
