@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Require the BLE profile to own the WS63 PKE peripheral instead of leaving
   pairing key agreement backed by an unresolved or implicit resource.
+- Name the authentication callback's secret-free observation `ltk_present` to
+  match the reviewed WS63 ABI. The callback carries one 16-byte LTK field, not
+  complete restorable IRK/CSRK bond material.
 
 ## [0.1.0-alpha.75] - 2026-08-09
 

@@ -80,6 +80,9 @@
 #![feature(c_variadic)]
 #![allow(non_upper_case_globals)] // contract symbols must match the C names exactly
 
+#[cfg(test)]
+extern crate std;
+
 #[cfg(all(
     feature = "incremental-backend-experiment",
     not(feature = "upstream-supplicant-port")

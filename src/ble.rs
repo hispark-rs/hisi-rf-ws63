@@ -196,13 +196,13 @@ pub enum BleB2Event {
         address_type: u8,
         status: u32,
     },
-    /// Link authentication completed. Key material remains inside the backend.
+    /// Link authentication completed. LTK bytes remain inside the backend.
     AuthenticationComplete {
         conn_id: u16,
         address: [u8; 6],
         address_type: u8,
         status: u32,
-        key_material_present: bool,
+        ltk_present: bool,
     },
     /// The local B3 service start request completed.
     GattServiceStarted {
@@ -1277,8 +1277,8 @@ impl GapBleSecurityParameters {
 #[cfg(target_arch = "riscv32")]
 #[repr(C)]
 struct BleAuthInfoEvent {
-    key_length: u8,
-    key: [u8; 16],
+    ltk_len: u8,
+    ltk: [u8; 16],
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1765,14 +1765,13 @@ extern "C" fn ble_authentication_complete_callback(
     let Some(address) = (unsafe { address.as_ref() }) else {
         return;
     };
-    let key_material_present =
-        unsafe { authentication.as_ref() }.is_some_and(|event| event.key_length != 0);
+    let ltk_present = unsafe { authentication.as_ref() }.is_some_and(|event| event.ltk_len != 0);
     push_ble_event(BleB2Event::AuthenticationComplete {
         conn_id,
         address: address.addr,
         address_type: address.address_type,
         status,
-        key_material_present,
+        ltk_present,
     });
 }
 
