@@ -1427,6 +1427,8 @@ pub enum BleB1InitError {
     TaskHandoff,
     /// The WS63 hardware entropy service could not be installed.
     Crypto,
+    /// The WS63 serial-flash command driver could not be initialized.
+    Sfc,
     /// `enable_ble` returned a vendor error.
     Enable(u32),
     /// Another BLE controller already owns the process-wide callback sink.
@@ -2322,6 +2324,10 @@ pub fn init_ble_b1(
     crate::log_emit(b"RFDBG_BLE_B1_VENDOR_MEMORY_OK\r\n");
     let _ = crate::uapi::initialize_rom_timebases();
     crate::log_emit(b"RFDBG_BLE_B1_TIMEBASE_OK\r\n");
+    if crate::uapi::initialize_rom_sfc() != 0 {
+        return Err(BleB1InitError::Sfc);
+    }
+    crate::log_emit(b"RFDBG_BLE_B1_SFC_OK\r\n");
     crate::uapi::enable_efuse_reads();
     crate::log_emit(b"RFDBG_BLE_B1_EFUSE_OK\r\n");
     crate::crypto::install_hardware_crypto(

@@ -52,6 +52,30 @@ unsafe extern "C" {
     fn rom_sfc_reg_read(offset: u32, output: *mut u8, length: u32) -> u32;
     #[link_name = "uapi_sfc_reg_write"]
     fn rom_sfc_reg_write(offset: u32, input: *mut u8, length: u32) -> u32;
+    #[link_name = "uapi_sfc_init"]
+    fn rom_sfc_init(config: *mut SfcFlashConfig) -> u32;
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct SfcFlashConfig {
+    read_type: u32,
+    write_type: u32,
+    mapping_addr: u32,
+    mapping_size: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn initialize_rom_sfc() -> u32 {
+    let mut config = SfcFlashConfig {
+        read_type: 4,  // FAST_READ_QUAD_OUTPUT
+        write_type: 1, // PAGE_PROGRAM
+        mapping_addr: 0x0020_0000,
+        mapping_size: 0x0080_0000,
+    };
+    // SAFETY: called once during RF bootstrap before vendor tasks start. The
+    // layout and values match the WS63 vendor application's `sfc_cfg`.
+    unsafe { rom_sfc_init(&raw mut config) }
 }
 
 #[cfg(target_arch = "riscv32")]
