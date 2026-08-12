@@ -1353,7 +1353,9 @@ impl BdAddr {
             addr: address.bytes(),
             address_type: match address.address_type() {
                 AddressType::Public => 0,
-                AddressType::RandomStatic => 1,
+                AddressType::RandomStatic
+                | AddressType::ResolvablePrivate
+                | AddressType::NonResolvablePrivate => 1,
             },
         }
     }
