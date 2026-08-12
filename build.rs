@@ -320,6 +320,8 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         // ordered callback table. They are present in the selected BLE
         // archives, but that indirect control flow is intentionally invisible
         // to the ordinary undefined-symbol census.
+        "chnl_calc_ble_chnl_cls_to_chnl_map" => "chnl_calc_ble_chnl_cls_to_chnl_map",
+        "chnl_calc_get_valid_map_num" => "chnl_calc_get_valid_map_num",
         "smp_aes128" => "smp_aes128",
         "smp_cmac_reverse" => "smp_cmac_reverse",
         "smp_rand" => "uapi_drv_cipher_trng_get_random_bytes",
@@ -447,6 +449,8 @@ fn main() {
         "BLE SMP allocation callback must resolve to the selected archive provider"
     );
     for callback in [
+        "chnl_calc_ble_chnl_cls_to_chnl_map",
+        "chnl_calc_get_valid_map_num",
         "smp_aes128",
         "smp_cmac_reverse",
         "smp_reverse_octets",
