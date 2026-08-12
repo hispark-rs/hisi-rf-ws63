@@ -825,7 +825,11 @@ impl BleB1Controller {
     #[cfg(target_arch = "riscv32")]
     pub fn connect_peer(&mut self, peer: BluetoothAddress) -> Result<(), BleB3Error> {
         let peer = BdAddr::from_typed(peer);
-        self.connect(peer.addr, peer.address_type)
+        let status = unsafe { gap_ble_connect_remote_device(&raw const peer) };
+        if status != 0 {
+            return Err(BleB3Error::Connect(status));
+        }
+        Ok(())
     }
 
     /// Register and start the fixed B3 primary service.
