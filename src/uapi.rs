@@ -52,6 +52,8 @@ unsafe extern "C" {
     fn rom_sfc_reg_read(offset: u32, output: *mut u8, length: u32) -> u32;
     #[link_name = "uapi_sfc_reg_write"]
     fn rom_sfc_reg_write(offset: u32, input: *mut u8, length: u32) -> u32;
+    fn hal_sfc_register_funcs(functions: *mut c_void) -> u32;
+    fn hal_sfc_v150_funcs_get() -> *mut c_void;
     static mut g_flash_ctrl: FlashControl;
     static mut g_sfc_inited: u8;
 }
@@ -192,6 +194,13 @@ pub(crate) fn initialize_rom_sfc() -> u32 {
     // and faults before returning. Adopt the existing hardware state by
     // populating only the mask-ROM driver's software control block.
     let irq_state = crate::osal::osal_irq_lock();
+    // SAFETY: both functions are fixed WS63 ROM ABI entries. The returned
+    // vtable is the ROM-owned SFC v150 table at 0x180000.
+    let result = unsafe { hal_sfc_register_funcs(hal_sfc_v150_funcs_get()) };
+    if result != 0 {
+        crate::osal::osal_irq_restore(irq_state);
+        return result;
+    }
     // SAFETY: called once before vendor tasks start. These fixed RAM symbols
     // are the documented WS63 ROM ABI and the pointed-to tables are immutable
     // for the firmware lifetime.
