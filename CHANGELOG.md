@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Copy complete WS63 BLE SMP records from internal GAP event 19 into a
+  dedicated bounded, zeroizing observer queue with conservation diagnostics.
+  Vendor automatic persistence remains the sole owner until manual-mode
+  behavior is proven on silicon.
+
 ### Added
 
 - Route the BLE archive's caller-provided NIST P-256 private-key, random-key

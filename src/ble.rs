@@ -31,6 +31,7 @@ use hisi_rf_core::ble::{
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
+use ws63_radio_sys::ble::SmpRecord;
 
 /// Caller-owned heap shared by the BLE host, controller, and RTOS objects.
 pub const BLE_B1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
@@ -69,6 +70,7 @@ const OWNER_BT_SERVICE: u32 = 0x424c_4504;
 const BLE_B2_EVENT_CAPACITY: usize = 32;
 const BLE_B2_ADV_DATA_CAPACITY: usize = 31;
 const BLE_B3_VALUE_CAPACITY: usize = 32;
+const BLE_BOND_RECORD_QUEUE_CAPACITY: usize = 4;
 
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
 struct BleB2OperationStorage {
@@ -306,6 +308,96 @@ struct BleEventQueue {
     enable_status: AtomicU32,
 }
 
+struct BleBondRecordRing {
+    records: [Option<SmpRecord>; BLE_BOND_RECORD_QUEUE_CAPACITY],
+    head: usize,
+    len: usize,
+}
+
+impl BleBondRecordRing {
+    const fn new() -> Self {
+        Self {
+            records: [const { None }; BLE_BOND_RECORD_QUEUE_CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+}
+
+struct BleBondRecordQueue {
+    ring: critical_section::Mutex<RefCell<BleBondRecordRing>>,
+    received: AtomicU32,
+    processed: AtomicU32,
+    dropped: AtomicU32,
+}
+
+impl BleBondRecordQueue {
+    const fn new() -> Self {
+        Self {
+            ring: critical_section::Mutex::new(RefCell::new(BleBondRecordRing::new())),
+            received: AtomicU32::new(0),
+            processed: AtomicU32::new(0),
+            dropped: AtomicU32::new(0),
+        }
+    }
+
+    #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
+    fn push(&self, record: SmpRecord) {
+        self.received.fetch_add(1, Ordering::Relaxed);
+        let accepted = critical_section::with(|cs| {
+            let mut ring = self.ring.borrow(cs).borrow_mut();
+            if ring.len == BLE_BOND_RECORD_QUEUE_CAPACITY {
+                return false;
+            }
+            let index = (ring.head + ring.len) % BLE_BOND_RECORD_QUEUE_CAPACITY;
+            ring.records[index] = Some(record);
+            ring.len += 1;
+            true
+        });
+        if !accepted {
+            // Dropping the rejected SmpRecord zeroizes its copied secret bytes.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn pop(&self) -> Option<SmpRecord> {
+        let record = critical_section::with(|cs| {
+            let mut ring = self.ring.borrow(cs).borrow_mut();
+            if ring.len == 0 {
+                return None;
+            }
+            let head = ring.head;
+            let record = ring.records[head].take();
+            ring.head = (head + 1) % BLE_BOND_RECORD_QUEUE_CAPACITY;
+            ring.len -= 1;
+            record
+        });
+        if record.is_some() {
+            self.processed.fetch_add(1, Ordering::Relaxed);
+        }
+        record
+    }
+
+    fn diagnostics(&self) -> BleBondRecordDiagnostics {
+        let pending = critical_section::with(|cs| self.ring.borrow(cs).borrow().len as u32);
+        BleBondRecordDiagnostics {
+            received: self.received.load(Ordering::Relaxed),
+            processed: self.processed.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            pending,
+        }
+    }
+}
+
+/// Secret-free conservation counters for copied WS63 SMP records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BleBondRecordDiagnostics {
+    pub received: u32,
+    pub processed: u32,
+    pub dropped: u32,
+    pub pending: u32,
+}
+
 impl BleEventQueue {
     const fn new() -> Self {
         Self {
@@ -355,6 +447,8 @@ impl BleEventQueue {
 
 #[cfg(target_arch = "riscv32")]
 static BLE_EVENT_QUEUE: AtomicPtr<BleEventQueue> = AtomicPtr::new(core::ptr::null_mut());
+#[cfg(target_arch = "riscv32")]
+static BLE_BOND_RECORD_QUEUE: AtomicPtr<BleBondRecordQueue> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Caller-owned B1 allocator bytes. They may be claimed exactly once.
 #[repr(C, align(64))]
@@ -387,6 +481,7 @@ impl<const N: usize> Default for BleB1ArenaStorage<N> {
 pub struct BleB1ControlStorage {
     crypto: StaticCell<Ws63CryptoStorage>,
     events: StaticCell<BleEventQueue>,
+    bond_records: StaticCell<BleBondRecordQueue>,
     operations: StaticCell<BleB2OperationStorage>,
 }
 
@@ -396,6 +491,7 @@ impl BleB1ControlStorage {
         Self {
             crypto: StaticCell::new(),
             events: StaticCell::new(),
+            bond_records: StaticCell::new(),
             operations: StaticCell::new(),
         }
     }
@@ -443,10 +539,12 @@ impl<const N: usize> BleB1Storage<N> {
         }
         let crypto = self.control.crypto.init(Ws63CryptoStorage::new());
         let events = self.control.events.init(BleEventQueue::new());
+        let bond_records = self.control.bond_records.init(BleBondRecordQueue::new());
         let operations = self.control.operations.init(BleB2OperationStorage::new());
         Ok(InstalledBleB1Storage {
             crypto,
             events,
+            bond_records,
             operations,
         })
     }
@@ -458,6 +556,8 @@ pub struct InstalledBleB1Storage {
     crypto: &'static mut Ws63CryptoStorage,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     events: &'static BleEventQueue,
+    #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+    bond_records: &'static BleBondRecordQueue,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     operations: &'static mut BleB2OperationStorage,
 }
@@ -520,6 +620,7 @@ impl BleB1Resources {
 pub struct BleB1Controller {
     _efuse: Efuse<'static>,
     events: &'static BleEventQueue,
+    bond_records: &'static BleBondRecordQueue,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     operations: &'static mut BleB2OperationStorage,
 }
@@ -553,6 +654,22 @@ impl BleB1Controller {
     /// Number of vendor events rejected because the bounded queue was full.
     pub fn dropped_events(&self) -> u32 {
         self.events.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Take one copied, opaque vendor SMP record for integration-owned storage.
+    ///
+    /// This is an internal migration surface. The vendor service manager still
+    /// owns automatic persistence; consuming this observer queue does not
+    /// transfer persistence ownership to Rust.
+    #[doc(hidden)]
+    pub fn next_vendor_bond_record(&mut self) -> Option<SmpRecord> {
+        self.bond_records.pop()
+    }
+
+    /// Return secret-free conservation counters for the bond-record observer.
+    #[doc(hidden)]
+    pub fn bond_record_diagnostics(&self) -> BleBondRecordDiagnostics {
+        self.bond_records.diagnostics()
     }
 
     /// Return the asynchronous vendor enable result without consuming its event.
@@ -1215,6 +1332,8 @@ pub enum BleB1InitError {
     RegisterGattServerCallbacks(u32),
     /// GATT client callback registration returned a vendor error.
     RegisterGattClientCallbacks(u32),
+    /// Internal GAP event-19 observer registration returned a vendor error.
+    RegisterBondRecordObserver(u32),
     /// BLE B1 is executable only on WS63 target firmware.
     UnsupportedTarget,
 }
@@ -1647,6 +1766,22 @@ fn push_ble_event(event: BleB2Event) {
         // before registering callbacks, and never replaces or frees it.
         unsafe { &*queue }.push(event);
     }
+}
+
+#[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ble_bond_record_callback(_event: u16, record: *const SmpRecord) {
+    let queue = BLE_BOND_RECORD_QUEUE.load(Ordering::Acquire);
+    if queue.is_null() {
+        return;
+    }
+    // SAFETY: internal GAP event 19 passes a callback-owned 71-byte SMP record.
+    // Copying it synchronously prevents the vendor pointer from escaping.
+    let Some(record) = (unsafe { SmpRecord::copy_from_ptr(record.cast()) }) else {
+        return;
+    };
+    // SAFETY: initialization publishes process-lifetime StaticCell storage and
+    // never replaces or frees it.
+    unsafe { &*queue }.push(record);
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -2125,6 +2260,14 @@ pub fn init_ble_b1(
             Ordering::Acquire,
         )
         .map_err(|_| BleB1InitError::EventSinkAlreadyInstalled)?;
+    BLE_BOND_RECORD_QUEUE
+        .compare_exchange(
+            core::ptr::null_mut(),
+            (storage.bond_records as *const BleBondRecordQueue).cast_mut(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| BleB1InitError::EventSinkAlreadyInstalled)?;
     let callback_status =
         unsafe { gap_ble_register_callbacks(core::ptr::addr_of_mut!(BLE_CALLBACKS)) };
     if callback_status != 0 {
@@ -2142,7 +2285,6 @@ pub fn init_ble_b1(
         return Err(BleB1InitError::RegisterGattClientCallbacks(callback_status));
     }
     crate::log_emit(b"RFDBG_BLE_B3_CALLBACKS_OK\r\n");
-
     let groups: [_; TASK_COUNT] = [
         task_group(OWNER_BT, STACK_BT)?,
         task_group(OWNER_BT_SDK, STACK_BT_SDK)?,
@@ -2198,9 +2340,24 @@ pub fn init_ble_b1(
     if status != 0 {
         return Err(BleB1InitError::Enable(status));
     }
+    // The internal callback list belongs to the vendor host and is initialized
+    // by its BLE startup path. Register only after enable_ble accepted startup;
+    // pairing cannot produce event 19 before the application requests it.
+    let callback_status = unsafe {
+        ws63_radio_sys::ble::ble_gap_internal_callback_regist(
+            ws63_radio_sys::ble::INTERNAL_GAP_CALLBACK_GROUP,
+            ws63_radio_sys::ble::INTERNAL_GAP_SMP_RECORD_EVENT,
+            Some(ble_bond_record_callback),
+        )
+    };
+    if callback_status != 0 {
+        return Err(BleB1InitError::RegisterBondRecordObserver(callback_status));
+    }
+    crate::log_emit(b"RFDBG_BLE_U5C_RECORD_OBSERVER_OK\r\n");
     Ok(BleB1Controller {
         _efuse: resources.efuse,
         events: storage.events,
+        bond_records: storage.bond_records,
         operations: storage.operations,
     })
 }
@@ -2361,12 +2518,44 @@ mod tests {
     }
 
     #[test]
+    fn bond_record_queue_is_bounded_and_conserves_records() {
+        let queue = BleBondRecordQueue::new();
+        for peer in 0..=BLE_BOND_RECORD_QUEUE_CAPACITY as u8 {
+            let mut bytes = [0xa5; ws63_radio_sys::ble::SMP_RECORD_BYTES];
+            bytes[..6].fill(peer);
+            // SAFETY: the complete local array is readable for the copy.
+            let record = unsafe { SmpRecord::copy_from_ptr(bytes.as_ptr()) }.unwrap();
+            queue.push(record);
+        }
+        assert_eq!(
+            queue.diagnostics(),
+            BleBondRecordDiagnostics {
+                received: BLE_BOND_RECORD_QUEUE_CAPACITY as u32 + 1,
+                processed: 0,
+                dropped: 1,
+                pending: BLE_BOND_RECORD_QUEUE_CAPACITY as u32,
+            }
+        );
+        for peer in 0..BLE_BOND_RECORD_QUEUE_CAPACITY as u8 {
+            assert_eq!(queue.pop().unwrap().peer_address(), [peer; 6]);
+        }
+        assert_eq!(queue.pop(), None);
+        let diagnostics = queue.diagnostics();
+        assert_eq!(
+            diagnostics.received,
+            diagnostics.processed + diagnostics.dropped + diagnostics.pending
+        );
+        assert_eq!(diagnostics.pending, 0);
+    }
+
+    #[test]
     fn host_stop_operations_fail_closed() {
         let events = Box::leak(Box::new(BleEventQueue::new()));
         let operations = Box::leak(Box::new(BleB2OperationStorage::new()));
         let mut controller = BleB1Controller {
             _efuse: unsafe { Efuse::steal() },
             events,
+            bond_records: Box::leak(Box::new(BleBondRecordQueue::new())),
             operations,
         };
         assert_eq!(
