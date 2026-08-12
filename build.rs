@@ -360,6 +360,18 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
                 | "osal_udelay"
                 | "osal_wait_uninterruptible"
                 | "osal_wait_wakeup"
+                | "sfc_port_get_delay_once_time"
+                | "sfc_port_get_delay_times"
+                | "sfc_port_get_sfc_bus_dma_regs_base_addr"
+                | "sfc_port_get_sfc_bus_regs_base_addr"
+                | "sfc_port_get_sfc_cmd_databuf_base_addr"
+                | "sfc_port_get_sfc_cmd_regs_base_addr"
+                | "sfc_port_get_sfc_end_addr"
+                | "sfc_port_get_sfc_global_conf_base_addr"
+                | "sfc_port_get_sfc_start_addr"
+                | "sfc_port_get_unknown_flash_info"
+                | "sfc_port_lock"
+                | "sfc_port_unlock"
                 | "panic"
         ) =>
         {

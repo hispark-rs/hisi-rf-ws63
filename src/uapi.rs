@@ -52,30 +52,165 @@ unsafe extern "C" {
     fn rom_sfc_reg_read(offset: u32, output: *mut u8, length: u32) -> u32;
     #[link_name = "uapi_sfc_reg_write"]
     fn rom_sfc_reg_write(offset: u32, input: *mut u8, length: u32) -> u32;
-    #[link_name = "uapi_sfc_init"]
-    fn rom_sfc_init(config: *mut SfcFlashConfig) -> u32;
+    static mut g_flash_ctrl: FlashControl;
+    static mut g_sfc_inited: u8;
 }
 
 #[cfg(target_arch = "riscv32")]
 #[repr(C)]
-struct SfcFlashConfig {
-    read_type: u32,
-    write_type: u32,
-    mapping_addr: u32,
-    mapping_size: u32,
+struct FlashControl {
+    chip_size: u32,
+    read_operation: u32,
+    erase_command_count: u32,
+    write_operation: u32,
+    erase_commands: *const u32,
+    quad_mode: *const FlashCommand,
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct FlashCommand {
+    command_type: u32,
+    command_length: u8,
+    command: [u8; 4],
+}
+
+#[cfg(target_arch = "riscv32")]
+#[repr(C)]
+struct FlashInfo {
+    chip_id: u32,
+    chip_size: u32,
+    erase_command_count: u32,
+    read_commands: *const u32,
+    write_commands: *const u32,
+    erase_commands: *const u32,
+    quad_mode: *const FlashCommand,
+}
+
+// SAFETY: every pointer targets an immutable static table for the complete
+// firmware lifetime. The ROM consumes the descriptor synchronously/read-only.
+#[cfg(target_arch = "riscv32")]
+unsafe impl Sync for FlashInfo {}
+
+#[cfg(target_arch = "riscv32")]
+const fn flash_operation(command: u8, size: u32) -> u32 {
+    1 | ((command as u32) << 3) | (size << 14)
+}
+
+#[cfg(target_arch = "riscv32")]
+static DEFAULT_READ_COMMANDS: [u32; 1] = [flash_operation(0x03, 0)];
+#[cfg(target_arch = "riscv32")]
+static DEFAULT_WRITE_COMMANDS: [u32; 2] = [flash_operation(0, 0), flash_operation(0x02, 0)];
+#[cfg(target_arch = "riscv32")]
+static DEFAULT_ERASE_COMMANDS: [u32; 3] = [
+    flash_operation(0xc7, 0x3ffff),
+    flash_operation(0xd8, 0x10000),
+    flash_operation(0x20, 0x1000),
+];
+#[cfg(target_arch = "riscv32")]
+static DEFAULT_QUAD_MODE: [FlashCommand; 1] = [FlashCommand {
+    command_type: 2, // FLASH_CMD_TYPE_END
+    command_length: 0,
+    command: [0; 4],
+}];
+#[cfg(target_arch = "riscv32")]
+static DEFAULT_FLASH_INFO: FlashInfo = FlashInfo {
+    chip_id: 0x00ff_ffff,
+    chip_size: 0x0008_0000,
+    erase_command_count: 3,
+    read_commands: DEFAULT_READ_COMMANDS.as_ptr(),
+    write_commands: DEFAULT_WRITE_COMMANDS.as_ptr(),
+    erase_commands: DEFAULT_ERASE_COMMANDS.as_ptr(),
+    quad_mode: DEFAULT_QUAD_MODE.as_ptr(),
+};
+
+// These callbacks are part of the public WS63 ROM port ABI. The values mirror
+// the Apache-2.0 SDK SFC port and are deliberately kept narrower than a second
+// SFC driver implementation.
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_get_sfc_start_addr() -> usize {
+    0x0020_0000
+}
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_get_sfc_end_addr() -> usize {
+    0x009f_ffff
+}
+
+macro_rules! sfc_register_base_callback {
+    ($name:ident, $address:expr) => {
+        #[cfg(target_arch = "riscv32")]
+        #[unsafe(no_mangle)]
+        extern "C" fn $name() -> usize {
+            $address
+        }
+    };
+}
+
+sfc_register_base_callback!(sfc_port_get_sfc_global_conf_base_addr, 0x4800_0100);
+sfc_register_base_callback!(sfc_port_get_sfc_bus_regs_base_addr, 0x4800_0200);
+sfc_register_base_callback!(sfc_port_get_sfc_bus_dma_regs_base_addr, 0x4800_0240);
+sfc_register_base_callback!(sfc_port_get_sfc_cmd_regs_base_addr, 0x4800_0300);
+sfc_register_base_callback!(sfc_port_get_sfc_cmd_databuf_base_addr, 0x4800_0400);
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_get_delay_once_time() -> u32 {
+    100
+}
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_get_delay_times() -> u32 {
+    50_000
+}
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_get_unknown_flash_info() -> *const FlashInfo {
+    &raw const DEFAULT_FLASH_INFO
+}
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_lock() -> u32 {
+    crate::osal::osal_irq_lock()
+}
+
+#[cfg(target_arch = "riscv32")]
+#[unsafe(no_mangle)]
+extern "C" fn sfc_port_unlock(state: u32) {
+    crate::osal::osal_irq_restore(state);
 }
 
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn initialize_rom_sfc() -> u32 {
-    let mut config = SfcFlashConfig {
-        read_type: 4,  // FAST_READ_QUAD_OUTPUT
-        write_type: 1, // PAGE_PROGRAM
-        mapping_addr: 0x0020_0000,
-        mapping_size: 0x0080_0000,
-    };
-    // SAFETY: called once during RF bootstrap before vendor tasks start. The
-    // layout and values match the WS63 vendor application's `sfc_cfg`.
-    unsafe { rom_sfc_init(&raw mut config) }
+    // Flashboot has already configured the SFC bus used to execute this XIP
+    // image. Re-running `uapi_sfc_init[_rom]` here rewrites that live mapping
+    // and faults before returning. Adopt the existing hardware state by
+    // populating only the mask-ROM driver's software control block.
+    let irq_state = crate::osal::osal_irq_lock();
+    // SAFETY: called once before vendor tasks start. These fixed RAM symbols
+    // are the documented WS63 ROM ABI and the pointed-to tables are immutable
+    // for the firmware lifetime.
+    unsafe {
+        core::ptr::write_volatile(
+            &raw mut g_flash_ctrl,
+            FlashControl {
+                chip_size: 0x0040_0000,
+                read_operation: flash_operation(0x03, 0),
+                erase_command_count: DEFAULT_ERASE_COMMANDS.len() as u32,
+                write_operation: flash_operation(0x02, 0),
+                erase_commands: DEFAULT_ERASE_COMMANDS.as_ptr(),
+                quad_mode: DEFAULT_QUAD_MODE.as_ptr(),
+            },
+        );
+        core::ptr::write_volatile(&raw mut g_sfc_inited, 1);
+    }
+    crate::osal::osal_irq_restore(irq_state);
+    0
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -148,22 +283,37 @@ impl ReadStorage for RomNvStorage {
 #[cfg(target_arch = "riscv32")]
 impl WriteStorage for RomNvStorage {
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        let absolute = self.checked_range(offset, bytes.len())?;
-        let length = u32::try_from(bytes.len()).map_err(|_| RomNvStorageError::OutOfBounds)?;
-        // The vendor SFC port holds mstatus.MIE clear across each program
-        // operation. Interrupt handlers execute from the same XIP flash and
-        // therefore cannot be allowed to preempt while the command path owns
-        // the controller.
-        let irq_state = crate::osal::osal_irq_lock();
-        // SAFETY: the ROM ABI predates const-correctness but does not mutate
-        // the input. The slice remains valid until the synchronous call ends.
-        let result = unsafe { rom_sfc_reg_write(absolute, bytes.as_ptr().cast_mut(), length) };
-        crate::osal::osal_irq_restore(irq_state);
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(RomNvStorageError::Rom(result))
+        let mut absolute = self.checked_range(offset, bytes.len())?;
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            let boundary = 64 - (absolute as usize & 63);
+            let chunk_len = remaining.len().min(boundary);
+            let (chunk, rest) = remaining.split_at(chunk_len);
+
+            // The vendor SFC patch limits one program request to a 64-byte
+            // boundary. Interrupt handlers execute from the same XIP flash and
+            // cannot preempt while the command path owns the controller.
+            let irq_state = crate::osal::osal_irq_lock();
+            // SAFETY: the ROM ABI predates const-correctness but does not
+            // mutate the input. The slice lives through the synchronous call.
+            let result = unsafe {
+                rom_sfc_reg_write(
+                    absolute,
+                    chunk.as_ptr().cast_mut(),
+                    u32::try_from(chunk_len).expect("SFC chunk length fits u32"),
+                )
+            };
+            crate::osal::osal_irq_restore(irq_state);
+            if result != 0 {
+                return Err(RomNvStorageError::Rom(result));
+            }
+
+            absolute = absolute
+                .checked_add(chunk_len as u32)
+                .ok_or(RomNvStorageError::OutOfBounds)?;
+            remaining = rest;
         }
+        Ok(())
     }
 }
 
