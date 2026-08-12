@@ -821,6 +821,13 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Stop scanning and connect to one validated peer identity.
+    #[cfg(target_arch = "riscv32")]
+    pub fn connect_peer(&mut self, peer: BluetoothAddress) -> Result<(), BleB3Error> {
+        let peer = BdAddr::from_typed(peer);
+        self.connect(peer.addr, peer.address_type)
+    }
+
     /// Register and start the fixed B3 primary service.
     #[cfg(target_arch = "riscv32")]
     pub fn register_gatt_server(&mut self) -> Result<BleGattServer, BleB3Error> {
@@ -1083,6 +1090,13 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Disconnect one validated peer identity.
+    #[cfg(target_arch = "riscv32")]
+    pub fn disconnect_peer(&mut self, peer: BluetoothAddress) -> Result<(), BleB3Error> {
+        let peer = BdAddr::from_typed(peer);
+        self.disconnect(peer.addr, peer.address_type)
+    }
+
     /// Configure the vendor GAP host from a chip-neutral pairing policy.
     #[cfg(target_arch = "riscv32")]
     pub fn configure_security(&mut self, config: SecurityConfig) -> Result<(), BleSecurityError> {
@@ -1184,6 +1198,18 @@ impl BleB1Controller {
         &mut self,
         _: GattServerDefinition,
     ) -> Result<BleGattServer, BleB3Error> {
+        Err(BleB3Error::UnsupportedTarget)
+    }
+
+    /// Host builds cannot connect the WS63 GAP implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn connect_peer(&mut self, _: BluetoothAddress) -> Result<(), BleB3Error> {
+        Err(BleB3Error::UnsupportedTarget)
+    }
+
+    /// Host builds cannot disconnect the WS63 GAP implementation.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn disconnect_peer(&mut self, _: BluetoothAddress) -> Result<(), BleB3Error> {
         Err(BleB3Error::UnsupportedTarget)
     }
 
