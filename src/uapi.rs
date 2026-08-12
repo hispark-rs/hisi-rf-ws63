@@ -12,14 +12,16 @@
 
 use core::ffi::c_void;
 #[cfg(target_arch = "riscv32")]
-use hisi_nvs::{NvConfig, NvError, NvKey, NvReader};
+use hisi_nvs::{NvConfig, NvError, NvKey, NvReader, NvWriter};
 #[cfg(target_arch = "riscv32")]
-use hisi_storage::MemoryMappedStorage;
+use hisi_storage::{MemoryMappedStorage, ReadStorage, WriteStorage};
 use portable_atomic::{AtomicBool, Ordering};
 
 static EFUSE_READY: AtomicBool = AtomicBool::new(false);
 #[cfg(target_arch = "riscv32")]
 static TIMEBASE_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "riscv32")]
+static NV_WRITE_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn enable_efuse_reads() {
@@ -46,6 +48,113 @@ unsafe extern "C" {
     fn uapi_systick_init();
     fn uapi_tcxo_init() -> u32;
     static mut g_systick_clock: u32;
+    #[link_name = "uapi_sfc_reg_read"]
+    fn rom_sfc_reg_read(offset: u32, output: *mut u8, length: u32) -> u32;
+    #[link_name = "uapi_sfc_reg_write"]
+    fn rom_sfc_reg_write(offset: u32, input: *mut u8, length: u32) -> u32;
+}
+
+#[cfg(target_arch = "riscv32")]
+const WS63_FLASH_BASE: usize = 0x0020_0000;
+
+#[cfg(target_arch = "riscv32")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RomNvStorageError {
+    OutOfBounds,
+    Rom(u32),
+}
+
+#[cfg(target_arch = "riscv32")]
+struct RomNvStorage {
+    flash_offset: u32,
+    length: usize,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl RomNvStorage {
+    fn from_linker_region() -> Option<Self> {
+        unsafe extern "C" {
+            static __nv_storage_start: u8;
+            static __nv_storage_length: u8;
+        }
+
+        let start = &raw const __nv_storage_start as usize;
+        let length = &raw const __nv_storage_length as usize;
+        let flash_offset = start.checked_sub(WS63_FLASH_BASE)?.try_into().ok()?;
+        Some(Self {
+            flash_offset,
+            length,
+        })
+    }
+
+    fn checked_range(&self, offset: u32, length: usize) -> Result<u32, RomNvStorageError> {
+        let relative = usize::try_from(offset).map_err(|_| RomNvStorageError::OutOfBounds)?;
+        relative
+            .checked_add(length)
+            .filter(|end| *end <= self.length)
+            .ok_or(RomNvStorageError::OutOfBounds)?;
+        self.flash_offset
+            .checked_add(offset)
+            .ok_or(RomNvStorageError::OutOfBounds)
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl ReadStorage for RomNvStorage {
+    type Error = RomNvStorageError;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        let absolute = self.checked_range(offset, bytes.len())?;
+        let length = u32::try_from(bytes.len()).map_err(|_| RomNvStorageError::OutOfBounds)?;
+        // SAFETY: the bounded output slice is writable for `length`; the ROM
+        // SFC driver owns the controller transaction and returns before exit.
+        let result = unsafe { rom_sfc_reg_read(absolute, bytes.as_mut_ptr(), length) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(RomNvStorageError::Rom(result))
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.length
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl WriteStorage for RomNvStorage {
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        let absolute = self.checked_range(offset, bytes.len())?;
+        let length = u32::try_from(bytes.len()).map_err(|_| RomNvStorageError::OutOfBounds)?;
+        // SAFETY: the ROM ABI predates const-correctness but does not mutate
+        // the input. The slice remains valid until the synchronous call ends.
+        let result = unsafe { rom_sfc_reg_write(absolute, bytes.as_ptr().cast_mut(), length) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(RomNvStorageError::Rom(result))
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+struct NvWriteClaim;
+
+#[cfg(target_arch = "riscv32")]
+impl NvWriteClaim {
+    fn try_acquire() -> Option<Self> {
+        NV_WRITE_CLAIMED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl Drop for NvWriteClaim {
+    fn drop(&mut self) {
+        NV_WRITE_CLAIMED.store(false, Ordering::Release);
+    }
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -247,10 +356,46 @@ pub extern "C" fn uapi_nv_read(
     crate::OSAL_NOK as u32
 }
 
-/// Write an item to non-volatile storage. STUB: returns failure because no
-/// persistent backing has been wired yet.
+/// Append and commit one plaintext item to the WS63 ACPU KV store.
+///
+/// The format layer verifies the new record before invalidating an older
+/// version. Erase and garbage collection are deliberately unsupported, so a
+/// full store fails closed instead of risking adjacent NV data.
 #[unsafe(no_mangle)]
-pub extern "C" fn uapi_nv_write(_key: u16, _value: *const u8, _len: u16) -> u32 {
+pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
+    #[cfg(not(target_arch = "riscv32"))]
+    let _ = (key, value, len);
+
+    #[cfg(target_arch = "riscv32")]
+    {
+        if value.is_null() && len != 0 {
+            return crate::OSAL_NOK as u32;
+        }
+        let Some(_claim) = NvWriteClaim::try_acquire() else {
+            trace_nv(key, len, 0, crate::OSAL_NOK as u32);
+            return crate::OSAL_NOK as u32;
+        };
+        let Some(storage) = RomNvStorage::from_linker_region() else {
+            trace_nv(key, len, 0, crate::OSAL_NOK as u32);
+            return crate::OSAL_NOK as u32;
+        };
+        let Ok(mut writer) = NvWriter::try_new(storage, NvConfig::WS63_ACPU) else {
+            trace_nv(key, len, 0, crate::OSAL_NOK as u32);
+            return crate::OSAL_NOK as u32;
+        };
+        // SAFETY: the C ABI requires `value` to reference `len` readable bytes;
+        // the null/zero case is represented by an empty slice.
+        let input = if len == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(value, len as usize) }
+        };
+        if writer.write(NvKey::from_raw(key), input).is_ok() {
+            trace_nv(key, len, len, crate::OSAL_OK as u32);
+            return crate::OSAL_OK as u32;
+        }
+        trace_nv(key, len, 0, crate::OSAL_NOK as u32);
+    }
     crate::OSAL_NOK as u32
 }
 
