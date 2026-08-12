@@ -691,7 +691,8 @@ pub use ble::{
     BLE_B1_ARENA_BYTES, BLE_B1_MINIMUM_TASK_STACK_BYTES, BLE_B3_CCC_UUID,
     BLE_B3_CHARACTERISTIC_UUID, BLE_B3_SERVICE_UUID, BleB1ArenaStorage, BleB1ControlStorage,
     BleB1Controller, BleB1InitError, BleB1Resources, BleB1Storage, BleB2Error, BleB2Event,
-    BleB3Error, BleGattClient, BleGattServer, BleSecurityError, InstalledBleB1Storage, init_ble_b1,
+    BleB3Error, BleGattClient, BleGattServer, BleSecurityError, BleVendorBondError,
+    InstalledBleB1Storage, init_ble_b1,
 };
 pub use pmp::prepare_vendor_memory;
 #[cfg(feature = "sle-init")]

@@ -31,7 +31,7 @@ use hisi_rf_core::ble::{
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
-use ws63_radio_sys::ble::SmpRecord;
+use ws63_radio_sys::ble::{SmpRecord, SmpRestoreError, SmpSnapshotError};
 
 /// Caller-owned heap shared by the BLE host, controller, and RTOS objects.
 pub const BLE_B1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
@@ -398,6 +398,44 @@ pub struct BleBondRecordDiagnostics {
     pub pending: u32,
 }
 
+/// Failure while inspecting or replaying the vendor-owned bond table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BleVendorBondError {
+    /// The archive reported a table count outside its pinned ABI capacity.
+    InvalidCount { reported: usize, capacity: usize },
+    /// The archive rejected a bounded restore request.
+    Restore(u32),
+    /// Vendor-managed bond operations are executable only on WS63 firmware.
+    UnsupportedTarget,
+}
+
+impl From<SmpSnapshotError> for BleVendorBondError {
+    fn from(error: SmpSnapshotError) -> Self {
+        match error {
+            SmpSnapshotError::InvalidCount { reported, capacity } => {
+                Self::InvalidCount { reported, capacity }
+            }
+            SmpSnapshotError::UnsupportedTarget => Self::UnsupportedTarget,
+        }
+    }
+}
+
+impl From<SmpRestoreError> for BleVendorBondError {
+    fn from(error: SmpRestoreError) -> Self {
+        match error {
+            SmpRestoreError::Vendor(status) => Self::Restore(status),
+            SmpRestoreError::Empty | SmpRestoreError::UnsupportedTarget => Self::UnsupportedTarget,
+            SmpRestoreError::Capacity {
+                requested,
+                capacity,
+            } => Self::InvalidCount {
+                reported: requested,
+                capacity,
+            },
+        }
+    }
+}
+
 impl BleEventQueue {
     const fn new() -> Self {
         Self {
@@ -670,6 +708,30 @@ impl BleB1Controller {
     #[doc(hidden)]
     pub fn bond_record_diagnostics(&self) -> BleBondRecordDiagnostics {
         self.bond_records.diagnostics()
+    }
+
+    /// Count complete records currently owned by vendor persistence.
+    ///
+    /// The temporary snapshot is zeroized on return. No record bytes or key
+    /// fields cross this boundary.
+    #[doc(hidden)]
+    pub fn vendor_managed_bond_count(&mut self) -> Result<usize, BleVendorBondError> {
+        Ok(ws63_radio_sys::ble::snapshot_smp_records()?.len())
+    }
+
+    /// Replay the current vendor-owned table into the running vendor host.
+    ///
+    /// This preserves `VendorManaged` ownership: the records are read from and
+    /// restored to the same archive-managed table. Empty storage is a successful
+    /// no-op, and the temporary secret snapshot is zeroized on return.
+    #[doc(hidden)]
+    pub fn restore_vendor_managed_bonds(&mut self) -> Result<usize, BleVendorBondError> {
+        let records = ws63_radio_sys::ble::snapshot_smp_records()?;
+        let count = records.len();
+        if !records.is_empty() {
+            records.restore()?;
+        }
+        Ok(count)
     }
 
     /// Return the asynchronous vendor enable result without consuming its event.
@@ -2597,6 +2659,14 @@ mod tests {
         assert_eq!(
             controller.stop_scanning(),
             Err(BleB2Error::UnsupportedTarget)
+        );
+        assert_eq!(
+            controller.vendor_managed_bond_count(),
+            Err(BleVendorBondError::UnsupportedTarget)
+        );
+        assert_eq!(
+            controller.restore_vendor_managed_bonds(),
+            Err(BleVendorBondError::UnsupportedTarget)
         );
     }
 }
