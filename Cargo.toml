@@ -149,6 +149,7 @@ sle-init = [
     "hisi-crypto-ws63/hash",
     "hisi-crypto-ws63/pbkdf2",
     "hisi-crypto-ws63/hal-trng",
+    "wpa3-crypto",
 ]
 # Maintainer-only stage markers around the synchronous vendor BLE enable path.
 # This never changes the default B1 link or exposes a user-facing BLE API.

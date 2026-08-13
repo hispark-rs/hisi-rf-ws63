@@ -311,22 +311,7 @@ fn callback_target<'a>(name: &'a str, archive_definitions: &BTreeSet<String>) ->
         "memset" => "__ws63_rom_memset",
         "mem_news" => "osal_kmalloc",
         "mem_frees" => "osal_kfree",
-        // `new0fun` is supplied by the selected BLE bg_common archive. The
-        // mask-ROM SMP path calls it through the ordered callback veneer, so
-        // it must not fall through to the missing-callback sentinel merely
-        // because the archive census does not retain this indirect reference.
-        "new0fun" => "new0fun",
-        // The mask-ROM SMP helpers reach these providers only through the
-        // ordered callback table. They are present in the selected BLE
-        // archives, but that indirect control flow is intentionally invisible
-        // to the ordinary undefined-symbol census.
-        "chnl_calc_ble_chnl_cls_to_chnl_map" => "chnl_calc_ble_chnl_cls_to_chnl_map",
-        "chnl_calc_get_valid_map_num" => "chnl_calc_get_valid_map_num",
-        "smp_aes128" => "smp_aes128",
-        "smp_cmac_reverse" => "smp_cmac_reverse",
         "smp_rand" => "uapi_drv_cipher_trng_get_random_bytes",
-        "smp_reverse_octets" => "smp_reverse_octets",
-        "smp_xor" => "smp_xor",
         "strlen" => "__ws63_rom_strlen",
         name if matches!(
             name,
@@ -455,10 +440,19 @@ fn write_link_contract(
 }
 
 fn main() {
+    let ble_callback_symbols = BTreeSet::from([
+        "new0fun".to_owned(),
+        "chnl_calc_ble_chnl_cls_to_chnl_map".to_owned(),
+        "chnl_calc_get_valid_map_num".to_owned(),
+        "smp_aes128".to_owned(),
+        "smp_cmac_reverse".to_owned(),
+        "smp_reverse_octets".to_owned(),
+        "smp_xor".to_owned(),
+    ]);
     assert_eq!(
-        callback_target("new0fun", &BTreeSet::new()),
+        callback_target("new0fun", &ble_callback_symbols),
         "new0fun",
-        "BLE SMP allocation callback must resolve to the selected archive provider"
+        "a declared BLE SMP allocation callback must resolve to its archive provider"
     );
     for callback in [
         "chnl_calc_ble_chnl_cls_to_chnl_map",
@@ -469,11 +463,16 @@ fn main() {
         "smp_xor",
     ] {
         assert_eq!(
-            callback_target(callback, &BTreeSet::new()),
+            callback_target(callback, &ble_callback_symbols),
             callback,
-            "BLE SMP callback must resolve to the selected archive provider"
+            "a declared BLE SMP callback must resolve to its archive provider"
         );
     }
+    assert_eq!(
+        callback_target("new0fun", &BTreeSet::new()),
+        "__ws63_missing_rom_callback",
+        "a profile must not pull an undeclared BLE SMP callback provider"
+    );
     let target = env::var("TARGET").expect("TARGET");
     if !target.starts_with("riscv32") {
         return;

@@ -5,7 +5,10 @@
 //! SPACC AES primitives where proven on silicon. `hisi-crypto` owns the
 //! capability contract; RF owns only this WS63 service and C ABI shim.
 
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 use core::{cell::UnsafeCell, num::NonZeroU32};
 pub(crate) use hisi_crypto::CryptoError;
 #[cfg(all(
@@ -27,7 +30,10 @@ use hisi_crypto::sae::{
     P256AffinePoint, P256FieldElement, P256PointResult, TryP256ComputeYSquared, TryP256FieldMul,
     TryP256FieldPow, TryP256PointAdd, TryP256PointInvert, TryP256PointMul, TryP256PointValidate,
 };
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 use hisi_crypto::{CryptoEntropySource, HmacSha256Drbg, ReseedingCryptoRng};
 #[cfg(target_arch = "riscv32")]
 use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac, TryMacAlgorithm, algorithm};
@@ -55,7 +61,7 @@ struct CryptoService {
     backend: &'static Ws63Crypto<'static>,
     #[cfg(feature = "wpa3-crypto")]
     p256: Ws63P256<'static>,
-    #[cfg(feature = "ble-init")]
+    #[cfg(any(feature = "ble-init", feature = "sle-init"))]
     drbg: UnsafeCell<ReseedingCryptoRng<HmacSha256Drbg, QualifiedWs63Entropy>>,
     mutex: MutexHandle,
 }
@@ -196,13 +202,19 @@ struct CryptoContentionContext {
     waiter_result: AtomicU32,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 #[derive(Clone, Copy)]
 struct QualifiedWs63Entropy {
     backend: &'static Ws63Crypto<'static>,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 impl QualifiedWs63Entropy {
     fn try_new(backend: &'static Ws63Crypto<'static>) -> Result<Self, CryptoError> {
         let source = Self { backend };
@@ -224,14 +236,20 @@ impl QualifiedWs63Entropy {
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 impl EntropySource for QualifiedWs63Entropy {
     fn fill_entropy(&self, output: &mut [u8]) -> Result<(), CryptoError> {
         self.backend.fill_entropy(output)
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 impl CryptoEntropySource for QualifiedWs63Entropy {}
 
 /// Install the unique HAL-owned KM/RKP and TRNG capabilities before radio initialization.
@@ -256,7 +274,7 @@ pub(crate) fn install_hardware_crypto(
         let _ = unsafe { hisi_rf_rtos_driver::mutex_destroy(mutex) };
         return Err(CryptoError::InvalidValue);
     };
-    #[cfg(feature = "ble-init")]
+    #[cfg(any(feature = "ble-init", feature = "sle-init"))]
     let entropy = match QualifiedWs63Entropy::try_new(backend) {
         Ok(entropy) => entropy,
         Err(error) => {
@@ -265,7 +283,7 @@ pub(crate) fn install_hardware_crypto(
             return Err(error);
         }
     };
-    #[cfg(feature = "ble-init")]
+    #[cfg(any(feature = "ble-init", feature = "sle-init"))]
     let drbg = match ReseedingCryptoRng::<HmacSha256Drbg, _>::try_new(
         entropy,
         NonZeroU32::new(1_024).unwrap(),
@@ -282,7 +300,7 @@ pub(crate) fn install_hardware_crypto(
         backend,
         #[cfg(feature = "wpa3-crypto")]
         p256: Ws63P256::new(pke),
-        #[cfg(feature = "ble-init")]
+        #[cfg(any(feature = "ble-init", feature = "sle-init"))]
         drbg: UnsafeCell::new(drbg),
         mutex,
     }) else {
@@ -417,7 +435,10 @@ pub(super) fn p256_ecdh_hardware(
 }
 
 /// Generate a P-256 keypair from the explicitly installed, health-checked DRBG.
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 pub(super) fn p256_generate_keypair_hardware() -> Result<P256KeyPair, CryptoError> {
     P256_REQUESTS.fetch_add(1, Ordering::Relaxed);
     let started = crypto_timing_start();
@@ -708,7 +729,10 @@ where
 }
 
 /// Compute the BLE archive's HMAC-SM3 primitive through SPACC.
-#[cfg(target_arch = "riscv32")]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 pub(super) fn hmac_sm3_hardware(
     key: &[u8],
     input: &[u8],
@@ -727,7 +751,10 @@ pub(super) fn hmac_sm3_hardware(
 }
 
 /// Compute the BLE archive's AES-128-CMAC primitive through SPACC.
-#[cfg(target_arch = "riscv32")]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 pub(super) fn aes_cmac_hardware(
     key: &[u8],
     input: &[u8],
