@@ -48,12 +48,7 @@ unsafe extern "C" {
     fn uapi_systick_init();
     fn uapi_tcxo_init() -> u32;
     static mut g_systick_clock: u32;
-    #[link_name = "uapi_sfc_reg_read"]
-    fn rom_sfc_reg_read(offset: u32, output: *mut u8, length: u32) -> u32;
-    #[link_name = "uapi_sfc_reg_write"]
-    fn rom_sfc_reg_write(offset: u32, input: *mut u8, length: u32) -> u32;
-    fn hal_sfc_register_funcs(functions: *mut c_void) -> u32;
-    fn hal_sfc_v150_funcs_get() -> *mut c_void;
+    static g_sfc_v150_funcs: u8;
     static mut g_flash_ctrl: FlashControl;
     static mut g_sfc_inited: u8;
 }
@@ -188,23 +183,93 @@ extern "C" fn sfc_port_unlock(state: u32) {
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe fn sfc_set_volatile_status(command: u8, value: u8) -> bool {
+    let register = match command {
+        0x01 => hisi_hal::sfc::FlashStatusRegister::One,
+        0x31 => hisi_hal::sfc::FlashStatusRegister::Two,
+        _ => return false,
+    };
+    // SAFETY: `NvWriteClaim` gives the RF composition root exclusive runtime
+    // SFC command ownership. Flashboot's XIP configuration is retained; this
+    // driver instance only emits the status-register command sequence.
+    let mut sfc = hisi_hal::sfc::SfcDriver::new(unsafe { hisi_hal::peripherals::SfcCfg::steal() });
+    sfc.write_volatile_status(register, value).is_ok()
+}
+
+#[cfg(target_arch = "riscv32")]
+struct NvFlashWriteGuard {
+    irq_state: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl NvFlashWriteGuard {
+    fn acquire() -> Option<Self> {
+        // APP protection profile: expose only [0x3fc000, 0x400000), which is
+        // the linker-owned NV partition. The mask-ROM SFC UAPI predates the
+        // SDK's `sfc_port_write_lock` hook, so the storage backend must own this
+        // protection window explicitly.
+        let irq_state = crate::osal::osal_irq_lock();
+        if unsafe { sfc_set_volatile_status(0x01, 0x4c) }
+            && unsafe { sfc_set_volatile_status(0x31, 0x42) }
+        {
+            Some(Self { irq_state })
+        } else {
+            // A failure after SR1 succeeded must not leave a partially opened
+            // protection window behind.
+            let _ = unsafe { sfc_set_volatile_status(0x01, 0x1c) };
+            let _ = unsafe { sfc_set_volatile_status(0x31, 0x02) };
+            crate::osal::osal_irq_restore(irq_state);
+            None
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl Drop for NvFlashWriteGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { sfc_set_volatile_status(0x01, 0x1c) };
+        let _ = unsafe { sfc_set_volatile_status(0x31, 0x02) };
+        // Unlike a debugger flash algorithm, the running application resumes
+        // XIP immediately after this guard. Do not issue RSTEN/RST here: a NOR
+        // reset may clear volatile bus-mode state established by flashboot.
+        // The bounded status writes already wait for WIP and leave command mode
+        // idle before interrupts are restored.
+        crate::osal::osal_irq_restore(self.irq_state);
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
 pub(crate) fn initialize_rom_sfc() -> u32 {
     // Flashboot has already configured the SFC bus used to execute this XIP
     // image. Re-running `uapi_sfc_init[_rom]` here rewrites that live mapping
     // and faults before returning. Adopt the existing hardware state by
     // populating only the mask-ROM driver's software control block.
+    // The ROM helpers at 0x109ab8/0x109508 contain vendor-only `l.li`
+    // instructions that stock rustc cannot emit and this core cannot execute.
+    // Their complete behavior is to return `g_sfc_v150_funcs` at 0x180000.
+    // The mask-ROM SFC UAPI reads the active vtable from 0x1803f8
+    // (0x1092e6/0x109328 in the mask ROM). The public HAL registration helper
+    // uses a separate slot at 0x180400.
+    const ROM_SFC_FUNCS_SLOT: *mut *const u8 = 0x0018_03f8 as *mut *const u8;
+    const ROM_SFC_BUS_DMA_REGS: *mut usize = 0x0018_0404 as *mut usize;
+    const ROM_SFC_BUS_REGS: *mut usize = 0x0018_0408 as *mut usize;
+    const ROM_SFC_CMD_DATABUF: *mut usize = 0x0018_040c as *mut usize;
+    const ROM_SFC_CMD_REGS: *mut usize = 0x0018_0410 as *mut usize;
+    const ROM_SFC_GLOBAL_CONF_REGS: *mut usize = 0x0018_0414 as *mut usize;
     let irq_state = crate::osal::osal_irq_lock();
-    // SAFETY: both functions are fixed WS63 ROM ABI entries. The returned
-    // vtable is the ROM-owned SFC v150 table at 0x180000.
-    let result = unsafe { hal_sfc_register_funcs(hal_sfc_v150_funcs_get()) };
-    if result != 0 {
-        crate::osal::osal_irq_restore(irq_state);
-        return result;
-    }
     // SAFETY: called once before vendor tasks start. These fixed RAM symbols
     // are the documented WS63 ROM ABI and the pointed-to tables are immutable
     // for the firmware lifetime.
     unsafe {
+        core::ptr::write_volatile(ROM_SFC_FUNCS_SLOT, &raw const g_sfc_v150_funcs);
+        // Mirror `hal_sfc_regs_init`: initialize only the ROM driver's cached
+        // MMIO pointers. This does not write the SFC controller or disturb the
+        // flashboot-established XIP mapping.
+        core::ptr::write_volatile(ROM_SFC_GLOBAL_CONF_REGS, 0x4800_0100);
+        core::ptr::write_volatile(ROM_SFC_BUS_REGS, 0x4800_0200);
+        core::ptr::write_volatile(ROM_SFC_BUS_DMA_REGS, 0x4800_0240);
+        core::ptr::write_volatile(ROM_SFC_CMD_REGS, 0x4800_0300);
+        core::ptr::write_volatile(ROM_SFC_CMD_DATABUF, 0x4800_0400);
         core::ptr::write_volatile(
             &raw mut g_flash_ctrl,
             FlashControl {
@@ -219,6 +284,7 @@ pub(crate) fn initialize_rom_sfc() -> u32 {
         core::ptr::write_volatile(&raw mut g_sfc_inited, 1);
     }
     crate::osal::osal_irq_restore(irq_state);
+    crate::log_emit(b"RFDBG_BLE_B1_SFC_REGISTER_DONE\r\n");
     0
 }
 
@@ -273,15 +339,18 @@ impl ReadStorage for RomNvStorage {
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         let absolute = self.checked_range(offset, bytes.len())?;
-        let length = u32::try_from(bytes.len()).map_err(|_| RomNvStorageError::OutOfBounds)?;
-        // SAFETY: the bounded output slice is writable for `length`; the ROM
-        // SFC driver owns the controller transaction and returns before exit.
-        let result = unsafe { rom_sfc_reg_read(absolute, bytes.as_mut_ptr(), length) };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(RomNvStorageError::Rom(result))
-        }
+        let address = WS63_FLASH_BASE
+            .checked_add(absolute as usize)
+            .ok_or(RomNvStorageError::OutOfBounds)?;
+        // SAFETY: `checked_range` proves the complete source range belongs to
+        // the linker-declared NV partition. Flashboot keeps this region mapped
+        // through the SFC XIP window for the firmware lifetime. Command-mode
+        // reads are deliberately avoided because switching the live XIP
+        // controller into that path can stall code executing from flash.
+        unsafe {
+            core::ptr::copy_nonoverlapping(address as *const u8, bytes.as_mut_ptr(), bytes.len())
+        };
+        Ok(())
     }
 
     fn capacity(&self) -> usize {
@@ -292,29 +361,36 @@ impl ReadStorage for RomNvStorage {
 #[cfg(target_arch = "riscv32")]
 impl WriteStorage for RomNvStorage {
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        crate::log_emit(b"RFDBG_SFC_WRITE_BEGIN\r\n");
+        let _protection = NvFlashWriteGuard::acquire().ok_or(RomNvStorageError::Rom(1))?;
         let mut absolute = self.checked_range(offset, bytes.len())?;
         let mut remaining = bytes;
         while !remaining.is_empty() {
-            let boundary = 64 - (absolute as usize & 63);
-            let chunk_len = remaining.len().min(boundary);
+            let command_boundary = 64 - (absolute as usize & 63);
+            let page_boundary = 256 - (absolute as usize & 255);
+            let chunk_len = remaining.len().min(command_boundary).min(page_boundary);
             let (chunk, rest) = remaining.split_at(chunk_len);
+            crate::log_emit(b"RFDBG_SFC_WRITE_CHUNK_BEGIN\r\n");
 
-            // The vendor SFC patch limits one program request to a 64-byte
-            // boundary. Interrupt handlers execute from the same XIP flash and
-            // cannot preempt while the command path owns the controller.
-            let irq_state = crate::osal::osal_irq_lock();
-            // SAFETY: the ROM ABI predates const-correctness but does not
-            // mutate the input. The slice lives through the synchronous call.
-            let result = unsafe {
-                rom_sfc_reg_write(
-                    absolute,
-                    chunk.as_ptr().cast_mut(),
-                    u32::try_from(chunk_len).expect("SFC chunk length fits u32"),
-                )
-            };
-            crate::osal::osal_irq_restore(irq_state);
-            if result != 0 {
-                return Err(RomNvStorageError::Rom(result));
+            // The mask-ROM writer has an unbounded post-program WIP poll on
+            // this silicon revision. Use the HAL's bounded command sequence.
+            // `NvWriteClaim` serializes runtime writers. The protection guard
+            // also keeps interrupts disabled because interrupt handlers execute
+            // from the same SFC-backed XIP mapping.
+            let mut sfc =
+                hisi_hal::sfc::SfcDriver::new(unsafe { hisi_hal::peripherals::SfcCfg::steal() });
+            let result = sfc.program_chunk(absolute, chunk);
+            crate::log_emit(b"RFDBG_SFC_WRITE_CHUNK_DONE\r\n");
+            if result.is_err() {
+                return Err(RomNvStorageError::Rom(1));
+            }
+            let mut readback = [0_u8; 64];
+            if sfc
+                .read_chunk(absolute, &mut readback[..chunk_len])
+                .is_err()
+                || readback[..chunk_len] != *chunk
+            {
+                return Err(RomNvStorageError::Rom(1));
             }
 
             absolute = absolute
@@ -322,6 +398,7 @@ impl WriteStorage for RomNvStorage {
                 .ok_or(RomNvStorageError::OutOfBounds)?;
             remaining = rest;
         }
+        crate::log_emit(b"RFDBG_SFC_WRITE_DONE\r\n");
         Ok(())
     }
 }
@@ -557,6 +634,7 @@ pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
 
     #[cfg(target_arch = "riscv32")]
     {
+        crate::log_emit(b"RFDBG_NV_WRITE_BEGIN\r\n");
         if value.is_null() && len != 0 {
             return crate::OSAL_NOK as u32;
         }
@@ -564,6 +642,11 @@ pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
             trace_nv(key, len, 0, crate::OSAL_NOK as u32);
             return crate::OSAL_NOK as u32;
         };
+        if initialize_rom_sfc() != 0 {
+            trace_nv(key, len, 0, crate::OSAL_NOK as u32);
+            return crate::OSAL_NOK as u32;
+        }
+        crate::log_emit(b"RFDBG_NV_WRITE_SFC_OK\r\n");
         let Some(storage) = RomNvStorage::from_linker_region() else {
             trace_nv(key, len, 0, crate::OSAL_NOK as u32);
             return crate::OSAL_NOK as u32;
@@ -572,6 +655,7 @@ pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
             trace_nv(key, len, 0, crate::OSAL_NOK as u32);
             return crate::OSAL_NOK as u32;
         };
+        crate::log_emit(b"RFDBG_NV_WRITE_READY\r\n");
         // SAFETY: the C ABI requires `value` to reference `len` readable bytes;
         // the null/zero case is represented by an empty slice.
         let input = if len == 0 {
@@ -580,9 +664,11 @@ pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
             unsafe { core::slice::from_raw_parts(value, len as usize) }
         };
         if writer.write(NvKey::from_raw(key), input).is_ok() {
+            crate::log_emit(b"RFDBG_NV_WRITE_DONE\r\n");
             trace_nv(key, len, len, crate::OSAL_OK as u32);
             return crate::OSAL_OK as u32;
         }
+        crate::log_emit(b"RFDBG_NV_WRITE_ERR\r\n");
         trace_nv(key, len, 0, crate::OSAL_NOK as u32);
     }
     crate::OSAL_NOK as u32

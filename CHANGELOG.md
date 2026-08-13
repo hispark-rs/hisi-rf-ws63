@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Name the authentication callback's secret-free observation `ltk_present` to
   match the reviewed WS63 ABI. The callback carries one 16-byte LTK field, not
   complete restorable IRK/CSRK bond material.
+- Keep BLE startup on flashboot's live XIP configuration and initialize the
+  mask-ROM SFC software control block only when a vendor NV write begins.
+- Route runtime NV programming and readback through bounded SRAM-resident HAL
+  command transactions while interrupts are masked, then restore the APP
+  protection registers without resetting the NOR's active XIP bus mode.
 
 ## [0.1.0-alpha.75] - 2026-08-09
 
