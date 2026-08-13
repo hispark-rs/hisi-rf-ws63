@@ -64,11 +64,18 @@ const fn classify_native_connect_event(kind: u8) -> NativeConnectEvent {
 
 #[cfg(feature = "net")]
 use crate::netif_smoltcp::Ws63Device;
+use crate::wifi::Error as Ws63Error;
+#[cfg(any(
+    feature = "legacy-blocking-backend",
+    feature = "incremental-backend-experiment"
+))]
+use crate::wifi::ScanResult as Ws63ScanResult;
 #[cfg(not(feature = "upstream-supplicant-port"))]
-use crate::wifi::{ConnectionInfo as Ws63ConnectionInfo, PersonalNetwork, WpaWifi as ActiveWifi};
-use crate::wifi::{Error as Ws63Error, ScanResult as Ws63ScanResult};
+use crate::wifi::WpaWifi as ActiveWifi;
 #[cfg(feature = "legacy-blocking-backend")]
-use crate::wifi::{MAX_SCAN_RESULTS, ScanSecurity};
+use crate::wifi::{
+    ConnectionInfo as Ws63ConnectionInfo, MAX_SCAN_RESULTS, PersonalNetwork, ScanSecurity,
+};
 #[cfg(feature = "upstream-supplicant-port")]
 use crate::{
     upstream_supplicant::{NativeSupplicant, NativeSupplicantError},
@@ -647,7 +654,10 @@ pub fn resources(
     }
 }
 
-#[cfg(not(feature = "upstream-supplicant-port"))]
+#[cfg(all(
+    feature = "legacy-blocking-backend",
+    not(feature = "upstream-supplicant-port")
+))]
 fn to_connection_info(info: Ws63ConnectionInfo) -> ConnectionInfo {
     ConnectionInfo {
         bssid: info.bssid,

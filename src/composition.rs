@@ -3,9 +3,13 @@ use core::ffi::c_void;
 use core::fmt;
 use core::num::{NonZeroU32, NonZeroUsize};
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
+#[cfg(any(
+    feature = "legacy-blocking-backend",
+    feature = "incremental-backend-experiment"
+))]
+use hisi_rf_core::RadioConfig;
 use hisi_rf_core::{
     BackendError, BackendErrorClass, Diagnostic, DiagnosticStage, DiagnosticTraceKind, Error,
-    RadioConfig,
 };
 
 #[cfg(feature = "incremental-backend-experiment")]

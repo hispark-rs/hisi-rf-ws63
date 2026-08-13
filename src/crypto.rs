@@ -23,8 +23,13 @@ pub(crate) use hisi_crypto::CryptoError;
     )
 ))]
 use hisi_crypto::Pbkdf2HmacSha1;
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
+use hisi_crypto::p256::P256KeyPair;
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
-use hisi_crypto::p256::{P256KeyPair, P256PrivateKey, P256SharedSecret, TryP256KeyAgreement};
+use hisi_crypto::p256::{P256PrivateKey, P256SharedSecret, TryP256KeyAgreement};
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto::sae::{
     P256AffinePoint, P256FieldElement, P256PointResult, TryP256ComputeYSquared, TryP256FieldMul,
@@ -36,7 +41,12 @@ use hisi_crypto::sae::{
 ))]
 use hisi_crypto::{CryptoEntropySource, HmacSha256Drbg, ReseedingCryptoRng};
 #[cfg(target_arch = "riscv32")]
-use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac, TryMacAlgorithm, algorithm};
+use hisi_crypto::{EntropySource, TryBlockCipher, TryHash, TryMac};
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
+use hisi_crypto::{TryMacAlgorithm, algorithm};
 use hisi_crypto_ws63::Ws63CryptoStorage;
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
 use hisi_crypto_ws63::Ws63P256;

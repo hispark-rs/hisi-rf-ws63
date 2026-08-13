@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.78] - 2026-08-13
+
+### Fixed
+
+- Scope BLE/SLE-only P-256 key generation and typed SM3/CMAC imports to the
+  profiles that consume them, keeping Wi-Fi-only workspace and plain-Cargo
+  builds warning-free under Clippy's `-D warnings` gate.
+
 ## [0.1.0-alpha.77] - 2026-08-13
 
 ### Fixed
