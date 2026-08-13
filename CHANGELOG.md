@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.76] - 2026-08-13
+
 - Copy complete WS63 BLE SMP records from internal GAP event 19 into a
   dedicated bounded, zeroizing observer queue with conservation diagnostics.
   Vendor automatic persistence remains the sole owner until manual-mode
