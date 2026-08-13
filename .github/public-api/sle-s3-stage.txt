@@ -320,6 +320,9 @@ pub const hisi_rf_ws63::OSAL_NOK: i32
 pub const hisi_rf_ws63::OSAL_OK: i32
 pub const hisi_rf_ws63::OSAL_SYS_WAIT_FOREVER: u32
 pub const hisi_rf_ws63::WS63_SHARED_RADIO_ARENA_BYTES: usize
+pub fn hisi_rf_ws63::hardware_p256_curve_diagnostic_snapshot() -> [u32; 10]
+pub fn hisi_rf_ws63::hardware_p256_diagnostic_snapshot() -> [u32; 8]
+pub fn hisi_rf_ws63::hardware_p256_field_diagnostic_snapshot() -> [u32; 10]
 pub unsafe fn hisi_rf_ws63::prepare_vendor_memory()
 pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics
 pub fn hisi_rf_ws63::set_log_sink(hisi_rf_ws63::LogSink)
