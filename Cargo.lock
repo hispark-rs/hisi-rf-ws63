@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.77"
+version = "0.1.0-alpha.78"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
