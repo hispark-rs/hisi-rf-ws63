@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.77] - 2026-08-13
+
+### Fixed
+
+- Validate the actual BLE callback-provider metadata exported by
+  `ws63-radio-sys 0.1.0-alpha.19` instead of a fabricated build-script fixture.
+  BLE final links now fail closed unless all indirect SMP allocation, AES, CMAC,
+  byte-order, XOR, and channel-map callbacks resolve to real providers.
+
 ## [0.1.0-alpha.76] - 2026-08-13
 
 - Copy complete WS63 BLE SMP records from internal GAP event 19 into a

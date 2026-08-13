@@ -440,39 +440,6 @@ fn write_link_contract(
 }
 
 fn main() {
-    let ble_callback_symbols = BTreeSet::from([
-        "new0fun".to_owned(),
-        "chnl_calc_ble_chnl_cls_to_chnl_map".to_owned(),
-        "chnl_calc_get_valid_map_num".to_owned(),
-        "smp_aes128".to_owned(),
-        "smp_cmac_reverse".to_owned(),
-        "smp_reverse_octets".to_owned(),
-        "smp_xor".to_owned(),
-    ]);
-    assert_eq!(
-        callback_target("new0fun", &ble_callback_symbols),
-        "new0fun",
-        "a declared BLE SMP allocation callback must resolve to its archive provider"
-    );
-    for callback in [
-        "chnl_calc_ble_chnl_cls_to_chnl_map",
-        "chnl_calc_get_valid_map_num",
-        "smp_aes128",
-        "smp_cmac_reverse",
-        "smp_reverse_octets",
-        "smp_xor",
-    ] {
-        assert_eq!(
-            callback_target(callback, &ble_callback_symbols),
-            callback,
-            "a declared BLE SMP callback must resolve to its archive provider"
-        );
-    }
-    assert_eq!(
-        callback_target("new0fun", &BTreeSet::new()),
-        "__ws63_missing_rom_callback",
-        "a profile must not pull an undeclared BLE SMP callback provider"
-    );
     let target = env::var("TARGET").expect("TARGET");
     if !target.starts_with("riscv32") {
         return;
@@ -613,6 +580,23 @@ fn main() {
     } else {
         BTreeSet::new()
     };
+    if ble_init {
+        for callback in [
+            "new0fun",
+            "chnl_calc_ble_chnl_cls_to_chnl_map",
+            "chnl_calc_get_valid_map_num",
+            "smp_aes128",
+            "smp_cmac_reverse",
+            "smp_reverse_octets",
+            "smp_xor",
+        ] {
+            assert_eq!(
+                callback_target(callback, &callback_archive_definitions),
+                callback,
+                "the BLE profile must export every indirect SMP callback provider"
+            );
+        }
+    }
     let contract = out_dir.join("ws63-radio-link-contract.S");
     write_link_contract(
         &contract,
