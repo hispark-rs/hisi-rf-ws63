@@ -20,7 +20,7 @@ use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 #[cfg(target_arch = "riscv32")]
 use hisi_rf_core::ble::{AddressType, ScanMode};
 use hisi_rf_core::ble::{
-    AdvertisingConfig, BluetoothAddress, GattServerDefinition, PairingState, ScanConfig,
+    AdvertisingConfig, BluetoothAddress, GattServerDefinition, PairingState, Passkey, ScanConfig,
     SecurityConfig,
 };
 #[cfg(any(target_arch = "riscv32", test))]
@@ -31,6 +31,11 @@ use hisi_rf_core::ble::{
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
+#[cfg(target_arch = "riscv32")]
+use ws63_radio_sys::ble::{
+    PasskeyDisplayPayload, PasskeyReplyError, UPPER_GAP_PASSKEY_DISPLAY_EVENT,
+    UPPER_GAP_PASSKEY_REQUEST_EVENT,
+};
 use ws63_radio_sys::ble::{SmpRecord, SmpRestoreError, SmpSnapshotError};
 
 /// Caller-owned heap shared by the BLE host, controller, and RTOS objects.
@@ -205,6 +210,13 @@ pub enum BleB2Event {
         address_type: u8,
         status: u32,
         ltk_present: bool,
+    },
+    /// The active connection requires a user-entered six-digit passkey.
+    PasskeyInputRequested { connection_handle: u32 },
+    /// The active connection generated a passkey that must be shown to the user.
+    PasskeyDisplayed {
+        connection_handle: u32,
+        passkey: u32,
     },
     /// The local B3 service start request completed.
     GattServiceStarted {
@@ -1198,6 +1210,15 @@ impl BleB1Controller {
         Ok(())
     }
 
+    /// Reply to the single pending passkey-input request.
+    #[cfg(target_arch = "riscv32")]
+    pub fn provide_passkey(&mut self, passkey: Passkey) -> Result<(), BleSecurityError> {
+        ws63_radio_sys::ble::submit_passkey(passkey.as_u32()).map_err(|error| match error {
+            PasskeyReplyError::Vendor(status) => BleSecurityError::Passkey(status),
+            PasskeyReplyError::UnsupportedTarget => BleSecurityError::UnsupportedTarget,
+        })
+    }
+
     /// Query the current pairing state without exposing vendor values.
     #[cfg(target_arch = "riscv32")]
     pub fn pairing_state(
@@ -1310,6 +1331,12 @@ impl BleB1Controller {
         Err(BleSecurityError::UnsupportedTarget)
     }
 
+    /// Host builds cannot reply to a WS63 passkey prompt.
+    #[cfg(not(target_arch = "riscv32"))]
+    pub fn provide_passkey(&mut self, _: Passkey) -> Result<(), BleSecurityError> {
+        Err(BleSecurityError::UnsupportedTarget)
+    }
+
     /// Host builds cannot query WS63 pairing state.
     #[cfg(not(target_arch = "riscv32"))]
     pub fn pairing_state(&mut self, _: BluetoothAddress) -> Result<PairingState, BleSecurityError> {
@@ -1330,6 +1357,8 @@ pub enum BleSecurityError {
     Configure(u32),
     /// The vendor host rejected the pairing request.
     Pair(u32),
+    /// The vendor host rejected a passkey response.
+    Passkey(i8),
     /// Querying pairing state failed.
     Query(u32),
     /// The vendor host returned a pairing-state value outside its reviewed ABI.
@@ -1433,6 +1462,8 @@ pub enum BleB1InitError {
     EventSinkAlreadyInstalled,
     /// GAP callback registration returned a vendor error.
     RegisterCallbacks(u32),
+    /// Registering an upper GAP pairing prompt callback failed.
+    RegisterPairingPromptCallback { event: u16, status: u32 },
     /// GATT server callback registration returned a vendor error.
     RegisterGattServerCallbacks(u32),
     /// GATT client callback registration returned a vendor error.
@@ -2000,6 +2031,33 @@ extern "C" fn ble_authentication_complete_callback(
 }
 
 #[cfg(target_arch = "riscv32")]
+unsafe extern "C" fn ble_passkey_callback(event: u16, payload: *const c_void) {
+    match event {
+        UPPER_GAP_PASSKEY_REQUEST_EVENT => {
+            // SAFETY: the pinned event-4 ABI supplies one readable u32 handle
+            // for the duration of this callback. Null is rejected.
+            let Some(connection_handle) = (unsafe { payload.cast::<u32>().as_ref().copied() })
+            else {
+                return;
+            };
+            push_ble_event(BleB2Event::PasskeyInputRequested { connection_handle });
+        }
+        UPPER_GAP_PASSKEY_DISPLAY_EVENT => {
+            // SAFETY: the pinned event-5 ABI supplies the reviewed two-word
+            // payload for the duration of this callback.
+            let Some(display) = (unsafe { PasskeyDisplayPayload::copy_from_ptr(payload) }) else {
+                return;
+            };
+            push_ble_event(BleB2Event::PasskeyDisplayed {
+                connection_handle: display.connection_handle(),
+                passkey: display.passkey(),
+            });
+        }
+        _ => {}
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
 extern "C" fn ble_gatts_service_started_callback(server_id: u8, service_handle: u16, status: u32) {
     push_ble_event(BleB2Event::GattServiceStarted {
         server_id,
@@ -2354,6 +2412,19 @@ pub fn init_ble_b1(
     if callback_status != 0 {
         return Err(BleB1InitError::RegisterCallbacks(callback_status));
     }
+    for event in [
+        UPPER_GAP_PASSKEY_REQUEST_EVENT,
+        UPPER_GAP_PASSKEY_DISPLAY_EVENT,
+    ] {
+        // SAFETY: the callback copies each reviewed fixed-size payload before
+        // returning and the event sink has process-lifetime storage.
+        let status = unsafe {
+            ws63_radio_sys::ble::ble_gap_callback_regist(event, Some(ble_passkey_callback))
+        };
+        if status != 0 {
+            return Err(BleB1InitError::RegisterPairingPromptCallback { event, status });
+        }
+    }
     crate::log_emit(b"RFDBG_BLE_B2_CALLBACKS_OK\r\n");
     let callback_status =
         unsafe { gatts_register_callbacks(core::ptr::addr_of_mut!(GATTS_CALLBACKS)) };
@@ -2530,6 +2601,31 @@ mod tests {
         assert_eq!(parameters.io_capability, 3);
         assert_eq!(parameters.secure_connections, 1);
         assert_eq!(parameters.security_mode, 3);
+    }
+
+    #[test]
+    fn passkey_prompt_events_remain_bounded_queue_values() {
+        let queue = BleEventQueue::new();
+        queue.push(BleB2Event::PasskeyInputRequested {
+            connection_handle: 7,
+        });
+        queue.push(BleB2Event::PasskeyDisplayed {
+            connection_handle: 7,
+            passkey: 123_456,
+        });
+        assert_eq!(
+            queue.pop(),
+            Some(BleB2Event::PasskeyInputRequested {
+                connection_handle: 7
+            })
+        );
+        assert_eq!(
+            queue.pop(),
+            Some(BleB2Event::PasskeyDisplayed {
+                connection_handle: 7,
+                passkey: 123_456
+            })
+        );
     }
 
     #[test]
