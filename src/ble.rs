@@ -212,12 +212,9 @@ pub enum BleB2Event {
         ltk_present: bool,
     },
     /// The active connection requires a user-entered six-digit passkey.
-    PasskeyInputRequested { connection_handle: u32 },
+    PasskeyInputRequested { pairing_context: u32 },
     /// The active connection generated a passkey that must be shown to the user.
-    PasskeyDisplayed {
-        connection_handle: u32,
-        passkey: u32,
-    },
+    PasskeyDisplayed { pairing_context: u32, passkey: u32 },
     /// The local B3 service start request completed.
     GattServiceStarted {
         server_id: u8,
@@ -2034,13 +2031,12 @@ extern "C" fn ble_authentication_complete_callback(
 unsafe extern "C" fn ble_passkey_callback(event: u16, payload: *const c_void) {
     match event {
         UPPER_GAP_PASSKEY_REQUEST_EVENT => {
-            // SAFETY: the pinned event-4 ABI supplies one readable u32 handle
-            // for the duration of this callback. Null is rejected.
-            let Some(connection_handle) = (unsafe { payload.cast::<u32>().as_ref().copied() })
-            else {
+            // SAFETY: the pinned event-4 ABI supplies one readable opaque SMP
+            // context word for the duration of this callback. Null is rejected.
+            let Some(pairing_context) = (unsafe { payload.cast::<u32>().as_ref().copied() }) else {
                 return;
             };
-            push_ble_event(BleB2Event::PasskeyInputRequested { connection_handle });
+            push_ble_event(BleB2Event::PasskeyInputRequested { pairing_context });
         }
         UPPER_GAP_PASSKEY_DISPLAY_EVENT => {
             // SAFETY: the pinned event-5 ABI supplies the reviewed two-word
@@ -2049,7 +2045,7 @@ unsafe extern "C" fn ble_passkey_callback(event: u16, payload: *const c_void) {
                 return;
             };
             push_ble_event(BleB2Event::PasskeyDisplayed {
-                connection_handle: display.connection_handle(),
+                pairing_context: display.pairing_context(),
                 passkey: display.passkey(),
             });
         }
@@ -2606,23 +2602,19 @@ mod tests {
     #[test]
     fn passkey_prompt_events_remain_bounded_queue_values() {
         let queue = BleEventQueue::new();
-        queue.push(BleB2Event::PasskeyInputRequested {
-            connection_handle: 7,
-        });
+        queue.push(BleB2Event::PasskeyInputRequested { pairing_context: 7 });
         queue.push(BleB2Event::PasskeyDisplayed {
-            connection_handle: 7,
+            pairing_context: 7,
             passkey: 123_456,
         });
         assert_eq!(
             queue.pop(),
-            Some(BleB2Event::PasskeyInputRequested {
-                connection_handle: 7
-            })
+            Some(BleB2Event::PasskeyInputRequested { pairing_context: 7 })
         );
         assert_eq!(
             queue.pop(),
             Some(BleB2Event::PasskeyDisplayed {
-                connection_handle: 7,
+                pairing_context: 7,
                 passkey: 123_456
             })
         );
