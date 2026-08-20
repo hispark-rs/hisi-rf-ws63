@@ -436,7 +436,7 @@ impl EraseStorage for RomNvStorage {
 
     fn erase(&mut self, offset: u32, length: usize) -> Result<(), Self::Error> {
         let erase_size = self.erase_size();
-        if length != erase_size || offset as usize % erase_size != 0 {
+        if length != erase_size || (offset as usize).checked_rem(erase_size) != Some(0) {
             return Err(RomNvStorageError::OutOfBounds);
         }
         let absolute = self.checked_range(offset, length)?;

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.81] - 2026-08-20
+
+### Fixed
+
+- Keep the 4 KiB NV erase-alignment check warning-free on the pinned nightly
+  without requiring an integer API newer than the crate's Rust 2024 baseline.
+
 ## [0.1.0-alpha.80] - 2026-08-20
 
 ### Added
@@ -1106,7 +1113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.73...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.81...HEAD
+[0.1.0-alpha.81]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.80...v0.1.0-alpha.81
+[0.1.0-alpha.80]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.79...v0.1.0-alpha.80
 [0.1.0-alpha.73]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.72...v0.1.0-alpha.73
 [0.1.0-alpha.72]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.71...v0.1.0-alpha.72
 [0.1.0-alpha.71]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.70...v0.1.0-alpha.71
