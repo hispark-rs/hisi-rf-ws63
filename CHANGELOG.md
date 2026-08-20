@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.82] - 2026-08-20
+
+### Added
+
+- Bridge the WS63 BLE passkey request/display callbacks into bounded events
+  and expose the narrow passkey reply adapter used by the generation-bound
+  pairing responder.
+
+### Changed
+
+- Update `hisi-rf-core` to `0.1.0-alpha.23` and `ws63-radio-sys` to
+  `0.1.0-alpha.20` so standalone builds consume the authenticated-pairing
+  contracts from published release units.
+
 ## [0.1.0-alpha.81] - 2026-08-20
 
 ### Fixed
