@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.80] - 2026-08-20
+
+### Added
+
+- Add linker-bounded 4 KiB erase support to the WS63 runtime NV backend and
+  route full-page updates through `hisi-nvs` transactional compaction.
+
+### Fixed
+
+- Read NV writer transactions through the SRAM SFC command path so erase and
+  program verification cannot observe stale XIP-prefetch data in the same
+  boot.
+- Preserve the ordinary read-only NV path on the memory-mapped XIP backend;
+  command reads are confined to the serialized writer transaction.
+- Align the WS63 crypto backend with `hisi-hal 0.7.0-alpha.9` through
+  `hisi-crypto-ws63 0.1.0-alpha.5` so the standalone release has one HAL
+  peripheral-token version.
+
+### Verified
+
+- Exercise a real full-page bond removal through erase, compaction, header
+  commit, replacement and next-reset persistence, followed by a 20/20
+  two-board fresh/restored-remove lifecycle matrix with no NV failure marker.
+
 ## [0.1.0-alpha.79] - 2026-08-20
 
 ### Fixed

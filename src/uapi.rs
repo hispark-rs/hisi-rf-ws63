@@ -14,7 +14,7 @@ use core::ffi::c_void;
 #[cfg(target_arch = "riscv32")]
 use hisi_nvs::{NvConfig, NvError, NvKey, NvReader, NvWriter};
 #[cfg(target_arch = "riscv32")]
-use hisi_storage::{MemoryMappedStorage, ReadStorage, WriteStorage};
+use hisi_storage::{EraseStorage, MemoryMappedStorage, ReadStorage, WriteStorage};
 use portable_atomic::{AtomicBool, Ordering};
 
 static EFUSE_READY: AtomicBool = AtomicBool::new(false);
@@ -202,6 +202,27 @@ struct NvFlashWriteGuard {
 }
 
 #[cfg(target_arch = "riscv32")]
+struct NvFlashReadGuard {
+    irq_state: u32,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl NvFlashReadGuard {
+    fn acquire() -> Self {
+        Self {
+            irq_state: crate::osal::osal_irq_lock(),
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl Drop for NvFlashReadGuard {
+    fn drop(&mut self) {
+        crate::osal::osal_irq_restore(self.irq_state);
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
 impl NvFlashWriteGuard {
     fn acquire() -> Option<Self> {
         // APP protection profile: expose only [0x3fc000, 0x400000), which is
@@ -338,18 +359,22 @@ impl ReadStorage for RomNvStorage {
     type Error = RomNvStorageError;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        let absolute = self.checked_range(offset, bytes.len())?;
-        let address = WS63_FLASH_BASE
-            .checked_add(absolute as usize)
-            .ok_or(RomNvStorageError::OutOfBounds)?;
-        // SAFETY: `checked_range` proves the complete source range belongs to
-        // the linker-declared NV partition. Flashboot keeps this region mapped
-        // through the SFC XIP window for the firmware lifetime. Command-mode
-        // reads are deliberately avoided because switching the live XIP
-        // controller into that path can stall code executing from flash.
-        unsafe {
-            core::ptr::copy_nonoverlapping(address as *const u8, bytes.as_mut_ptr(), bytes.len())
-        };
+        let mut absolute = self.checked_range(offset, bytes.len())?;
+        // XIP reads can retain stale prefetched data after a command-mode
+        // program or erase. The writer therefore reads through the SRAM SFC
+        // command path so its verify and GC decisions observe the transaction
+        // it just committed. Interrupts stay disabled while the controller is
+        // borrowed because handlers execute from the same XIP mapping.
+        let _command = NvFlashReadGuard::acquire();
+        let mut sfc =
+            hisi_hal::sfc::SfcDriver::new(unsafe { hisi_hal::peripherals::SfcCfg::steal() });
+        for chunk in bytes.chunks_mut(64) {
+            sfc.read_chunk(absolute, chunk)
+                .map_err(|_| RomNvStorageError::Rom(1))?;
+            absolute = absolute
+                .checked_add(chunk.len() as u32)
+                .ok_or(RomNvStorageError::OutOfBounds)?;
+        }
         Ok(())
     }
 
@@ -399,6 +424,38 @@ impl WriteStorage for RomNvStorage {
             remaining = rest;
         }
         crate::log_emit(b"RFDBG_SFC_WRITE_DONE\r\n");
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl EraseStorage for RomNvStorage {
+    fn erase_size(&self) -> usize {
+        hisi_nvs::WS63_PAGE_SIZE
+    }
+
+    fn erase(&mut self, offset: u32, length: usize) -> Result<(), Self::Error> {
+        let erase_size = self.erase_size();
+        if length != erase_size || offset as usize % erase_size != 0 {
+            return Err(RomNvStorageError::OutOfBounds);
+        }
+        let absolute = self.checked_range(offset, length)?;
+        crate::log_emit(b"RFDBG_NV_GC_ERASE_BEGIN\r\n");
+        let _protection = NvFlashWriteGuard::acquire().ok_or(RomNvStorageError::Rom(1))?;
+        let mut sfc =
+            hisi_hal::sfc::SfcDriver::new(unsafe { hisi_hal::peripherals::SfcCfg::steal() });
+        sfc.erase_sector_4k(absolute)
+            .map_err(|_| RomNvStorageError::Rom(1))?;
+
+        let mut readback = [0_u8; 64];
+        for checked in (0..length).step_by(readback.len()) {
+            sfc.read_chunk(absolute + checked as u32, &mut readback)
+                .map_err(|_| RomNvStorageError::Rom(1))?;
+            if readback.iter().any(|byte| *byte != 0xff) {
+                return Err(RomNvStorageError::Rom(1));
+            }
+        }
+        crate::log_emit(b"RFDBG_NV_GC_ERASE_DONE\r\n");
         Ok(())
     }
 }
@@ -625,8 +682,9 @@ pub extern "C" fn uapi_nv_read(
 /// Append and commit one plaintext item to the WS63 ACPU KV store.
 ///
 /// The format layer verifies the new record before invalidating an older
-/// version. Erase and garbage collection are deliberately unsupported, so a
-/// full store fails closed instead of risking adjacent NV data.
+/// version. When an append exhausts one logical page, the NVS format layer
+/// compacts it through the linker-bounded 4 KiB erase capability before
+/// retrying.
 #[unsafe(no_mangle)]
 pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
     #[cfg(not(target_arch = "riscv32"))]
@@ -663,7 +721,7 @@ pub extern "C" fn uapi_nv_write(key: u16, value: *const u8, len: u16) -> u32 {
         } else {
             unsafe { core::slice::from_raw_parts(value, len as usize) }
         };
-        if writer.write(NvKey::from_raw(key), input).is_ok() {
+        if writer.write_with_gc(NvKey::from_raw(key), input).is_ok() {
             crate::log_emit(b"RFDBG_NV_WRITE_DONE\r\n");
             trace_nv(key, len, len, crate::OSAL_OK as u32);
             return crate::OSAL_OK as u32;

@@ -613,9 +613,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-crypto-ws63"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63e3e825abdddd14a9a65bc881c454725b4797631e08d71a44109ec3a8e0c3e5"
+checksum = "f23854c9f5c687915f091f1bc424de4caa8a8c76e8b006f60f7d7f1e450cf2fd"
 dependencies = [
  "critical-section",
  "hisi-crypto",
@@ -627,9 +627,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-hal"
-version = "0.7.0-alpha.8"
+version = "0.7.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9243eb361398e7c2df2ebdff515b877fcf16b031e74aaf3339d3e88fb4ba6cdc"
+checksum = "cafdcff49f401ba4f72ec904b52082afa7eb000624dc5c7c6487d3becfd9d611"
 dependencies = [
  "bs2x-pac",
  "cfg-if",
@@ -646,9 +646,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-nvs"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57a8a4c835d0e40c4e31e7e807908612ca12a007cde9c3034c5868aabfebf04a"
+checksum = "3e89f9ea14380f65d87665d32b934e1a75cf5b30b59f9c1f4769843dd1bad6ca"
 dependencies = [
  "hisi-storage",
 ]
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.79"
+version = "0.1.0-alpha.80"
 dependencies = [
  "ar_archive_writer",
  "critical-section",
@@ -756,9 +756,9 @@ dependencies = [
 
 [[package]]
 name = "hisi-storage"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "725767ed226145c4042646eb988bdecb3b515f5ca3b47580f795d0d4ca49a7c8"
+checksum = "64b5c1c285a911683d1c87c64fa9e1af7b2d94aba70fbbab1d071070d281fa5a"
 dependencies = [
  "embedded-storage",
 ]
