@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.79] - 2026-08-20
+
+### Fixed
+
+- Scope legacy Wi-Fi imports to the backend profiles that actually expose them,
+  restoring the `wpa2-personal,smoltcp,legacy-blocking-backend` CI contract.
+
 ## [0.1.0-alpha.78] - 2026-08-13
 
 ### Fixed

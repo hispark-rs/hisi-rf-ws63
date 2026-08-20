@@ -72,10 +72,13 @@ use crate::wifi::Error as Ws63Error;
 use crate::wifi::ScanResult as Ws63ScanResult;
 #[cfg(not(feature = "upstream-supplicant-port"))]
 use crate::wifi::WpaWifi as ActiveWifi;
+#[cfg(all(
+    feature = "legacy-blocking-backend",
+    not(feature = "upstream-supplicant-port")
+))]
+use crate::wifi::{ConnectionInfo as Ws63ConnectionInfo, PersonalNetwork};
 #[cfg(feature = "legacy-blocking-backend")]
-use crate::wifi::{
-    ConnectionInfo as Ws63ConnectionInfo, MAX_SCAN_RESULTS, PersonalNetwork, ScanSecurity,
-};
+use crate::wifi::{MAX_SCAN_RESULTS, ScanSecurity};
 #[cfg(feature = "upstream-supplicant-port")]
 use crate::{
     upstream_supplicant::{NativeSupplicant, NativeSupplicantError},
