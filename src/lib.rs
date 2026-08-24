@@ -217,6 +217,8 @@ mod ble;
 mod ble_compat;
 #[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
 mod ble_init_diag;
+#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+mod ble_sc;
 #[cfg(any(
     target_arch = "riscv32",
     feature = "wifi-personal",

@@ -662,6 +662,10 @@ fn main() {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }
     }
+    if bgle_init {
+        println!("cargo:rustc-link-arg=--wrap=smp_ecdh_public_key_reserv");
+        println!("cargo:rustc-link-arg=--wrap=smp_ecdh_dh_key_reserv");
+    }
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
     if !bgle_init {
         for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
