@@ -690,20 +690,20 @@ mod ws63_runtime_compat;
 #[cfg(feature = "ble-init")]
 #[doc(hidden)]
 pub use ble::{
-    BLE_B1_ARENA_BYTES, BLE_B1_MINIMUM_TASK_STACK_BYTES, BLE_B3_CCC_UUID,
-    BLE_B3_CHARACTERISTIC_UUID, BLE_B3_SERVICE_UUID, BleB1ArenaStorage, BleB1ControlStorage,
-    BleB1Controller, BleB1InitError, BleB1Resources, BleB1Storage, BleB2Error, BleB2Event,
-    BleB3Error, BleGattClient, BleGattServer, BleSecurityError, BleVendorBondError,
-    InstalledBleB1Storage, init_ble_b1,
+    BLE_B1_ARENA_BYTES, BLE_B1_MINIMUM_TASK_STACK_BYTES, BLE_B1_TASK_COUNT,
+    BLE_B1_TASK_STACK_BYTES, BLE_B2_EVENT_CAPACITY, BLE_B3_CCC_UUID, BLE_B3_CHARACTERISTIC_UUID,
+    BLE_B3_SERVICE_UUID, BleB1ArenaStorage, BleB1ControlStorage, BleB1Controller, BleB1InitError,
+    BleB1Resources, BleB1Storage, BleB2Error, BleB2Event, BleB3Error, BleGattClient, BleGattServer,
+    BleSecurityError, BleVendorBondError, InstalledBleB1Storage, init_ble_b1,
 };
 pub use pmp::prepare_vendor_memory;
 #[cfg(feature = "sle-init")]
 #[doc(hidden)]
 pub use sle::{
-    InstalledSleS1Storage, SLE_S1_ARENA_BYTES, SLE_S1_EVENT_DATA_CAPACITY,
-    SLE_S1_MINIMUM_TASK_STACK_BYTES, SleS1ArenaStorage, SleS1ControlStorage, SleS1Controller,
-    SleS1Event, SleS1InitError, SleS1OperationError, SleS1Resources, SleS1Storage,
-    SsapServerHandles, init_sle_s1,
+    InstalledSleS1Storage, SLE_S1_ARENA_BYTES, SLE_S1_EVENT_CAPACITY, SLE_S1_EVENT_DATA_CAPACITY,
+    SLE_S1_MINIMUM_TASK_STACK_BYTES, SLE_S1_TASK_COUNT, SLE_S1_TASK_STACK_BYTES, SleS1ArenaStorage,
+    SleS1ControlStorage, SleS1Controller, SleS1Event, SleS1InitError, SleS1OperationError,
+    SleS1Resources, SleS1Storage, SsapServerHandles, init_sle_s1,
 };
 
 /// Declare caller-owned storage for the internal BLE B1 init profile.

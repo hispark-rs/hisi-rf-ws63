@@ -42,9 +42,15 @@ use ws63_radio_sys::ble::{SmpRecord, SmpRestoreError, SmpSnapshotError};
 pub const BLE_B1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
 /// Smallest stack in the pinned heterogeneous BLE B1 task profile.
 pub const BLE_B1_MINIMUM_TASK_STACK_BYTES: usize = 512;
+/// Dynamic task slots reserved by the pinned BLE host/controller profile.
+pub const BLE_B1_TASK_COUNT: usize = 4;
+/// Total stack bytes reserved by the pinned heterogeneous BLE task profile.
+pub const BLE_B1_TASK_STACK_BYTES: usize = 10_240;
+/// Vendor lifecycle events retained by the BLE backend queue.
+pub const BLE_B2_EVENT_CAPACITY: usize = 32;
 
 #[cfg(any(target_arch = "riscv32", test))]
-const TASK_COUNT: usize = 4;
+const TASK_COUNT: usize = BLE_B1_TASK_COUNT;
 #[cfg(any(target_arch = "riscv32", test))]
 const STACK_BT: usize = 3_584;
 #[cfg(any(target_arch = "riscv32", test))]
@@ -72,7 +78,6 @@ const OWNER_BTH_SDK: u32 = 0x424c_4503;
 #[cfg(any(target_arch = "riscv32", test))]
 const OWNER_BT_SERVICE: u32 = 0x424c_4504;
 
-const BLE_B2_EVENT_CAPACITY: usize = 32;
 const BLE_B2_ADV_DATA_CAPACITY: usize = 31;
 const BLE_B3_VALUE_CAPACITY: usize = 32;
 const BLE_BOND_RECORD_QUEUE_CAPACITY: usize = 4;
@@ -2520,6 +2525,10 @@ mod tests {
     #[test]
     fn b1_task_inventory_matches_archive_profile() {
         assert_eq!(TASK_COUNT, 4);
+        assert_eq!(
+            STACK_BT + STACK_BT_SDK + STACK_BTH_SDK + STACK_BT_SERVICE,
+            BLE_B1_TASK_STACK_BYTES
+        );
         assert_eq!(
             STACK_BT + STACK_BT_SDK + STACK_BTH_SDK + STACK_BT_SERVICE,
             10_240

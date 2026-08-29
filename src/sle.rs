@@ -35,10 +35,16 @@ use ws63_radio_sys::ssap::{
 pub const SLE_S1_ARENA_BYTES: usize = crate::WS63_SHARED_RADIO_ARENA_BYTES;
 /// Smallest stack in the pinned heterogeneous SLE S1 task profile.
 pub const SLE_S1_MINIMUM_TASK_STACK_BYTES: usize = 512;
+/// Dynamic task slots reserved by the pinned SLE host/controller profile.
+pub const SLE_S1_TASK_COUNT: usize = 4;
+/// Total stack bytes reserved by the pinned heterogeneous SLE task profile.
+pub const SLE_S1_TASK_STACK_BYTES: usize = 10_240;
+/// Vendor lifecycle events retained by the SLE backend queue.
+pub const SLE_S1_EVENT_CAPACITY: usize = 32;
 /// Maximum payload copied from one vendor seek callback.
 pub const SLE_S1_EVENT_DATA_CAPACITY: usize = 64;
 
-const EVENT_CAPACITY: usize = 32;
+const EVENT_CAPACITY: usize = SLE_S1_EVENT_CAPACITY;
 const SLE_S3_VALUE_CAPACITY: usize = 64;
 
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
@@ -135,7 +141,7 @@ impl SleS1OperationStorage {
     }
 }
 #[cfg(any(target_arch = "riscv32", test))]
-const TASK_COUNT: usize = 4;
+const TASK_COUNT: usize = SLE_S1_TASK_COUNT;
 #[cfg(any(target_arch = "riscv32", test))]
 const STACKS: [usize; TASK_COUNT] = [3_584, 2_048, 512, 4_096];
 #[cfg(any(target_arch = "riscv32", test))]
@@ -1610,6 +1616,7 @@ mod tests {
     #[test]
     fn task_inventory_matches_shared_bgle_controller_profile() {
         assert_eq!(TASK_COUNT, 4);
+        assert_eq!(STACKS.iter().sum::<usize>(), SLE_S1_TASK_STACK_BYTES);
         assert_eq!(STACKS.iter().sum::<usize>(), 10_240);
         assert_eq!(STACKS[2], SLE_S1_MINIMUM_TASK_STACK_BYTES);
         assert_eq!(PRIORITIES, [1, 12, 13, 12]);

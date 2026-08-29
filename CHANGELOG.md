@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.84] - 2026-08-29
+
+### Added
+
+- Export the pinned BLE and SLE task-count, total-stack, minimum-stack, and
+  backend event-capacity facts so the public facade can produce one truthful,
+  allocation-free resource report without copying private admission constants.
+
 ## [0.1.0-alpha.83] - 2026-08-24
 
 ### Fixed
