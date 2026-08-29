@@ -13,7 +13,9 @@ use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
 #[cfg(feature = "coexistence-wifi-ble")]
-use hisi_rf_core::{ScanConfig, ScanResult, WifiController, WorkBudget};
+use hisi_rf_core::{
+    BackendErrorClass, Error as RadioError, ScanConfig, ScanResult, WifiController, WorkBudget,
+};
 use hisi_rf_ws63::declare_radio_storage;
 #[cfg(feature = "coexistence-wifi-ble")]
 use hisi_rf_ws63::{IncrementalRadioParts, IncrementalRadioRunner};
@@ -25,6 +27,10 @@ const EVENT_DEPTH: usize = 8;
 const SCAN_RESULT_DEPTH: usize = 32;
 #[cfg(feature = "coexistence-wifi-ble")]
 const COEX_SCAN_ROUNDS: u8 = 3;
+#[cfg(feature = "coexistence-wifi-ble")]
+const COEX_SCAN_TIMEOUT_MS: u32 = 30_000;
+#[cfg(feature = "coexistence-wifi-ble")]
+const COEX_SCAN_SETTLE_MS: u64 = 1_000;
 #[cfg(feature = "coexistence-wifi-ble")]
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero coexistence work budget");
@@ -263,14 +269,18 @@ async fn wifi_scan_while_ble_active(
         }
         let scan = controller.scan(
             ScanConfig::new(
-                hisi_rf_core::OperationTimeout::try_from_millis(15_000)
+                hisi_rf_core::OperationTimeout::try_from_millis(COEX_SCAN_TIMEOUT_MS)
                     .expect("non-zero scan timeout"),
             ),
             &mut results,
         );
-        let outcome = match with_timeout(Duration::from_secs(30), scan).await {
+        let outcome = match with_timeout(Duration::from_secs(45), scan).await {
             Ok(Ok(outcome)) => outcome,
-            _ => fail(uart, b"RFDBG_COEX_WIFI_SCAN_ERR\r\n"),
+            Ok(Err(error)) => report_scan_error(uart, error),
+            Err(_) => fail(
+                uart,
+                b"RFDBG_COEX_WIFI_SCAN_ERR class=0x00000003 code=0x00000000\r\n",
+            ),
         };
         round += 1;
         uart.write(b"RFDBG_COEX_WIFI_SCAN_OK round=0x");
@@ -278,7 +288,7 @@ async fn wifi_scan_while_ble_active(
         uart.write(b" count=0x");
         uart.write(&hex8(u32::try_from(outcome.count).unwrap_or(u32::MAX)));
         uart.write(b"\r\n");
-        Timer::after(Duration::from_millis(100)).await;
+        Timer::after(Duration::from_millis(COEX_SCAN_SETTLE_MS)).await;
     }
 
     let events = controller.event_diagnostics();
@@ -301,6 +311,36 @@ async fn wifi_scan_while_ble_active(
 fn fail(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker: &[u8]) -> ! {
     uart.write(marker);
     halt()
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+fn report_scan_error(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, error: RadioError) -> ! {
+    let (class, code) = match error {
+        RadioError::AlreadyInitialized => (1, 0),
+        RadioError::Protocol => (2, 0),
+        RadioError::Backend(error) => (backend_error_class_code(error.class()), error.code()),
+    };
+    uart.write(b"RFDBG_COEX_WIFI_SCAN_ERR class=0x");
+    uart.write(&hex8(class));
+    uart.write(b" code=0x");
+    uart.write(&hex8(code));
+    uart.write(b"\r\n");
+    halt()
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+const fn backend_error_class_code(class: BackendErrorClass) -> u32 {
+    match class {
+        BackendErrorClass::Initialize => 0x100,
+        BackendErrorClass::Busy => 0x101,
+        BackendErrorClass::OperationTimeout => 0x102,
+        BackendErrorClass::BackendTimeout => 0x103,
+        BackendErrorClass::Cancelled => 0x104,
+        BackendErrorClass::ResourceUnavailable => 0x105,
+        BackendErrorClass::UnsupportedSecurity => 0x106,
+        BackendErrorClass::Connect => 0x107,
+        BackendErrorClass::Other => 0x1ff,
+    }
 }
 
 #[cfg(feature = "coexistence-wifi-ble")]
