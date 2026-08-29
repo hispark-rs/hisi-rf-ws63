@@ -316,12 +316,17 @@ pub extern "C" fn __rt_irq_dispatch(irq: u32) {
         return;
     }
 
-    unsafe extern "C" {
-        fn __hisi_rt_irq_dispatch_default(irq: u32);
+    #[cfg(target_arch = "riscv32")]
+    {
+        unsafe extern "C" {
+            fn __hisi_rt_irq_dispatch_default(irq: u32);
+        }
+        // SAFETY: the runtime default bounds-checks `irq` before indexing the
+        // device.x table.
+        unsafe { __hisi_rt_irq_dispatch_default(irq) };
     }
-    // SAFETY: the runtime default bounds-checks `irq` before indexing the
-    // device.x table.
-    unsafe { __hisi_rt_irq_dispatch_default(irq) };
+    #[cfg(not(target_arch = "riscv32"))]
+    let _ = irq;
 }
 
 #[cfg(feature = "rf-queue-guard")]
@@ -619,7 +624,14 @@ pub extern "C" fn osal_get_current_tid() -> c_int {
 
 #[cfg(test)]
 mod tests {
-    use super::radio_interrupt;
+    use super::{__rt_irq_dispatch, radio_interrupt};
+
+    #[cfg(not(target_arch = "riscv32"))]
+    #[test]
+    fn host_non_radio_dispatch_does_not_require_the_rv32_runtime() {
+        assert!(radio_interrupt(0).is_none());
+        __rt_irq_dispatch(0);
+    }
 
     #[test]
     fn maps_ble_controller_timebase_interrupt() {

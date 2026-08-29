@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.85] - 2026-08-29
+
+### Fixed
+
+- Restrict the non-radio IRQ fallback to the RV32 runtime that owns its
+  assembly dispatcher, allowing host-only resource-report consumers to link on
+  Windows without changing silicon interrupt routing.
+
 ## [0.1.0-alpha.84] - 2026-08-29
 
 ### Added
