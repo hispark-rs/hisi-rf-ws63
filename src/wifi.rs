@@ -430,10 +430,32 @@ fn require_radio_runtime() -> Result<(), Error> {
         hisi_rf_rtos_driver::RuntimeRequirements::V1_PORTED_COOPERATIVE,
     )
     .map_err(Error::Runtime)?;
-    hisi_rf_rtos_driver::require_task_capacity(crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED)
-        .map_err(Error::TaskAdmission)?;
+    require_unreserved_vendor_capacity(
+        crate::runtime::task_reservation_installed(),
+        hisi_rf_rtos_driver::require_task_capacity,
+    )
+    .map_err(Error::TaskAdmission)?;
     hisi_rf_rtos_driver::current_task().map_err(Error::Runtime)?;
     Ok(())
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+fn require_unreserved_vendor_capacity(
+    reservation_installed: bool,
+    require_capacity: impl FnOnce(
+        usize,
+    ) -> Result<
+        hisi_rf_rtos_driver::TaskCapacity,
+        hisi_rf_rtos_driver::TaskAdmissionError,
+    >,
+) -> Result<(), hisi_rf_rtos_driver::TaskAdmissionError> {
+    if reservation_installed {
+        // The composition root has atomically admitted the exact vendor group.
+        // Rechecking unreserved capacity here would count those slots twice.
+        Ok(())
+    } else {
+        require_capacity(crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED).map(|_| ())
+    }
 }
 
 #[cfg(feature = "wifi-personal")]
@@ -2013,6 +2035,34 @@ mod tests {
     };
     #[cfg(feature = "wifi-wpa3-personal")]
     use hisi_rf_core::{PersonalSecurity, SaePwe};
+
+    #[test]
+    fn installed_vendor_reservation_is_not_counted_twice() {
+        let mut capacity_checks = 0;
+        let result = super::require_unreserved_vendor_capacity(true, |_| {
+            capacity_checks += 1;
+            unreachable!("an admitted vendor group must not recheck free slots")
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(capacity_checks, 0);
+    }
+
+    #[test]
+    fn direct_initialization_still_checks_vendor_capacity() {
+        let mut required = 0;
+        let result = super::require_unreserved_vendor_capacity(false, |requested| {
+            required = requested;
+            hisi_rf_rtos_driver::TaskCapacity::new(15, 0).ok_or(
+                hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                    hisi_rf_rtos_driver::Error::Runtime,
+                ),
+            )
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(required, crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED);
+    }
 
     #[test]
     #[cfg(feature = "wifi-wpa2-personal")]

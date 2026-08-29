@@ -11,6 +11,11 @@ use hisi_rf_rtos_driver::{Error, TaskConfig, TaskEntry, TaskId, TaskPriority, Ta
 static TASK_RESERVATION: Mutex<Cell<Option<&'static TaskReservation>>> =
     Mutex::new(Cell::new(None));
 
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn task_reservation_installed() -> bool {
+    critical_section::with(|cs| TASK_RESERVATION.borrow(cs).get().is_some())
+}
+
 #[cfg(any(
     all(
         feature = "net",
