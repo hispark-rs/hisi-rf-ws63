@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.86] - 2026-08-29
+
+### Added
+
+- Add named Wi-Fi plus BLE and Wi-Fi plus SLE coexistence profiles whose task,
+  stack, queue, control-storage and RF-arena requirements are derived from one
+  checked resource tree.
+- Add credential-free final-link and real-silicon smoke examples for the two
+  shared-platform compositions.
+
+### Fixed
+
+- Avoid counting the seven already-reserved Wi-Fi vendor tasks a second time
+  when the composition root enters the vendor bootstrap.
+- Map SLE task reservations independently from the SLE-local stack inventory,
+  so a non-zero coexistence reservation offset cannot select the wrong stack
+  size or priority.
+- Exercise the admission regression in every host profile without requiring a
+  station-only feature or leaking it into SoftAP builds.
+
+### Changed
+
+- Update the runtime contract to `hisi-rf-rtos-driver 0.1.0-alpha.20` and use
+  owner-bound task-slot and stack reservations for the complete composition.
+
+### Verified
+
+- Pass credential-free Wi-Fi plus BLE and Wi-Fi plus SLE shared-platform
+  initialization for 3/3 and then 20/20 hardware-reset runs on two WS63 boards.
+  This evidence proves resource admission, Wi-Fi bootstrap and BLE/SLE platform
+  initialization; concurrent Wi-Fi traffic and BLE/SLE over-air operation remain
+  separate gates.
+
 ## [0.1.0-alpha.85] - 2026-08-29
 
 ### Fixed
