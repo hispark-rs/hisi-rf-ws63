@@ -392,6 +392,17 @@ impl Default for SleS1ControlStorage {
     }
 }
 
+impl SleS1ControlStorage {
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn install_coexisting(&'static self) -> InstalledSleS1Storage {
+        InstalledSleS1Storage {
+            crypto: None,
+            events: self.events.init(EventQueue::new()),
+            operations: self.operations.init(SleS1OperationStorage::new()),
+        }
+    }
+}
+
 /// Composition object joining SLE S1 control state and its dedicated arena.
 pub struct SleS1Storage<const N: usize> {
     control: &'static SleS1ControlStorage,
@@ -423,7 +434,7 @@ impl<const N: usize> SleS1Storage<N> {
             return Err(SleS1InitError::AllocatorInstall);
         }
         Ok(InstalledSleS1Storage {
-            crypto: self.control.crypto.init(Ws63CryptoStorage::new()),
+            crypto: Some(self.control.crypto.init(Ws63CryptoStorage::new())),
             events: self.control.events.init(EventQueue::new()),
             operations: self.control.operations.init(SleS1OperationStorage::new()),
         })
@@ -433,7 +444,7 @@ impl<const N: usize> SleS1Storage<N> {
 /// Proof that the SLE S1 arena and control storage were installed.
 pub struct InstalledSleS1Storage {
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
-    crypto: &'static mut Ws63CryptoStorage,
+    crypto: Option<&'static mut Ws63CryptoStorage>,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     events: &'static EventQueue,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
@@ -485,7 +496,7 @@ impl SleS1Resources {
 /// Process-lifetime proof that the SLE S1 runtime is active.
 #[must_use = "retain the SLE controller so the eFuse capability stays owned"]
 pub struct SleS1Controller {
-    _efuse: Efuse<'static>,
+    _efuse: Option<Efuse<'static>>,
     events: &'static EventQueue,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     operations: &'static mut SleS1OperationStorage,
@@ -1523,18 +1534,50 @@ pub fn init_sle_s1(
     resources: SleS1Resources,
     storage: InstalledSleS1Storage,
 ) -> Result<SleS1Controller, SleS1InitError> {
-    crate::ensure_sle_init_link_contract();
-    unsafe { crate::prepare_vendor_memory() };
-    let _ = crate::uapi::initialize_rom_timebases();
-    crate::uapi::enable_efuse_reads();
-    crate::crypto::install_hardware_crypto(
-        resources.km,
-        resources.spacc,
+    init_sle_s1_with_platform(Some(resources), storage, None, 0)
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn init_sle_s1_coexisting(
+    storage: &'static SleS1ControlStorage,
+    reservations: hisi_rf_rtos_driver::TaskReservationBatch,
+    reservation_offset: usize,
+) -> Result<SleS1Controller, SleS1InitError> {
+    init_sle_s1_with_platform(
         None,
-        resources.trng,
-        storage.crypto,
+        storage.install_coexisting(),
+        Some(reservations),
+        reservation_offset,
     )
-    .map_err(|_| SleS1InitError::Crypto)?;
+}
+
+#[cfg(target_arch = "riscv32")]
+fn init_sle_s1_with_platform(
+    resources: Option<SleS1Resources>,
+    mut storage: InstalledSleS1Storage,
+    admitted_reservations: Option<hisi_rf_rtos_driver::TaskReservationBatch>,
+    reservation_offset: usize,
+) -> Result<SleS1Controller, SleS1InitError> {
+    crate::ensure_sle_init_link_contract();
+    let retained_efuse = if let Some(resources) = resources {
+        unsafe { crate::prepare_vendor_memory() };
+        let _ = crate::uapi::initialize_rom_timebases();
+        crate::uapi::enable_efuse_reads();
+        let crypto = storage.crypto.take().ok_or(SleS1InitError::Crypto)?;
+        crate::crypto::install_hardware_crypto(
+            resources.km,
+            resources.spacc,
+            None,
+            resources.trng,
+            crypto,
+        )
+        .map_err(|_| SleS1InitError::Crypto)?;
+        Some(resources.efuse)
+    } else {
+        debug_assert!(storage.crypto.is_none());
+        crate::log_emit(b"RFDBG_SLE_S1_SHARED_PLATFORM_OK\r\n");
+        None
+    };
     EVENT_QUEUE
         .compare_exchange(
             core::ptr::null_mut(),
@@ -1565,22 +1608,27 @@ pub fn init_sle_s1(
         return Err(SleS1InitError::RegisterSsapClientCallbacks(status));
     }
 
-    let groups = [
-        task_group(0)?,
-        task_group(1)?,
-        task_group(2)?,
-        task_group(3)?,
-    ];
-    let plan =
-        hisi_rf_rtos_driver::TaskResourcePlan::new(&groups).ok_or(SleS1InitError::TaskPlan)?;
-    let mut reservations = hisi_rf_rtos_driver::reserve_task_resource_plan(plan)
-        .map_err(|_| SleS1InitError::TaskAdmission)?;
+    let mut reservations = match admitted_reservations {
+        Some(reservations) => reservations,
+        None => {
+            let groups = [
+                task_group(0)?,
+                task_group(1)?,
+                task_group(2)?,
+                task_group(3)?,
+            ];
+            let plan = hisi_rf_rtos_driver::TaskResourcePlan::new(&groups)
+                .ok_or(SleS1InitError::TaskPlan)?;
+            hisi_rf_rtos_driver::reserve_task_resource_plan(plan)
+                .map_err(|_| SleS1InitError::TaskAdmission)?
+        }
+    };
     hisi_rf_rtos_driver::lock_scheduler().map_err(|_| SleS1InitError::SchedulerLock)?;
     let spawn_result = (|| {
-        spawn_task(&mut reservations, 0, task_bt)?;
-        spawn_task(&mut reservations, 1, task_bt_sdk)?;
-        spawn_task(&mut reservations, 2, task_bth_sdk)?;
-        spawn_task(&mut reservations, 3, task_service)
+        spawn_task(&mut reservations, reservation_offset, task_bt)?;
+        spawn_task(&mut reservations, reservation_offset + 1, task_bt_sdk)?;
+        spawn_task(&mut reservations, reservation_offset + 2, task_bth_sdk)?;
+        spawn_task(&mut reservations, reservation_offset + 3, task_service)
     })();
     let unlock_result = hisi_rf_rtos_driver::unlock_scheduler();
     spawn_result?;
@@ -1592,7 +1640,7 @@ pub fn init_sle_s1(
         return Err(SleS1InitError::Enable(status));
     }
     Ok(SleS1Controller {
-        _efuse: resources.efuse,
+        _efuse: retained_efuse,
         events: storage.events,
         operations: storage.operations,
     })
@@ -1705,7 +1753,7 @@ mod tests {
         let events = Box::leak(Box::new(EventQueue::new()));
         let operations = Box::leak(Box::new(SleS1OperationStorage::new()));
         let mut controller = SleS1Controller {
-            _efuse: unsafe { Efuse::steal() },
+            _efuse: Some(unsafe { Efuse::steal() }),
             events,
             operations,
         };

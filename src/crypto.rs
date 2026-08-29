@@ -113,7 +113,7 @@ static MAC_TOTAL_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 static MAC_MAX_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
-#[cfg_attr(feature = "ble-init", allow(dead_code))]
+#[cfg_attr(any(feature = "ble-init", feature = "sle-init"), allow(dead_code))]
 static HASH_RECOVERY_TESTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_arch = "riscv32")]
 #[cfg_attr(feature = "ble-init", allow(dead_code))]
@@ -1083,7 +1083,7 @@ pub(crate) fn ws63_hash_self_test() -> Result<(), CryptoError> {
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "wpa3-crypto"))]
-#[cfg_attr(feature = "ble-init", allow(dead_code))]
+#[cfg_attr(any(feature = "ble-init", feature = "sle-init"), allow(dead_code))]
 pub(crate) fn ws63_p256_self_test() -> Result<(), CryptoError> {
     const GENERATOR: P256AffinePoint = P256AffinePoint::new(
         [

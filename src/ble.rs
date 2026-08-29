@@ -552,6 +552,18 @@ impl Default for BleB1ControlStorage {
     }
 }
 
+impl BleB1ControlStorage {
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn install_coexisting(&'static self) -> InstalledBleB1Storage {
+        InstalledBleB1Storage {
+            crypto: None,
+            events: self.events.init(BleEventQueue::new()),
+            bond_records: self.bond_records.init(BleBondRecordQueue::new()),
+            operations: self.operations.init(BleB2OperationStorage::new()),
+        }
+    }
+}
+
 /// Composition object joining B1 control state and its dedicated arena.
 pub struct BleB1Storage<const N: usize> {
     control: &'static BleB1ControlStorage,
@@ -591,7 +603,7 @@ impl<const N: usize> BleB1Storage<N> {
         let bond_records = self.control.bond_records.init(BleBondRecordQueue::new());
         let operations = self.control.operations.init(BleB2OperationStorage::new());
         Ok(InstalledBleB1Storage {
-            crypto,
+            crypto: Some(crypto),
             events,
             bond_records,
             operations,
@@ -602,7 +614,7 @@ impl<const N: usize> BleB1Storage<N> {
 /// Proof that the B1 shared arena and crypto storage were installed.
 pub struct InstalledBleB1Storage {
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
-    crypto: &'static mut Ws63CryptoStorage,
+    crypto: Option<&'static mut Ws63CryptoStorage>,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
     events: &'static BleEventQueue,
     #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
@@ -667,7 +679,7 @@ impl BleB1Resources {
 /// Process-lifetime proof that the internal BLE B1 runtime is active.
 #[must_use = "retain the BLE B1 controller so the eFuse capability stays owned"]
 pub struct BleB1Controller {
-    _efuse: Efuse<'static>,
+    _efuse: Option<Efuse<'static>>,
     events: &'static BleEventQueue,
     bond_records: &'static BleBondRecordQueue,
     observed_bond_peers: [Option<([u8; 6], u8)>; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],
@@ -2373,25 +2385,56 @@ pub fn init_ble_b1(
     resources: BleB1Resources,
     storage: InstalledBleB1Storage,
 ) -> Result<BleB1Controller, BleB1InitError> {
+    init_ble_b1_with_platform(Some(resources), storage, None, 0)
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn init_ble_b1_coexisting(
+    storage: &'static BleB1ControlStorage,
+    reservations: hisi_rf_rtos_driver::TaskReservationBatch,
+    reservation_offset: usize,
+) -> Result<BleB1Controller, BleB1InitError> {
+    init_ble_b1_with_platform(
+        None,
+        storage.install_coexisting(),
+        Some(reservations),
+        reservation_offset,
+    )
+}
+
+#[cfg(target_arch = "riscv32")]
+fn init_ble_b1_with_platform(
+    resources: Option<BleB1Resources>,
+    mut storage: InstalledBleB1Storage,
+    admitted_reservations: Option<hisi_rf_rtos_driver::TaskReservationBatch>,
+    reservation_offset: usize,
+) -> Result<BleB1Controller, BleB1InitError> {
     crate::ensure_ble_init_link_contract();
     crate::log_emit(b"RFDBG_BLE_B1_LINK_CONTRACT_OK\r\n");
-    // SAFETY: B1 initialization runs once before any vendor task executes and
-    // owns the fixed linker regions described by the selected BLE profile.
-    unsafe { crate::prepare_vendor_memory() };
-    crate::log_emit(b"RFDBG_BLE_B1_VENDOR_MEMORY_OK\r\n");
-    let _ = crate::uapi::initialize_rom_timebases();
-    crate::log_emit(b"RFDBG_BLE_B1_TIMEBASE_OK\r\n");
-    crate::uapi::enable_efuse_reads();
-    crate::log_emit(b"RFDBG_BLE_B1_EFUSE_OK\r\n");
-    crate::crypto::install_hardware_crypto(
-        resources.km,
-        resources.spacc,
-        Some(resources.pke),
-        resources.trng,
-        storage.crypto,
-    )
-    .map_err(|_| BleB1InitError::Crypto)?;
-    crate::log_emit(b"RFDBG_BLE_B1_CRYPTO_OK\r\n");
+    let retained_efuse = if let Some(resources) = resources {
+        // SAFETY: standalone B1 initialization owns the fixed linker regions.
+        unsafe { crate::prepare_vendor_memory() };
+        crate::log_emit(b"RFDBG_BLE_B1_VENDOR_MEMORY_OK\r\n");
+        let _ = crate::uapi::initialize_rom_timebases();
+        crate::log_emit(b"RFDBG_BLE_B1_TIMEBASE_OK\r\n");
+        crate::uapi::enable_efuse_reads();
+        crate::log_emit(b"RFDBG_BLE_B1_EFUSE_OK\r\n");
+        let crypto = storage.crypto.take().ok_or(BleB1InitError::Crypto)?;
+        crate::crypto::install_hardware_crypto(
+            resources.km,
+            resources.spacc,
+            Some(resources.pke),
+            resources.trng,
+            crypto,
+        )
+        .map_err(|_| BleB1InitError::Crypto)?;
+        crate::log_emit(b"RFDBG_BLE_B1_CRYPTO_OK\r\n");
+        Some(resources.efuse)
+    } else {
+        debug_assert!(storage.crypto.is_none());
+        crate::log_emit(b"RFDBG_BLE_B1_SHARED_PLATFORM_OK\r\n");
+        None
+    };
     #[cfg(feature = "ble-init-diag")]
     if crate::ble_compat::ble_crypto_compat_self_test() {
         crate::log_emit(b"RFDBG_BLE_U5B_CRYPTO_COMPAT_OK\r\n");
@@ -2438,38 +2481,49 @@ pub fn init_ble_b1(
         return Err(BleB1InitError::RegisterGattClientCallbacks(callback_status));
     }
     crate::log_emit(b"RFDBG_BLE_B3_CALLBACKS_OK\r\n");
-    let groups: [_; TASK_COUNT] = [
-        task_group(OWNER_BT, STACK_BT)?,
-        task_group(OWNER_BT_SDK, STACK_BT_SDK)?,
-        task_group(OWNER_BTH_SDK, STACK_BTH_SDK)?,
-        task_group(OWNER_BT_SERVICE, STACK_BT_SERVICE)?,
-    ];
-    let plan =
-        hisi_rf_rtos_driver::TaskResourcePlan::new(&groups).ok_or(BleB1InitError::TaskPlan)?;
-    let mut reservations = hisi_rf_rtos_driver::reserve_task_resource_plan(plan)
-        .map_err(|_| BleB1InitError::TaskAdmission)?;
+    let mut reservations = match admitted_reservations {
+        Some(reservations) => reservations,
+        None => {
+            let groups: [_; TASK_COUNT] = [
+                task_group(OWNER_BT, STACK_BT)?,
+                task_group(OWNER_BT_SDK, STACK_BT_SDK)?,
+                task_group(OWNER_BTH_SDK, STACK_BTH_SDK)?,
+                task_group(OWNER_BT_SERVICE, STACK_BT_SERVICE)?,
+            ];
+            let plan = hisi_rf_rtos_driver::TaskResourcePlan::new(&groups)
+                .ok_or(BleB1InitError::TaskPlan)?;
+            hisi_rf_rtos_driver::reserve_task_resource_plan(plan)
+                .map_err(|_| BleB1InitError::TaskAdmission)?
+        }
+    };
     crate::log_emit(b"RFDBG_BLE_B1_ADMISSION_OK\r\n");
 
     hisi_rf_rtos_driver::lock_scheduler().map_err(|_| BleB1InitError::SchedulerLock)?;
     let spawn_result = (|| {
-        spawn_task(&mut reservations, 0, bt_task, STACK_BT, PRIORITY_BT)?;
         spawn_task(
             &mut reservations,
-            1,
+            reservation_offset,
+            bt_task,
+            STACK_BT,
+            PRIORITY_BT,
+        )?;
+        spawn_task(
+            &mut reservations,
+            reservation_offset + 1,
             bt_sdk_task,
             STACK_BT_SDK,
             PRIORITY_BT_SDK,
         )?;
         spawn_task(
             &mut reservations,
-            2,
+            reservation_offset + 2,
             bth_sdk_task,
             STACK_BTH_SDK,
             PRIORITY_BTH_SDK,
         )?;
         spawn_task(
             &mut reservations,
-            3,
+            reservation_offset + 3,
             bt_service_task,
             STACK_BT_SERVICE,
             PRIORITY_BT_SERVICE,
@@ -2498,7 +2552,7 @@ pub fn init_ble_b1(
     // than replacing that callback with a second consumer.
     crate::log_emit(b"RFDBG_BLE_U5C_RECORD_SNAPSHOT_OK\r\n");
     Ok(BleB1Controller {
-        _efuse: resources.efuse,
+        _efuse: retained_efuse,
         events: storage.events,
         bond_records: storage.bond_records,
         observed_bond_peers: [None; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],
@@ -2722,7 +2776,7 @@ mod tests {
         let events = Box::leak(Box::new(BleEventQueue::new()));
         let operations = Box::leak(Box::new(BleB2OperationStorage::new()));
         let mut controller = BleB1Controller {
-            _efuse: unsafe { Efuse::steal() },
+            _efuse: Some(unsafe { Efuse::steal() }),
             events,
             bond_records: Box::leak(Box::new(BleBondRecordQueue::new())),
             observed_bond_peers: [None; ws63_radio_sys::ble::SMP_RECORD_CAPACITY],

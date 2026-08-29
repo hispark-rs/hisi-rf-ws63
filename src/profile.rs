@@ -24,11 +24,20 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v10";
-pub(crate) const PROFILE_REVISION: &str = "ws63-wifi-2026-08-03-r9";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v11";
+pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-08-29-r10";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
-const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "incremental-embassy-wait") {
+const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(any(
+    feature = "coexistence-wifi-ble",
+    feature = "coexistence-wifi-sle"
+)) {
+    // The combined target closure contributes additional fixed BGLE control
+    // BSS before `.hisi_shared_arenas`. A stock-rust-lld map measured 0x2480
+    // fewer bytes before the fixed task stacks; reserve 16 KiB so the linker
+    // remains fail-closed with explicit headroom until two-board calibration.
+    276 * 1024
+} else if cfg!(feature = "incremental-embassy-wait") {
     // The worker adds just under 4 KiB of bounded control state in ordinary
     // BSS. Keep the firmware's total SRAM envelope honest by returning one
     // 4 KiB page from the large shared arenas.
@@ -42,6 +51,7 @@ const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
 // a payload whose size is itself 64-byte aligned occupies one extra cache line.
 // Account for that physical object overhead in the shared-section budget.
 const RADIO_ARENA_STORAGE_OVERHEAD_BYTES: usize = 64;
+#[cfg(not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle")))]
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocking-backend") {
     // Crypto storage, reservations, claim state, and the legacy runner cell.
     6_361
@@ -54,6 +64,7 @@ const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocki
     // Crypto storage, the vendor reservation, and claim state.
     4_425
 };
+#[cfg(not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle")))]
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
     // The incremental profile adds 18 instance-owned counters published by the
@@ -75,7 +86,39 @@ pub mod resource_owner {
     pub const VENDOR_TASKS: u32 = 1;
     /// Rust incremental backend worker.
     pub const INCREMENTAL_WORKER: u32 = 2;
+    /// Shared BGLE controller task.
+    pub const BGLE_CONTROLLER: u32 = 0x424c_4501;
+    /// Shared BGLE controller SDK task.
+    pub const BGLE_CONTROLLER_SDK: u32 = 0x424c_4502;
+    /// Shared BGLE host SDK task.
+    pub const BGLE_HOST_SDK: u32 = 0x424c_4503;
+    /// Shared BGLE host service task.
+    pub const BGLE_HOST_SERVICE: u32 = 0x424c_4504;
 }
+
+/// Exact heterogeneous task inventory shared by the pinned BLE and SLE closures.
+pub const BGLE_TASK_GROUPS: [TaskGroupPlan; 4] = [
+    TaskGroupPlan {
+        owner: resource_owner::BGLE_CONTROLLER,
+        task_slots: 1,
+        stack_bytes_per_task: 3_584,
+    },
+    TaskGroupPlan {
+        owner: resource_owner::BGLE_CONTROLLER_SDK,
+        task_slots: 1,
+        stack_bytes_per_task: 2_048,
+    },
+    TaskGroupPlan {
+        owner: resource_owner::BGLE_HOST_SDK,
+        task_slots: 1,
+        stack_bytes_per_task: 512,
+    },
+    TaskGroupPlan {
+        owner: resource_owner::BGLE_HOST_SERVICE,
+        task_slots: 1,
+        stack_bytes_per_task: 4_096,
+    },
+];
 
 /// One uniform-stack child in the Wi-Fi resource tree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +141,79 @@ impl TaskGroupPlan {
     }
 }
 
+const fn task_slots_for_groups(
+    vendor: TaskGroupPlan,
+    worker: Option<TaskGroupPlan>,
+    coexistence: [Option<TaskGroupPlan>; 4],
+) -> usize {
+    let mut total = vendor.task_slots;
+    if let Some(worker) = worker {
+        total = match total.checked_add(worker.task_slots) {
+            Some(total) => total,
+            None => panic!("profile task-slot total overflow"),
+        };
+    }
+    let mut index = 0;
+    while index < coexistence.len() {
+        if let Some(group) = coexistence[index] {
+            total = match total.checked_add(group.task_slots) {
+                Some(total) => total,
+                None => panic!("profile task-slot total overflow"),
+            };
+        }
+        index += 1;
+    }
+    total
+}
+
+const fn task_stacks_for_groups(
+    vendor: TaskGroupPlan,
+    worker: Option<TaskGroupPlan>,
+    coexistence: [Option<TaskGroupPlan>; 4],
+) -> usize {
+    let mut total = vendor.total_stack_bytes();
+    if let Some(worker) = worker {
+        total = match total.checked_add(worker.total_stack_bytes()) {
+            Some(total) => total,
+            None => panic!("profile task-stack total overflow"),
+        };
+    }
+    let mut index = 0;
+    while index < coexistence.len() {
+        if let Some(group) = coexistence[index] {
+            total = match total.checked_add(group.total_stack_bytes()) {
+                Some(total) => total,
+                None => panic!("profile task-stack total overflow"),
+            };
+        }
+        index += 1;
+    }
+    total
+}
+
+const fn minimum_stack_for_groups(
+    vendor: TaskGroupPlan,
+    worker: Option<TaskGroupPlan>,
+    coexistence: [Option<TaskGroupPlan>; 4],
+) -> usize {
+    let mut minimum = vendor.stack_bytes_per_task;
+    if let Some(worker) = worker
+        && worker.stack_bytes_per_task < minimum
+    {
+        minimum = worker.stack_bytes_per_task;
+    }
+    let mut index = 0;
+    while index < coexistence.len() {
+        if let Some(group) = coexistence[index]
+            && group.stack_bytes_per_task < minimum
+        {
+            minimum = group.stack_bytes_per_task;
+        }
+        index += 1;
+    }
+    minimum
+}
+
 /// Structured WS63 Wi-Fi resource tree used by reports and admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WifiResourcePlan {
@@ -105,6 +221,8 @@ pub struct WifiResourcePlan {
     pub vendor: TaskGroupPlan,
     /// Optional Rust incremental worker group.
     pub worker: Option<TaskGroupPlan>,
+    /// Optional protocol-coexistence task groups in deterministic spawn order.
+    pub coexistence: [Option<TaskGroupPlan>; 4],
     /// Bounded public event queue capacity.
     pub event_capacity: usize,
     /// RTOS object/headroom budget outside task-stack payloads.
@@ -122,18 +240,45 @@ impl WifiResourcePlan {
 
     /// Total dynamic slots derived exclusively from child groups.
     pub const fn total_task_slots(self) -> usize {
-        match self.worker {
+        let mut total = match self.worker {
             Some(worker) => match self.vendor.task_slots.checked_add(worker.task_slots) {
                 Some(total) => total,
                 None => panic!("task-slot total overflow"),
             },
             None => self.vendor.task_slots,
+        };
+        let mut index = 0;
+        while index < self.coexistence.len() {
+            if let Some(group) = self.coexistence[index] {
+                total = match total.checked_add(group.task_slots) {
+                    Some(total) => total,
+                    None => panic!("task-slot total overflow"),
+                };
+            }
+            index += 1;
         }
+        total
+    }
+
+    /// Dynamic task slots contributed by the optional BGLE child groups.
+    pub const fn coexistence_task_slots(self) -> usize {
+        let mut total = 0usize;
+        let mut index = 0;
+        while index < self.coexistence.len() {
+            if let Some(group) = self.coexistence[index] {
+                total = match total.checked_add(group.task_slots) {
+                    Some(total) => total,
+                    None => panic!("coexistence task-slot total overflow"),
+                };
+            }
+            index += 1;
+        }
+        total
     }
 
     /// Total task-stack payload derived exclusively from child groups.
     pub const fn total_stack_bytes(self) -> usize {
-        match self.worker {
+        let mut total = match self.worker {
             Some(worker) => match self
                 .vendor
                 .total_stack_bytes()
@@ -143,17 +288,54 @@ impl WifiResourcePlan {
                 None => panic!("task-stack total overflow"),
             },
             None => self.vendor.total_stack_bytes(),
+        };
+        let mut index = 0;
+        while index < self.coexistence.len() {
+            if let Some(group) = self.coexistence[index] {
+                total = match total.checked_add(group.total_stack_bytes()) {
+                    Some(total) => total,
+                    None => panic!("task-stack total overflow"),
+                };
+            }
+            index += 1;
         }
+        total
+    }
+
+    /// Stack payload contributed by the optional BGLE child groups.
+    pub const fn coexistence_stack_bytes(self) -> usize {
+        let mut total = 0usize;
+        let mut index = 0;
+        while index < self.coexistence.len() {
+            if let Some(group) = self.coexistence[index] {
+                total = match total.checked_add(group.total_stack_bytes()) {
+                    Some(total) => total,
+                    None => panic!("coexistence task-stack total overflow"),
+                };
+            }
+            index += 1;
+        }
+        total
     }
 
     /// Smallest stack represented by the current child inventory.
     pub const fn minimum_task_stack_bytes(self) -> usize {
-        match self.worker {
+        let mut minimum = match self.worker {
             Some(worker) if worker.stack_bytes_per_task < self.vendor.stack_bytes_per_task => {
                 worker.stack_bytes_per_task
             }
             _ => self.vendor.stack_bytes_per_task,
+        };
+        let mut index = 0;
+        while index < self.coexistence.len() {
+            if let Some(group) = self.coexistence[index]
+                && group.stack_bytes_per_task < minimum
+            {
+                minimum = group.stack_bytes_per_task;
+            }
+            index += 1;
         }
+        minimum
     }
 
     /// Scheduler arena payload derived from children plus explicit overhead.
@@ -192,6 +374,8 @@ pub trait Profile: sealed::Sealed {
     } else {
         None
     };
+    /// Optional BGLE task inventory selected by a coexistence profile.
+    const COEXISTENCE_TASKS: [Option<TaskGroupPlan>; 4] = [None; 4];
     /// Caller-owned bytes reserved for RTOS-owned synchronization objects.
     const RUNTIME_OBJECT_HEADROOM_BYTES: usize = RUNTIME_OBJECT_HEADROOM_BYTES;
     /// Caller-owned shared RF arena bytes required before hardware startup.
@@ -200,40 +384,33 @@ pub trait Profile: sealed::Sealed {
     const RESOURCE_PLAN: WifiResourcePlan = WifiResourcePlan {
         vendor: Self::VENDOR_TASKS,
         worker: Self::WORKER_TASKS,
+        coexistence: Self::COEXISTENCE_TASKS,
         event_capacity: 0,
         runtime_object_bytes: Self::RUNTIME_OBJECT_HEADROOM_BYTES,
         rf_heap_min_bytes: Self::RF_ARENA_BYTES,
     };
     /// Dynamic task slots observed for this profile's pinned payload.
-    const DYNAMIC_TASKS_REQUIRED: usize = match Self::WORKER_TASKS {
-        Some(worker) => match Self::VENDOR_TASKS.task_slots.checked_add(worker.task_slots) {
-            Some(total) => total,
-            None => panic!("profile task-slot total overflow"),
-        },
-        None => Self::VENDOR_TASKS.task_slots,
-    };
+    const DYNAMIC_TASKS_REQUIRED: usize = task_slots_for_groups(
+        Self::VENDOR_TASKS,
+        Self::WORKER_TASKS,
+        Self::COEXISTENCE_TASKS,
+    );
     /// Dynamic task slots owned by the vendor payload.
     const VENDOR_DYNAMIC_TASKS_REQUIRED: usize = Self::VENDOR_TASKS.task_slots;
     /// Stack bytes reserved for each vendor task.
     const TASK_STACK_BYTES_PER_TASK: usize = Self::VENDOR_TASKS.stack_bytes_per_task;
     /// Smallest task stack admitted by this heterogeneous profile.
-    const MINIMUM_TASK_STACK_BYTES: usize = match Self::WORKER_TASKS {
-        Some(worker) if worker.stack_bytes_per_task < Self::VENDOR_TASKS.stack_bytes_per_task => {
-            worker.stack_bytes_per_task
-        }
-        _ => Self::VENDOR_TASKS.stack_bytes_per_task,
-    };
+    const MINIMUM_TASK_STACK_BYTES: usize = minimum_stack_for_groups(
+        Self::VENDOR_TASKS,
+        Self::WORKER_TASKS,
+        Self::COEXISTENCE_TASKS,
+    );
     /// Exact total stack bytes reserved across heterogeneous profile tasks.
-    const TASK_STACK_BYTES: usize = match Self::WORKER_TASKS {
-        Some(worker) => match Self::VENDOR_TASKS
-            .total_stack_bytes()
-            .checked_add(worker.total_stack_bytes())
-        {
-            Some(total) => total,
-            None => panic!("profile task-stack total overflow"),
-        },
-        None => Self::VENDOR_TASKS.total_stack_bytes(),
-    };
+    const TASK_STACK_BYTES: usize = task_stacks_for_groups(
+        Self::VENDOR_TASKS,
+        Self::WORKER_TASKS,
+        Self::COEXISTENCE_TASKS,
+    );
     /// Scheduler arena derived from child stacks and explicit object budgets.
     const RUNTIME_ARENA_BYTES: usize =
         match Self::TASK_STACK_BYTES.checked_add(TASK_STACK_ALLOCATOR_OVERHEAD_BYTES) {
@@ -273,23 +450,133 @@ impl Profile for WifiWpa3Smoltcp {
     const RUNTIME_RESOURCES_CALIBRATED: bool = false;
 }
 
+const BGLE_COEXISTENCE_TASKS: [Option<TaskGroupPlan>; 4] = [
+    Some(BGLE_TASK_GROUPS[0]),
+    Some(BGLE_TASK_GROUPS[1]),
+    Some(BGLE_TASK_GROUPS[2]),
+    Some(BGLE_TASK_GROUPS[3]),
+];
+
+macro_rules! coexistence_profile {
+    ($name:ident, $id:literal, $security:literal) => {
+        #[doc = concat!("WS63 ", $id, " maintainer coexistence profile.")]
+        pub enum $name {}
+
+        impl sealed::Sealed for $name {}
+        impl Profile for $name {
+            const ID: &'static str = $id;
+            const SECURITY: &'static str = $security;
+            const COEXISTENCE_TASKS: [Option<TaskGroupPlan>; 4] = BGLE_COEXISTENCE_TASKS;
+            const RF_ARENA_BYTES: usize = PROFILE_SHARED_ARENA_BYTES
+                - Self::RUNTIME_ARENA_BYTES
+                - RADIO_ARENA_STORAGE_OVERHEAD_BYTES;
+            const RUNTIME_RESOURCES_CALIBRATED: bool = false;
+        }
+    };
+}
+
+coexistence_profile!(
+    WifiWpa2BleCoexistence,
+    "wifi-wpa2-ble-coexistence",
+    "wpa2-personal"
+);
+coexistence_profile!(
+    WifiWpa2SleCoexistence,
+    "wifi-wpa2-sle-coexistence",
+    "wpa2-personal"
+);
+coexistence_profile!(
+    WifiWpa3BleCoexistence,
+    "wifi-wpa3-ble-coexistence",
+    "wpa3-personal"
+);
+coexistence_profile!(
+    WifiWpa3SleCoexistence,
+    "wifi-wpa3-sle-coexistence",
+    "wpa3-personal"
+);
+
+/// Marker for profiles that share the Wi-Fi composition with one BGLE stack.
+#[doc(hidden)]
+pub trait CoexistenceProfile: Profile {}
+
+impl CoexistenceProfile for WifiWpa2BleCoexistence {}
+impl CoexistenceProfile for WifiWpa2SleCoexistence {}
+impl CoexistenceProfile for WifiWpa3BleCoexistence {}
+impl CoexistenceProfile for WifiWpa3SleCoexistence {}
+
 /// Marker implemented only for the profile selected by Cargo features.
 #[doc(hidden)]
 pub trait ActiveProfile: Profile {}
 
-#[cfg(feature = "wpa2-personal")]
+/// Marker for profiles that do not include a second radio protocol stack.
+#[doc(hidden)]
+pub trait StandaloneWifiProfile: Profile {}
+
+impl StandaloneWifiProfile for WifiWpa2Smoltcp {}
+impl StandaloneWifiProfile for WifiWpa3Smoltcp {}
+
+#[cfg(all(
+    feature = "wpa2-personal",
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 impl ActiveProfile for WifiWpa2Smoltcp {}
 
-#[cfg(feature = "wpa3-personal")]
+#[cfg(all(
+    feature = "wpa3-personal",
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 impl ActiveProfile for WifiWpa3Smoltcp {}
 
+#[cfg(all(feature = "wpa2-personal", feature = "coexistence-wifi-ble"))]
+impl ActiveProfile for WifiWpa2BleCoexistence {}
+#[cfg(all(feature = "wpa2-personal", feature = "coexistence-wifi-sle"))]
+impl ActiveProfile for WifiWpa2SleCoexistence {}
+#[cfg(all(feature = "wpa3-personal", feature = "coexistence-wifi-ble"))]
+impl ActiveProfile for WifiWpa3BleCoexistence {}
+#[cfg(all(feature = "wpa3-personal", feature = "coexistence-wifi-sle"))]
+impl ActiveProfile for WifiWpa3SleCoexistence {}
+
 /// The profile selected by the current Cargo feature set.
-#[cfg(all(feature = "wpa2-personal", not(feature = "wpa3-personal")))]
+#[cfg(all(
+    feature = "wpa2-personal",
+    not(feature = "wpa3-personal"),
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 pub type SelectedProfile = WifiWpa2Smoltcp;
 
 /// The profile selected by the current Cargo feature set.
-#[cfg(all(feature = "wpa3-personal", not(feature = "wpa2-personal")))]
+#[cfg(all(
+    feature = "wpa3-personal",
+    not(feature = "wpa2-personal"),
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 pub type SelectedProfile = WifiWpa3Smoltcp;
+
+#[cfg(all(
+    feature = "wpa2-personal",
+    not(feature = "wpa3-personal"),
+    feature = "coexistence-wifi-ble"
+))]
+pub type SelectedProfile = WifiWpa2BleCoexistence;
+#[cfg(all(
+    feature = "wpa2-personal",
+    not(feature = "wpa3-personal"),
+    feature = "coexistence-wifi-sle"
+))]
+pub type SelectedProfile = WifiWpa2SleCoexistence;
+#[cfg(all(
+    feature = "wpa3-personal",
+    not(feature = "wpa2-personal"),
+    feature = "coexistence-wifi-ble"
+))]
+pub type SelectedProfile = WifiWpa3BleCoexistence;
+#[cfg(all(
+    feature = "wpa3-personal",
+    not(feature = "wpa2-personal"),
+    feature = "coexistence-wifi-sle"
+))]
+pub type SelectedProfile = WifiWpa3SleCoexistence;
 
 /// Byte capacity selected by the active named radio profile.
 #[cfg(any(
@@ -489,6 +776,10 @@ impl fmt::Display for ArenaAdmissionError {
 #[cfg_attr(feature = "incremental-embassy-wait", repr(C, align(32)))]
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
+    #[cfg(feature = "coexistence-wifi-ble")]
+    ble: crate::ble::BleB1ControlStorage,
+    #[cfg(feature = "coexistence-wifi-sle")]
+    sle: crate::sle::SleS1ControlStorage,
     #[cfg(feature = "legacy-blocking-backend")]
     runner: StaticCell<RadioRunner<Ws63WifiBackend<'static>, EVENTS>>,
     crypto: StaticCell<Ws63CryptoStorage>,
@@ -511,6 +802,10 @@ pub(crate) struct ClaimedStorage<const EVENTS: usize> {
     pub(crate) crypto: &'static mut Ws63CryptoStorage,
     pub(crate) vendor: &'static TaskReservation,
     pub(crate) worker: Option<&'static TaskReservation>,
+    #[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+    pub(crate) ble: &'static crate::ble::BleB1ControlStorage,
+    #[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+    pub(crate) sle: &'static crate::sle::SleS1ControlStorage,
 }
 
 impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
@@ -519,6 +814,10 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         assert!(EVENTS > 0, "radio event queue must not be empty");
         Self {
             state: RadioState::new(),
+            #[cfg(feature = "coexistence-wifi-ble")]
+            ble: crate::ble::BleB1ControlStorage::new(),
+            #[cfg(feature = "coexistence-wifi-sle")]
+            sle: crate::sle::SleS1ControlStorage::new(),
             #[cfg(feature = "legacy-blocking-backend")]
             runner: StaticCell::new(),
             crypto: StaticCell::new(),
@@ -564,6 +863,10 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
             crypto,
             vendor,
             worker,
+            #[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+            ble: &self.ble,
+            #[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+            sle: &self.sle,
         })
     }
 
@@ -730,6 +1033,10 @@ pub struct ResourceReport {
     pub worker_task_slots: Option<usize>,
     /// Stack payload reserved for each incremental worker.
     pub worker_stack_bytes_per_task: Option<usize>,
+    /// Dynamic task slots owned by the coexisting BLE or SLE stack.
+    pub coexistence_task_slots: usize,
+    /// Exact heterogeneous stack payload owned by the coexisting stack.
+    pub coexistence_stack_bytes: usize,
     /// Runtime-internal task count, once the runtime exposes admission metadata.
     pub runtime_internal_tasks: Option<usize>,
     /// Total task-stack bytes, once stacks become profile-owned.
@@ -754,10 +1061,7 @@ impl ResourceReport {
     const fn for_profile<P: Profile, const EVENTS: usize>(arena_bytes: usize) -> Self {
         let plan = P::RESOURCE_PLAN.with_event_capacity(EVENTS);
         let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
-        let control_storage_bytes = align_up(
-            WS63_CONTROL_STORAGE_FIXED_BYTES + radio_state_bytes,
-            WS63_CONTROL_STORAGE_ALIGNMENT,
-        );
+        let control_storage_bytes = core::mem::size_of::<Storage<P, EVENTS>>();
         let arena_storage_bytes = align_up(arena_bytes + 1, 64);
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
@@ -797,6 +1101,8 @@ impl ResourceReport {
                 Some(worker) => Some(worker.stack_bytes_per_task),
                 None => None,
             },
+            coexistence_task_slots: plan.coexistence_task_slots(),
+            coexistence_stack_bytes: plan.coexistence_stack_bytes(),
             runtime_internal_tasks: Some(2),
             task_stack_bytes: Some(P::TASK_STACK_BYTES),
             minimum_task_stack_bytes: Some(P::MINIMUM_TASK_STACK_BYTES),
@@ -828,6 +1134,7 @@ impl ResourceReport {
                 "\"dynamic_tasks_required\":{},",
                 "\"vendor_task_slots\":{},\"vendor_stack_bytes_per_task\":{},",
                 "\"worker_task_slots\":{},\"worker_stack_bytes_per_task\":{},",
+                "\"coexistence_task_slots\":{},\"coexistence_stack_bytes\":{},",
                 "\"runtime_internal_tasks\":{},\"task_stack_bytes\":{},",
                 "\"minimum_task_stack_bytes\":{},",
                 "\"runtime_object_headroom_bytes\":{},\"runtime_arena_bytes\":{},",
@@ -859,6 +1166,8 @@ impl ResourceReport {
             self.vendor_stack_bytes_per_task,
             self.worker_task_slots.unwrap_or(0),
             self.worker_stack_bytes_per_task.unwrap_or(0),
+            self.coexistence_task_slots,
+            self.coexistence_stack_bytes,
             self.runtime_internal_tasks.unwrap_or(0),
             self.task_stack_bytes.unwrap_or(0),
             self.minimum_task_stack_bytes.unwrap_or(0),
@@ -887,7 +1196,10 @@ pub const fn wifi_resource_plan<P: Profile, const EVENTS: usize>() -> WifiResour
     P::RESOURCE_PLAN.with_event_capacity(EVENTS)
 }
 
-#[cfg(target_pointer_width = "32")]
+#[cfg(all(
+    target_pointer_width = "32",
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 const _: () = {
     assert!(
         core::mem::size_of::<Storage<WifiWpa2Smoltcp, 4>>()
@@ -959,7 +1271,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v10");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v11");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -989,6 +1301,8 @@ mod tests {
             report.worker_stack_bytes_per_task,
             cfg!(feature = "incremental-embassy-wait").then_some(PROFILE_WORKER_STACK_BYTES)
         );
+        assert_eq!(report.coexistence_task_slots, 0);
+        assert_eq!(report.coexistence_stack_bytes, 0);
         assert_eq!(report.runtime_internal_tasks, Some(2));
         assert_eq!(
             report.task_stack_bytes,
@@ -1060,14 +1374,35 @@ mod tests {
     }
 
     #[test]
+    fn coexistence_plan_derives_exact_child_inventory() {
+        let plan = wifi_resource_plan::<WifiWpa2BleCoexistence, 8>();
+        assert_eq!(plan.coexistence, BGLE_COEXISTENCE_TASKS);
+        assert_eq!(plan.coexistence_task_slots(), 4);
+        assert_eq!(plan.coexistence_stack_bytes(), 10_240);
+        assert_eq!(
+            plan.total_task_slots(),
+            11 + usize::from(plan.worker.is_some())
+        );
+        assert_eq!(
+            plan.total_stack_bytes(),
+            7 * 24 * 1024 + 10_240 + plan.worker.map_or(0, TaskGroupPlan::total_stack_bytes)
+        );
+        assert_eq!(plan.minimum_task_stack_bytes(), 512);
+
+        let report = resource_report::<WifiWpa2BleCoexistence, 8>();
+        assert_eq!(report.profile, "wifi-wpa2-ble-coexistence");
+        assert_eq!(report.coexistence_task_slots, 4);
+        assert_eq!(report.coexistence_stack_bytes, 10_240);
+        assert!(!report.runtime_resources_calibrated);
+    }
+
+    #[test]
     fn report_json_is_deterministic_and_marks_uncalibrated_runtime_resources() {
+        let report = Storage::<WifiWpa3Smoltcp, 8>::new().report();
         let mut output = FixedBuffer::new();
-        Storage::<WifiWpa3Smoltcp, 8>::new()
-            .report()
-            .write_json(&mut output)
-            .unwrap();
+        report.write_json(&mut output).unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v10\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v11\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
@@ -1100,15 +1435,13 @@ mod tests {
                     )
                 })
         );
-        assert!(
-            output
-                .as_str()
-                .contains(if cfg!(feature = "incremental-embassy-wait") {
-                    "\"shared_rf_arena_bytes\":101824"
-                } else {
-                    "\"shared_rf_arena_bytes\":114112"
-                })
+        let shared_arena = std::format!(
+            "\"shared_rf_arena_bytes\":{}",
+            report
+                .shared_rf_arena_bytes
+                .expect("WS63 profile owns one shared RF arena")
         );
+        assert!(output.as_str().contains(&shared_arena));
         assert!(
             output
                 .as_str()
@@ -1135,15 +1468,7 @@ mod tests {
         assert_eq!(report.composition_handle_bytes, 0);
         assert_eq!(
             report.control_storage_bytes,
-            if cfg!(feature = "incremental-embassy-wait") {
-                0x2180
-            } else if cfg!(feature = "legacy-blocking-backend") {
-                0x20c0
-            } else if cfg!(feature = "incremental-backend-experiment") {
-                0x1980
-            } else {
-                0x1940
-            }
+            core::mem::size_of::<Storage<WifiWpa2Smoltcp, 4>>()
         );
         assert_eq!(
             report.radio_state_bytes,

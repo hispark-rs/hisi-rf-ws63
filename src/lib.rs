@@ -128,7 +128,7 @@ compile_error!("select exactly one WS63 Personal profile");
     not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
 ))]
 compile_error!(
-    "the BLE B1 init profile is standalone; SLE S1 is also standalone until coexistence resources are proven"
+    "direct Wi-Fi/BGLE feature mixing is unsupported; select exactly one named `coexistence-wifi-ble` or `coexistence-wifi-sle` profile"
 );
 
 #[cfg(any(
@@ -834,6 +834,16 @@ pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{RadioController, init};
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[doc(hidden)]
+pub use composition::{
+    WifiBleCoexistenceController, WifiBleCoexistenceInitError, init_wifi_ble_coexistence,
+};
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[doc(hidden)]
+pub use composition::{
+    WifiSleCoexistenceController, WifiSleCoexistenceInitError, init_wifi_sle_coexistence,
+};
 pub use hisi_rf_core::WifiL2Capabilities;
 #[cfg(all(
     feature = "net",
@@ -860,10 +870,12 @@ pub use profile::SelectedProfile;
     )
 ))]
 pub use profile::{
-    ArenaAdmissionError, InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena,
-    RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_MINIMUM_TASK_STACK_BYTES,
-    SELECTED_RF_ARENA_BYTES, SELECTED_RUNTIME_ARENA_BYTES, Storage, TaskGroupPlan,
-    WifiResourcePlan, WifiWpa2Smoltcp, WifiWpa3Smoltcp, resource_report, wifi_resource_plan,
+    ArenaAdmissionError, CoexistenceProfile, InstalledRadioArena, InstalledRadioStorage, Profile,
+    RadioArena, RadioArenaStorage, RadioStorage, ResourceReport, SELECTED_MINIMUM_TASK_STACK_BYTES,
+    SELECTED_RF_ARENA_BYTES, SELECTED_RUNTIME_ARENA_BYTES, StandaloneWifiProfile, Storage,
+    TaskGroupPlan, WifiResourcePlan, WifiWpa2BleCoexistence, WifiWpa2SleCoexistence,
+    WifiWpa2Smoltcp, WifiWpa3BleCoexistence, WifiWpa3SleCoexistence, WifiWpa3Smoltcp,
+    resource_report, wifi_resource_plan,
 };
 
 /// Declare all caller-owned storage for the selected named radio profile.

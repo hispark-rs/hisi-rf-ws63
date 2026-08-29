@@ -34,8 +34,8 @@ use crate::incremental_worker::{IncrementalWorkerState, WorkerBackedIncrementalB
 use crate::netif_smoltcp::Ws63Device;
 pub use crate::netif_smoltcp::{DhcpDiagnostics, L2ProtocolDiagnostics, RxQueueDiagnostics};
 use crate::profile::{
-    ActiveProfile, InstalledRadioArena, Profile, ProfileReservations, Storage, WifiWpa2Smoltcp,
-    WifiWpa3Smoltcp,
+    ActiveProfile, InstalledRadioArena, Profile, ProfileReservations, StandaloneWifiProfile,
+    Storage, WifiWpa2Smoltcp, WifiWpa3Smoltcp,
 };
 
 /// WS63 radio resources assembled from uniquely owned HAL peripheral tokens.
@@ -59,6 +59,31 @@ impl<P: Profile> Resources<P> {
         note = "use Resources::<SelectedProfile>::builder(...).crypto(...), then build() or pke(...).build()"
     )]
     pub fn new(
+        efuse: Efuse<'static>,
+        km: Km<'static>,
+        spacc: Spacc<'static>,
+        pke: Pke<'static>,
+        trng: Trng<'static>,
+        arena: InstalledRadioArena<P>,
+    ) -> Self {
+        Self {
+            efuse,
+            km,
+            spacc,
+            pke: Some(pke),
+            trng,
+            _arena: arena,
+        }
+    }
+}
+
+impl<P: crate::profile::CoexistenceProfile> Resources<P> {
+    /// Assemble the shared Wi-Fi/BGLE capabilities for a maintainer coexistence profile.
+    ///
+    /// PKE is mandatory even for WPA2 because BLE/SLE Secure Connections use
+    /// the same process-wide hardware crypto service.
+    #[doc(hidden)]
+    pub fn coexistence(
         efuse: Efuse<'static>,
         km: Km<'static>,
         spacc: Spacc<'static>,
@@ -859,7 +884,7 @@ impl<P: Profile + 'static, const EVENTS: usize> RadioController<P, EVENTS> {
 
 /// Claim one WS63 radio instance using caller-owned state and resources.
 #[cfg(feature = "legacy-blocking-backend")]
-pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
+pub fn init<P: Profile + ActiveProfile + StandaloneWifiProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
     resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
@@ -897,7 +922,10 @@ pub fn init<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
 /// already own the installed task reservation; retry with fresh firmware state
 /// rather than reusing this storage.
 #[cfg(feature = "incremental-backend-experiment")]
-pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
+pub fn init_incremental<
+    P: Profile + ActiveProfile + StandaloneWifiProfile + 'static,
+    const EVENTS: usize,
+>(
     config: RadioConfig,
     resources: Resources<P>,
     storage: &'static Storage<P, EVENTS>,
@@ -906,6 +934,16 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     hisi_rf_rtos_driver::require_runtime(hisi_rf_rtos_driver::RuntimeRequirements::V1_6_BUDGETED)
         .map_err(InitError::runtime)?;
     let claimed = claim_profile_storage::<P, EVENTS>(storage)?;
+    init_incremental_claimed(config, resources, storage, claimed)
+}
+
+#[cfg(feature = "incremental-backend-experiment")]
+fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
+    config: RadioConfig,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+    claimed: crate::profile::ClaimedStorage<EVENTS>,
+) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
     let RadioResources {
         mut backend,
         device,
@@ -967,6 +1005,118 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     }
 }
 
+/// Maintainer-only Wi-Fi/BLE composition returned after one atomic admission.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[doc(hidden)]
+pub struct WifiBleCoexistenceController<P: Profile + 'static, const EVENTS: usize> {
+    wifi: IncrementalRadioController<P, EVENTS>,
+    ble: crate::ble::BleB1Controller,
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+impl<P: Profile + 'static, const EVENTS: usize> WifiBleCoexistenceController<P, EVENTS> {
+    /// Split the already-admitted protocol controllers for maintainer HIL.
+    pub fn split(
+        self,
+    ) -> (
+        IncrementalRadioController<P, EVENTS>,
+        crate::ble::BleB1Controller,
+    ) {
+        (self.wifi, self.ble)
+    }
+}
+
+/// Failure while starting the maintainer Wi-Fi/BLE coexistence composition.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum WifiBleCoexistenceInitError {
+    Wifi(InitError),
+    Ble(crate::ble::BleB1InitError),
+}
+
+/// Start Wi-Fi and BLE from one arena, one crypto service, and one admission transaction.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[doc(hidden)]
+pub fn init_wifi_ble_coexistence<
+    P: crate::profile::CoexistenceProfile + ActiveProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: RadioConfig,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<WifiBleCoexistenceController<P, EVENTS>, WifiBleCoexistenceInitError> {
+    let (claimed, mut reservations, offset) = claim_profile_storage_with_coexistence(storage)
+        .map_err(WifiBleCoexistenceInitError::Wifi)?;
+    let ble_storage = claimed.ble;
+    let wifi = match init_incremental_claimed(config, resources, storage, claimed) {
+        Ok(wifi) => wifi,
+        Err(error) => {
+            let _ = release_remaining_reservations(&mut reservations);
+            return Err(WifiBleCoexistenceInitError::Wifi(error));
+        }
+    };
+    let ble = crate::ble::init_ble_b1_coexisting(ble_storage, reservations, offset)
+        .map_err(WifiBleCoexistenceInitError::Ble)?;
+    Ok(WifiBleCoexistenceController { wifi, ble })
+}
+
+/// Maintainer-only Wi-Fi/SLE composition returned after one atomic admission.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[doc(hidden)]
+pub struct WifiSleCoexistenceController<P: Profile + 'static, const EVENTS: usize> {
+    wifi: IncrementalRadioController<P, EVENTS>,
+    sle: crate::sle::SleS1Controller,
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+impl<P: Profile + 'static, const EVENTS: usize> WifiSleCoexistenceController<P, EVENTS> {
+    /// Split the already-admitted protocol controllers for maintainer HIL.
+    pub fn split(
+        self,
+    ) -> (
+        IncrementalRadioController<P, EVENTS>,
+        crate::sle::SleS1Controller,
+    ) {
+        (self.wifi, self.sle)
+    }
+}
+
+/// Failure while starting the maintainer Wi-Fi/SLE coexistence composition.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum WifiSleCoexistenceInitError {
+    Wifi(InitError),
+    Sle(crate::sle::SleS1InitError),
+}
+
+/// Start Wi-Fi and SLE from one arena, one crypto service, and one admission transaction.
+#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[doc(hidden)]
+pub fn init_wifi_sle_coexistence<
+    P: crate::profile::CoexistenceProfile + ActiveProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: RadioConfig,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<WifiSleCoexistenceController<P, EVENTS>, WifiSleCoexistenceInitError> {
+    let (claimed, mut reservations, offset) = claim_profile_storage_with_coexistence(storage)
+        .map_err(WifiSleCoexistenceInitError::Wifi)?;
+    let sle_storage = claimed.sle;
+    let wifi = match init_incremental_claimed(config, resources, storage, claimed) {
+        Ok(wifi) => wifi,
+        Err(error) => {
+            let _ = release_remaining_reservations(&mut reservations);
+            return Err(WifiSleCoexistenceInitError::Wifi(error));
+        }
+    };
+    let sle = crate::sle::init_sle_s1_coexisting(sle_storage, reservations, offset)
+        .map_err(WifiSleCoexistenceInitError::Sle)?;
+    Ok(WifiSleCoexistenceController { wifi, sle })
+}
+
 /// Migration alias for [`init_incremental`].
 ///
 /// The old name exposed an implementation prerequisite in application code.
@@ -977,7 +1127,7 @@ pub fn init_incremental<P: Profile + ActiveProfile + 'static, const EVENTS: usiz
     note = "use hisi_rf::ws63::init, or hisi_rf_ws63::init_incremental in backend-specific code"
 )]
 pub fn init_incremental_after_blocking_bootstrap<
-    P: Profile + ActiveProfile + 'static,
+    P: Profile + ActiveProfile + StandaloneWifiProfile + 'static,
     const EVENTS: usize,
 >(
     config: RadioConfig,
@@ -987,9 +1137,30 @@ pub fn init_incremental_after_blocking_bootstrap<
     init_incremental(config, resources, storage)
 }
 
-fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
+fn claim_profile_storage<
+    P: Profile + ActiveProfile + StandaloneWifiProfile + 'static,
+    const EVENTS: usize,
+>(
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<crate::profile::ClaimedStorage<EVENTS>, InitError> {
+    let (claimed, reservations, _) = claim_profile_storage_with_coexistence(storage)?;
+    debug_assert_eq!(reservations.remaining(), 0);
+    Ok(claimed)
+}
+
+fn claim_profile_storage_with_coexistence<
+    P: Profile + ActiveProfile + 'static,
+    const EVENTS: usize,
+>(
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<
+    (
+        crate::profile::ClaimedStorage<EVENTS>,
+        hisi_rf_rtos_driver::TaskReservationBatch,
+        usize,
+    ),
+    InitError,
+> {
     #[cfg(target_arch = "riscv32")]
     crate::link_contract::ensure();
     hisi_rf_rtos_driver::require_runtime(
@@ -998,22 +1169,32 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
     .map_err(InitError::runtime)?;
     hisi_rf_rtos_driver::current_task().map_err(InitError::runtime)?;
     let vendor = task_resource_group(P::VENDOR_TASKS)?;
+    let mut groups = [vendor; hisi_rf_rtos_driver::TASK_RESOURCE_GROUP_CAPACITY];
+    let mut group_count = 1;
     #[cfg(feature = "incremental-embassy-wait")]
-    let groups = [
-        vendor,
-        task_resource_group(P::WORKER_TASKS.ok_or_else(|| {
+    {
+        groups[group_count] = task_resource_group(P::WORKER_TASKS.ok_or_else(|| {
             InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
                 hisi_rf_rtos_driver::Error::Runtime,
             ))
-        })?)?,
-    ];
-    #[cfg(not(feature = "incremental-embassy-wait"))]
-    let groups = [vendor];
-    let plan = hisi_rf_rtos_driver::TaskResourcePlan::new(&groups).ok_or_else(|| {
-        InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
-            hisi_rf_rtos_driver::Error::ResourceExhausted,
-        ))
-    })?;
+        })?)?;
+        group_count += 1;
+    }
+    let coexistence_offset = group_count;
+    let mut coexistence_index = 0;
+    while coexistence_index < P::COEXISTENCE_TASKS.len() {
+        if let Some(group) = P::COEXISTENCE_TASKS[coexistence_index] {
+            groups[group_count] = task_resource_group(group)?;
+            group_count += 1;
+        }
+        coexistence_index += 1;
+    }
+    let plan =
+        hisi_rf_rtos_driver::TaskResourcePlan::new(&groups[..group_count]).ok_or_else(|| {
+            InitError::task_admission(hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
+                hisi_rf_rtos_driver::Error::ResourceExhausted,
+            ))
+        })?;
     let mut reservations =
         hisi_rf_rtos_driver::reserve_task_resource_plan(plan).map_err(InitError::task_admission)?;
     let reservation = reservations.take(0).ok_or_else(|| {
@@ -1041,13 +1222,14 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
         worker: worker_reservation,
     }) {
         Ok(claimed) => claimed,
-        Err(reservations) => {
-            hisi_rf_rtos_driver::release_task_reservation(&reservations.vendor)
+        Err(profile_reservations) => {
+            hisi_rf_rtos_driver::release_task_reservation(&profile_reservations.vendor)
                 .map_err(InitError::runtime)?;
-            if let Some(worker_reservation) = reservations.worker.as_ref() {
+            if let Some(worker_reservation) = profile_reservations.worker.as_ref() {
                 hisi_rf_rtos_driver::release_task_reservation(worker_reservation)
                     .map_err(InitError::runtime)?;
             }
+            release_remaining_reservations(&mut reservations)?;
             return Err(InitError::storage_already_claimed());
         }
     };
@@ -1058,9 +1240,24 @@ fn claim_profile_storage<P: Profile + ActiveProfile + 'static, const EVENTS: usi
             hisi_rf_rtos_driver::release_task_reservation(worker_reservation)
                 .map_err(InitError::runtime)?;
         }
+        release_remaining_reservations(&mut reservations)?;
         return Err(InitError::runtime(error));
     }
-    Ok(claimed)
+    Ok((claimed, reservations, coexistence_offset))
+}
+
+fn release_remaining_reservations(
+    reservations: &mut hisi_rf_rtos_driver::TaskReservationBatch,
+) -> Result<(), InitError> {
+    let mut index = 0;
+    while index < reservations.len() {
+        if let Some(reservation) = reservations.take(index) {
+            hisi_rf_rtos_driver::release_task_reservation(&reservation)
+                .map_err(InitError::runtime)?;
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 fn task_resource_group(
