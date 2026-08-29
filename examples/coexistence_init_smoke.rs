@@ -87,6 +87,8 @@ fn main() -> ! {
         control,
     )
     .expect("initialize Wi-Fi plus BLE");
+    #[cfg(feature = "coexistence-wifi-ble")]
+    uart.write(b"RFDBG_BLE_B1_SHARED_PLATFORM_OK\r\n");
 
     #[cfg(feature = "coexistence-wifi-sle")]
     let _controllers = hisi_rf_ws63::init_wifi_sle_coexistence(
@@ -95,6 +97,8 @@ fn main() -> ! {
         control,
     )
     .expect("initialize Wi-Fi plus SLE");
+    #[cfg(feature = "coexistence-wifi-sle")]
+    uart.write(b"RFDBG_SLE_S1_SHARED_PLATFORM_OK\r\n");
 
     uart.write(b"RFDBG_COEX_INIT_OK\r\n");
     loop {

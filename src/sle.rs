@@ -1513,20 +1513,31 @@ fn task_group(
 #[cfg(target_arch = "riscv32")]
 fn spawn_task(
     reservations: &mut hisi_rf_rtos_driver::TaskReservationBatch,
-    index: usize,
+    reservation_index: usize,
+    task_index: usize,
     entry: hisi_rf_rtos_driver::TaskEntry,
 ) -> Result<(), SleS1InitError> {
     let reservation = reservations
-        .take(index)
-        .ok_or(SleS1InitError::TaskSpawn { index })?;
-    let config = hisi_rf_rtos_driver::TaskConfig {
-        stack_size: NonZeroUsize::new(STACKS[index]).ok_or(SleS1InitError::TaskPlan)?,
-        priority: hisi_rf_rtos_driver::TaskPriority::new(PRIORITIES[index])
-            .ok_or(SleS1InitError::TaskPlan)?,
-    };
+        .take(reservation_index)
+        .ok_or(SleS1InitError::TaskSpawn { index: task_index })?;
+    let config = task_config(task_index)?;
     hisi_rf_rtos_driver::spawn_reserved(&reservation, entry, core::ptr::null_mut(), config)
         .map(|_| ())
-        .map_err(|_| SleS1InitError::TaskSpawn { index })
+        .map_err(|_| SleS1InitError::TaskSpawn { index: task_index })
+}
+
+#[cfg(any(target_arch = "riscv32", test))]
+fn task_config(index: usize) -> Result<hisi_rf_rtos_driver::TaskConfig, SleS1InitError> {
+    let stack_size = STACKS.get(index).copied().ok_or(SleS1InitError::TaskPlan)?;
+    let priority = PRIORITIES
+        .get(index)
+        .copied()
+        .ok_or(SleS1InitError::TaskPlan)?;
+    Ok(hisi_rf_rtos_driver::TaskConfig {
+        stack_size: NonZeroUsize::new(stack_size).ok_or(SleS1InitError::TaskPlan)?,
+        priority: hisi_rf_rtos_driver::TaskPriority::new(priority)
+            .ok_or(SleS1InitError::TaskPlan)?,
+    })
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1625,10 +1636,10 @@ fn init_sle_s1_with_platform(
     };
     hisi_rf_rtos_driver::lock_scheduler().map_err(|_| SleS1InitError::SchedulerLock)?;
     let spawn_result = (|| {
-        spawn_task(&mut reservations, reservation_offset, task_bt)?;
-        spawn_task(&mut reservations, reservation_offset + 1, task_bt_sdk)?;
-        spawn_task(&mut reservations, reservation_offset + 2, task_bth_sdk)?;
-        spawn_task(&mut reservations, reservation_offset + 3, task_service)
+        spawn_task(&mut reservations, reservation_offset, 0, task_bt)?;
+        spawn_task(&mut reservations, reservation_offset + 1, 1, task_bt_sdk)?;
+        spawn_task(&mut reservations, reservation_offset + 2, 2, task_bth_sdk)?;
+        spawn_task(&mut reservations, reservation_offset + 3, 3, task_service)
     })();
     let unlock_result = hisi_rf_rtos_driver::unlock_scheduler();
     spawn_result?;
@@ -1668,6 +1679,12 @@ mod tests {
         assert_eq!(STACKS.iter().sum::<usize>(), 10_240);
         assert_eq!(STACKS[2], SLE_S1_MINIMUM_TASK_STACK_BYTES);
         assert_eq!(PRIORITIES, [1, 12, 13, 12]);
+        for index in 0..TASK_COUNT {
+            let config = task_config(index).unwrap();
+            assert_eq!(config.stack_size.get(), STACKS[index]);
+            assert_eq!(config.priority.into_raw(), PRIORITIES[index]);
+        }
+        assert_eq!(task_config(TASK_COUNT), Err(SleS1InitError::TaskPlan));
     }
 
     #[test]
