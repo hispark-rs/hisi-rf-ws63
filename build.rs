@@ -479,8 +479,19 @@ fn main() {
     );
     let ble_init = env::var_os("CARGO_FEATURE_BLE_INIT").is_some();
     let sle_init = env::var_os("CARGO_FEATURE_SLE_INIT").is_some();
+    let wifi = env::var_os("CARGO_FEATURE_WIFI").is_some();
     let bgle_init = ble_init || sle_init;
     let mut combined_inputs = Vec::new();
+    if wifi {
+        for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
+            let (name, mode) = archive
+                .split_once(':')
+                .expect("invalid ws63-radio-sys archive metadata");
+            if mode != "whole" {
+                combined_inputs.push(lib_dir.join(format!("lib{name}.a")));
+            }
+        }
+    }
     if ble_init {
         combined_inputs.extend(
             metadata_list("DEP_WS63_RADIO_SYS_BLE_ARCHIVES")
@@ -503,15 +514,6 @@ fn main() {
                 .into_iter()
                 .map(PathBuf::from),
         );
-    } else {
-        for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
-            let (name, mode) = archive
-                .split_once(':')
-                .expect("invalid ws63-radio-sys archive metadata");
-            if mode != "whole" {
-                combined_inputs.push(lib_dir.join(format!("lib{name}.a")));
-            }
-        }
     }
     if let Some(archive) = env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE") {
         combined_inputs.push(PathBuf::from(archive));
@@ -519,25 +521,35 @@ fn main() {
     if let Some(archive) = env::var_os("DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ARCHIVE") {
         combined_inputs.push(PathBuf::from(archive));
     }
+    if wifi && bgle_init {
+        // Both closures name the same shared platform ROM callback archive.
+        // Wi-Fi links that archive once as whole-archive below, so retaining
+        // the BGLE copy here would define every platform datum twice.
+        combined_inputs.retain(|path| {
+            path.file_name().and_then(|name| name.to_str()) != Some("librom_callback.a")
+        });
+    }
+    let mut seen_archives = BTreeSet::new();
+    combined_inputs.retain(|path| seen_archives.insert(path.clone()));
     let combined_archive = out_dir.join("libws63_radio_closure.a");
     write_combined_archive(
         &combined_inputs,
-        (!bgle_init).then_some(patch_object.as_path()),
+        wifi.then_some(patch_object.as_path()),
         &combined_archive,
     );
 
-    let mut roots = if ble_init {
-        metadata_list("DEP_WS63_RADIO_SYS_BLE_INIT_ROOT_SYMBOLS")
-    } else if sle_init {
-        metadata_list("DEP_WS63_RADIO_SYS_SLE_INIT_ROOT_SYMBOLS")
-    } else {
-        metadata_list("DEP_WS63_RADIO_SYS_WIFI_ROOT_SYMBOLS")
-    };
-    if !bgle_init {
+    let mut roots = Vec::new();
+    if wifi {
+        roots.extend(metadata_list("DEP_WS63_RADIO_SYS_WIFI_ROOT_SYMBOLS"));
         roots.extend(metadata_list(
             "DEP_WS63_RADIO_SYS_ROM_CALLBACK_ROOT_SYMBOLS",
         ));
         roots.extend(metadata_list("DEP_WS63_RADIO_SYS_RUNTIME_COMPAT_SYMBOLS"));
+    }
+    if ble_init {
+        roots.extend(metadata_list("DEP_WS63_RADIO_SYS_BLE_INIT_ROOT_SYMBOLS"));
+    } else if sle_init {
+        roots.extend(metadata_list("DEP_WS63_RADIO_SYS_SLE_INIT_ROOT_SYMBOLS"));
     }
     if env::var_os("DEP_WS63_RADIO_SYS_NATIVE_SUPPLICANT_ARCHIVE").is_some() {
         roots.extend(metadata_list(
@@ -549,12 +561,14 @@ fn main() {
             "DEP_WS63_RADIO_SYS_NATIVE_AUTHENTICATOR_ROOT_SYMBOLS",
         ));
     }
-    if !bgle_init {
+    if wifi {
         roots.push("__hisi_ws63_rom_patch_table".to_owned());
     }
+    let mut seen_roots = BTreeSet::new();
+    roots.retain(|root| seen_roots.insert(root.clone()));
     let rom_symbols = parse_rom_symbols(&rom);
     let mut census_archives = combined_inputs;
-    if !bgle_init {
+    if wifi {
         for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
             let (name, mode) = archive
                 .split_once(':')
@@ -564,7 +578,7 @@ fn main() {
             }
         }
     }
-    if !bgle_init {
+    if wifi {
         census_archives.push(lib_dir.join("librom_callback.a"));
     }
     let mut callable_rom_symbols = collect_callable_rom_symbols(&census_archives, &rom_symbols);
@@ -667,7 +681,7 @@ fn main() {
         println!("cargo:rustc-link-arg=--wrap=smp_ecdh_dh_key_reserv");
     }
     println!("cargo:rustc-link-lib=static=ws63_radio_closure");
-    if !bgle_init {
+    if wifi {
         for archive in metadata_list("DEP_WS63_RADIO_SYS_WIFI_ARCHIVES") {
             let (name, mode) = archive
                 .split_once(':')
@@ -677,7 +691,7 @@ fn main() {
             }
         }
     }
-    if !bgle_init {
+    if wifi {
         println!("cargo:rustc-link-lib=static:+whole-archive=rom_callback");
     }
 

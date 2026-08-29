@@ -1,4 +1,4 @@
-//! WS63 Bluetooth Secure Connections crypto compatibility.
+//! WS63 BGLE Secure Connections crypto compatibility.
 
 use core::ptr;
 

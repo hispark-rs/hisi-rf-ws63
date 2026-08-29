@@ -124,13 +124,19 @@ compile_error!("select exactly one WS63 Personal profile");
         feature = "upstream-supplicant-port",
         feature = "upstream-authenticator-wpa2",
         feature = "upstream-authenticator-wpa3"
-    )
+    ),
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
 ))]
 compile_error!(
     "the BLE B1 init profile is standalone; SLE S1 is also standalone until coexistence resources are proven"
 );
 
-#[cfg(all(feature = "ble-init", feature = "sle-init"))]
+#[cfg(any(
+    all(feature = "ble-init", feature = "sle-init"),
+    all(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
+    all(feature = "coexistence-wifi-ble", not(feature = "ble-init")),
+    all(feature = "coexistence-wifi-sle", not(feature = "sle-init"))
+))]
 compile_error!("select exactly one standalone WS63 BGLE protocol profile");
 
 #[cfg(all(
@@ -217,7 +223,10 @@ mod ble;
 mod ble_compat;
 #[cfg(all(target_arch = "riscv32", feature = "ble-init-diag"))]
 mod ble_init_diag;
-#[cfg(all(target_arch = "riscv32", feature = "ble-init"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "ble-init", feature = "sle-init")
+))]
 mod ble_sc;
 #[cfg(any(
     target_arch = "riscv32",
