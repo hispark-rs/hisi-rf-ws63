@@ -432,6 +432,7 @@ fn require_radio_runtime() -> Result<(), Error> {
     .map_err(Error::Runtime)?;
     require_unreserved_vendor_capacity(
         crate::runtime::task_reservation_installed(),
+        crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED,
         hisi_rf_rtos_driver::require_task_capacity,
     )
     .map_err(Error::TaskAdmission)?;
@@ -442,6 +443,7 @@ fn require_radio_runtime() -> Result<(), Error> {
 #[cfg(any(target_arch = "riscv32", test))]
 fn require_unreserved_vendor_capacity(
     reservation_installed: bool,
+    required_tasks: usize,
     require_capacity: impl FnOnce(
         usize,
     ) -> Result<
@@ -454,7 +456,7 @@ fn require_unreserved_vendor_capacity(
         // Rechecking unreserved capacity here would count those slots twice.
         Ok(())
     } else {
-        require_capacity(crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED).map(|_| ())
+        require_capacity(required_tasks).map(|_| ())
     }
 }
 
@@ -2039,7 +2041,7 @@ mod tests {
     #[test]
     fn installed_vendor_reservation_is_not_counted_twice() {
         let mut capacity_checks = 0;
-        let result = super::require_unreserved_vendor_capacity(true, |_| {
+        let result = super::require_unreserved_vendor_capacity(true, 7, |_| {
             capacity_checks += 1;
             unreachable!("an admitted vendor group must not recheck free slots")
         });
@@ -2051,7 +2053,7 @@ mod tests {
     #[test]
     fn direct_initialization_still_checks_vendor_capacity() {
         let mut required = 0;
-        let result = super::require_unreserved_vendor_capacity(false, |requested| {
+        let result = super::require_unreserved_vendor_capacity(false, 7, |requested| {
             required = requested;
             hisi_rf_rtos_driver::TaskCapacity::new(15, 0).ok_or(
                 hisi_rf_rtos_driver::TaskAdmissionError::Runtime(
@@ -2061,7 +2063,7 @@ mod tests {
         });
 
         assert_eq!(result, Ok(()));
-        assert_eq!(required, crate::WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED);
+        assert_eq!(required, 7);
     }
 
     #[test]
