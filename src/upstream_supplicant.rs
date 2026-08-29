@@ -17,10 +17,10 @@ use ws63_radio_sys::supplicant::{
     ABI_VERSION, AssociateRequest, AssociateResult, Context, DisconnectEvent, DriverHooks, Event,
     ExternalAuthEvent, ExternalAuthStatus, Key, MAX_SCAN_FREQUENCIES, MAX_SCAN_IE_LEN,
     NativeScanResult, NetworkConfig, OsHooks, Pmf, PollResult, SaePwe, ScanRequest, Security,
-    cipher, hisi_wpa_configure, hisi_wpa_connect, hisi_wpa_context_align,
-    hisi_wpa_context_diagnostic_word, hisi_wpa_context_size, hisi_wpa_create, hisi_wpa_destroy,
-    hisi_wpa_disconnect, hisi_wpa_driver_diagnostic_word, hisi_wpa_driver_install,
-    hisi_wpa_eloop_diagnostic_flags, hisi_wpa_event_ring_diagnostic_word,
+    cipher, hisi_wpa_begin_scan_capture, hisi_wpa_configure, hisi_wpa_connect,
+    hisi_wpa_context_align, hisi_wpa_context_diagnostic_word, hisi_wpa_context_size,
+    hisi_wpa_create, hisi_wpa_destroy, hisi_wpa_disconnect, hisi_wpa_driver_diagnostic_word,
+    hisi_wpa_driver_install, hisi_wpa_eloop_diagnostic_flags, hisi_wpa_event_ring_diagnostic_word,
     hisi_wpa_feed_associate_result, hisi_wpa_feed_disconnect, hisi_wpa_feed_eapol,
     hisi_wpa_feed_external_auth, hisi_wpa_feed_mgmt, hisi_wpa_feed_scan_done,
     hisi_wpa_feed_scan_result, hisi_wpa_init, hisi_wpa_match_diagnostic_word, hisi_wpa_next_event,
@@ -1346,6 +1346,8 @@ pub(crate) enum NativeSupplicantError {
     EnableEapolFailed(i32),
     /// One queued management frame could not be delivered to hostap.
     FeedMgmtFailed(i32),
+    /// Hostap rejected the boundary that starts a new external scan capture.
+    BeginScanCaptureFailed(i32),
     /// One or more management frames could not fit the bounded RX queue.
     MgmtQueueOverflow(u32),
     /// One queued scan event could not be delivered to hostap.
@@ -1532,6 +1534,13 @@ impl NativeSupplicant {
                 .is_err()
         {
             return Err(NativeSupplicantError::InvalidResult);
+        }
+        // SAFETY: this value uniquely owns the initialized native context and
+        // serializes this synchronous capture-boundary call with poll/feed.
+        let status = unsafe { hisi_wpa_begin_scan_capture(self.context.as_ptr()) };
+        if status != 0 {
+            NATIVE_SCAN_ACTIVE.store(false, Ordering::Release);
+            return Err(NativeSupplicantError::BeginScanCaptureFailed(status));
         }
         DIAG_SCAN_START_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
         DIAG_SCAN_DONE_MS.store(0, Ordering::Release);

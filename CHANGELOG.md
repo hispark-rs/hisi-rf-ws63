@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.87] - 2026-08-29
+
+### Added
+
+- Add a credential-free Wi-Fi plus BLE activity fixture that keeps BLE
+  advertising active while the incremental Wi-Fi runner completes three scan
+  transactions.
+
+### Fixed
+
+- Begin every externally driven vendor scan with the versioned native
+  supplicant capture boundary from `ws63-radio-sys 0.1.0-alpha.22`, clearing
+  the prior deep-copied hostap result cache before new results are queued.
+- Report capture-boundary rejection separately from scan-result feed failures
+  and release the active transaction claim when native setup fails.
+
 ## [0.1.0-alpha.86] - 2026-08-29
 
 ### Added

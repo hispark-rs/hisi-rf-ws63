@@ -805,6 +805,7 @@ fn map_native_error(error: NativeSupplicantError) -> BackendError {
         NativeSupplicantError::InitializeFailed(status)
         | NativeSupplicantError::EnableEapolFailed(status)
         | NativeSupplicantError::FeedMgmtFailed(status)
+        | NativeSupplicantError::BeginScanCaptureFailed(status)
         | NativeSupplicantError::FeedScanFailed(status)
         | NativeSupplicantError::FeedLinkFailed(status)
         | NativeSupplicantError::FeedExternalAuthFailed(status)
@@ -868,6 +869,11 @@ fn map_native_error(error: NativeSupplicantError) -> BackendError {
             BackendErrorClass::Other,
             0x6000 | count.min(0xfff),
             DiagnosticStage::Authenticate,
+        ),
+        NativeSupplicantError::BeginScanCaptureFailed(status) => (
+            BackendErrorClass::Other,
+            0x6800 | status as u32 & 0xff,
+            DiagnosticStage::Scan,
         ),
         NativeSupplicantError::FeedScanFailed(status) => (
             BackendErrorClass::Other,
@@ -1095,6 +1101,18 @@ mod tests {
         let trace = diagnostic.trace().get(0).unwrap();
         assert_eq!(trace.kind(), DiagnosticTraceKind::HostapStatus);
         assert_eq!(trace.value(), (-17_i32) as u32);
+    }
+
+    #[test]
+    fn scan_capture_boundary_failure_is_distinct_from_result_feed_failure() {
+        let capture =
+            map_native_error(NativeSupplicantError::BeginScanCaptureFailed(-1)).diagnostic();
+        let feed = map_native_error(NativeSupplicantError::FeedScanFailed(-1)).diagnostic();
+
+        assert_eq!(capture.stage(), DiagnosticStage::Scan);
+        assert_eq!(capture.backend_code(), Some(0x5732_68ff));
+        assert_eq!(capture.trace().get(0).unwrap().value(), u32::MAX);
+        assert_ne!(capture.backend_code(), feed.backend_code());
     }
 
     #[test]
