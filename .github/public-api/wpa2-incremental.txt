@@ -358,8 +358,43 @@ pub hisi_rf_ws63::InitErrorKind::Core
 pub hisi_rf_ws63::InitErrorKind::Runtime
 pub hisi_rf_ws63::InitErrorKind::StorageAlreadyClaimed
 pub hisi_rf_ws63::InitErrorKind::TaskAdmission
+pub enum hisi_rf_ws63::WifiWpa2BleCoexistence
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2BleCoexistence
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+pub enum hisi_rf_ws63::WifiWpa2SleCoexistence
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2SleCoexistence
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 pub enum hisi_rf_ws63::WifiWpa2Smoltcp
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
@@ -374,8 +409,43 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+pub enum hisi_rf_ws63::WifiWpa3BleCoexistence
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3BleCoexistence
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+pub enum hisi_rf_ws63::WifiWpa3SleCoexistence
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3SleCoexistence
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 pub enum hisi_rf_ws63::WifiWpa3Smoltcp
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
@@ -437,6 +507,8 @@ pub struct hisi_rf_ws63::ResourceReport
 pub hisi_rf_ws63::ResourceReport::arena_storage_bytes: usize
 pub hisi_rf_ws63::ResourceReport::caller_owned_bytes: usize
 pub hisi_rf_ws63::ResourceReport::chip: &'static str
+pub hisi_rf_ws63::ResourceReport::coexistence_stack_bytes: usize
+pub hisi_rf_ws63::ResourceReport::coexistence_task_slots: usize
 pub hisi_rf_ws63::ResourceReport::composition_handle_bytes: usize
 pub hisi_rf_ws63::ResourceReport::control_storage_bytes: usize
 pub hisi_rf_ws63::ResourceReport::crypto_backend: &'static str
@@ -517,12 +589,15 @@ pub struct hisi_rf_ws63::WifiParts<const EVENTS: usize>
 pub hisi_rf_ws63::WifiParts::controller: hisi_rf_core::wifi::WifiController<EVENTS>
 pub hisi_rf_ws63::WifiParts::device: hisi_rf_ws63::WifiDevice
 pub struct hisi_rf_ws63::WifiResourcePlan
+pub hisi_rf_ws63::WifiResourcePlan::coexistence: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub hisi_rf_ws63::WifiResourcePlan::event_capacity: usize
 pub hisi_rf_ws63::WifiResourcePlan::rf_heap_min_bytes: usize
 pub hisi_rf_ws63::WifiResourcePlan::runtime_object_bytes: usize
 pub hisi_rf_ws63::WifiResourcePlan::vendor: hisi_rf_ws63::TaskGroupPlan
 pub hisi_rf_ws63::WifiResourcePlan::worker: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 impl hisi_rf_ws63::WifiResourcePlan
+pub const fn hisi_rf_ws63::WifiResourcePlan::coexistence_stack_bytes(self) -> usize
+pub const fn hisi_rf_ws63::WifiResourcePlan::coexistence_task_slots(self) -> usize
 pub const fn hisi_rf_ws63::WifiResourcePlan::minimum_task_stack_bytes(self) -> usize
 pub const fn hisi_rf_ws63::WifiResourcePlan::runtime_arena_bytes(self) -> usize
 pub const fn hisi_rf_ws63::WifiResourcePlan::total_stack_bytes(self) -> usize
@@ -543,6 +618,7 @@ pub const hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES: usize
 pub const hisi_rf_ws63::SELECTED_TASK_STACK_ARENA_BYTES: usize
 pub const hisi_rf_ws63::WS63_SHARED_RADIO_ARENA_BYTES: usize
 pub trait hisi_rf_ws63::Profile: hisi_rf_ws63::profile::sealed::Sealed
+pub const hisi_rf_ws63::Profile::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub const hisi_rf_ws63::Profile::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::ID: &'static str
 pub const hisi_rf_ws63::Profile::MINIMUM_TASK_STACK_BYTES: usize
@@ -557,7 +633,40 @@ pub const hisi_rf_ws63::Profile::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::Profile::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::Profile::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
 pub const hisi_rf_ws63::Profile::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2BleCoexistence
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2BleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2SleCoexistence
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa2SleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa2Smoltcp
+pub const hisi_rf_ws63::WifiWpa2Smoltcp::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
@@ -572,7 +681,40 @@ pub const hisi_rf_ws63::WifiWpa2Smoltcp::TASK_STACK_BYTES_PER_TASK: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
 pub const hisi_rf_ws63::WifiWpa2Smoltcp::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3BleCoexistence
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3BleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
+impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3SleCoexistence
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::ID: &'static str
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::MINIMUM_TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RESOURCE_PLAN: hisi_rf_ws63::WifiResourcePlan
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RF_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_ARENA_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_OBJECT_HEADROOM_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::RUNTIME_RESOURCES_CALIBRATED: bool
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::SECURITY: &'static str
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::TASK_STACK_BYTES: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::TASK_STACK_BYTES_PER_TASK: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::VENDOR_DYNAMIC_TASKS_REQUIRED: usize
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::VENDOR_TASKS: hisi_rf_ws63::TaskGroupPlan
+pub const hisi_rf_ws63::WifiWpa3SleCoexistence::WORKER_TASKS: core::option::Option<hisi_rf_ws63::TaskGroupPlan>
 impl hisi_rf_ws63::Profile for hisi_rf_ws63::WifiWpa3Smoltcp
+pub const hisi_rf_ws63::WifiWpa3Smoltcp::COEXISTENCE_TASKS: [core::option::Option<hisi_rf_ws63::TaskGroupPlan>; 4]
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::DYNAMIC_TASKS_REQUIRED: usize
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::ID: &'static str
 pub const hisi_rf_ws63::WifiWpa3Smoltcp::MINIMUM_TASK_STACK_BYTES: usize
@@ -592,8 +734,8 @@ pub fn hisi_rf_ws63::hardware_cipher_diagnostic_snapshot() -> [u32; 6]
 pub fn hisi_rf_ws63::hardware_p256_curve_diagnostic_snapshot() -> [u32; 10]
 pub fn hisi_rf_ws63::hardware_p256_diagnostic_snapshot() -> [u32; 8]
 pub fn hisi_rf_ws63::hardware_p256_field_diagnostic_snapshot() -> [u32; 10]
-pub fn hisi_rf_ws63::init_incremental<P: hisi_rf_ws63::Profile + ActiveProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
-pub fn hisi_rf_ws63::init_incremental_after_blocking_bootstrap<P: hisi_rf_ws63::Profile + ActiveProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
+pub fn hisi_rf_ws63::init_incremental<P: hisi_rf_ws63::Profile + ActiveProfile + StandaloneWifiProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
+pub fn hisi_rf_ws63::init_incremental_after_blocking_bootstrap<P: hisi_rf_ws63::Profile + ActiveProfile + StandaloneWifiProfile + 'static, const EVENTS: usize>(hisi_rf_core::wifi::RadioConfig, hisi_rf_ws63::Resources<P>, &'static hisi_rf_ws63::Storage<P, EVENTS>) -> core::result::Result<hisi_rf_ws63::IncrementalRadioController<P, EVENTS>, hisi_rf_ws63::InitError>
 pub unsafe fn hisi_rf_ws63::prepare_vendor_memory()
 pub const fn hisi_rf_ws63::resource_report<P: hisi_rf_ws63::Profile, const EVENTS: usize>() -> hisi_rf_ws63::ResourceReport
 pub fn hisi_rf_ws63::rf_heap_metrics() -> hisi_alloc::HeapMetrics

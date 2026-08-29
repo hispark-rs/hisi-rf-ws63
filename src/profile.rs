@@ -51,7 +51,10 @@ const RUNTIME_OBJECT_HEADROOM_BYTES: usize = 16 * 1024;
 // a payload whose size is itself 64-byte aligned occupies one extra cache line.
 // Account for that physical object overhead in the shared-section budget.
 const RADIO_ARENA_STORAGE_OVERHEAD_BYTES: usize = 64;
-#[cfg(not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle")))]
+#[cfg(all(
+    target_pointer_width = "32",
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocking-backend") {
     // Crypto storage, reservations, claim state, and the legacy runner cell.
     6_361
@@ -64,7 +67,10 @@ const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocki
     // Crypto storage, the vendor reservation, and claim state.
     4_425
 };
-#[cfg(not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle")))]
+#[cfg(all(
+    target_pointer_width = "32",
+    not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
+))]
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
 const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
     // The incremental profile adds 18 instance-owned counters published by the

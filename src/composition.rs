@@ -941,7 +941,7 @@ pub fn init_incremental<
 fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: usize>(
     config: RadioConfig,
     resources: Resources<P>,
-    storage: &'static Storage<P, EVENTS>,
+    _storage: &'static Storage<P, EVENTS>,
     claimed: crate::profile::ClaimedStorage<EVENTS>,
 ) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
     let RadioResources {
@@ -985,7 +985,7 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
                 hisi_rf_rtos_driver::Error::Runtime,
             ))
         })?;
-        let worker = storage.store_incremental_worker(IncrementalWorkerState::new(backend));
+        let worker = _storage.store_incremental_worker(IncrementalWorkerState::new(backend));
         match worker.start(worker_reservation) {
             Ok(backend) => (backend, &*worker),
             Err(error) => {
