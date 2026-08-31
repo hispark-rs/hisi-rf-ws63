@@ -663,6 +663,11 @@ pub fn rf_heap_metrics() -> RfHeapMetrics {
     alloc::heap_metrics()
 }
 
+#[doc(hidden)]
+pub use alloc::{
+    AllocationTraceRecord, FreeTraceRecord, allocation_trace_snapshot, free_trace_snapshot,
+};
+
 #[cfg(feature = "station-pm-diag")]
 #[doc(hidden)]
 pub use station_pm_diag::{

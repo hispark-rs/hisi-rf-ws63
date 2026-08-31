@@ -355,6 +355,36 @@ fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker:
         u32::try_from(metrics.allocation_failures).unwrap_or(u32::MAX),
     ));
     uart.write(b"\r\n");
+    write_heap_trace(uart);
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+fn write_heap_trace(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    let mut allocations = [hisi_rf_ws63::AllocationTraceRecord::default(); 16];
+    let mut frees = [hisi_rf_ws63::FreeTraceRecord::default(); 16];
+    let allocation_count = hisi_rf_ws63::allocation_trace_snapshot(&mut allocations);
+    let free_count = hisi_rf_ws63::free_trace_snapshot(&mut frees);
+
+    for record in &allocations[..allocation_count] {
+        uart.write(b"RFDBG_COEX_ALLOC seq=0x");
+        uart.write(&hex8(record.sequence));
+        uart.write(b" ptr=0x");
+        uart.write(&hex8(record.pointer as u32));
+        uart.write(b" size=0x");
+        uart.write(&hex8(record.size as u32));
+        uart.write(b" caller=0x");
+        uart.write(&hex8(record.caller as u32));
+        uart.write(b"\r\n");
+    }
+    for record in &frees[..free_count] {
+        uart.write(b"RFDBG_COEX_FREE seq=0x");
+        uart.write(&hex8(record.sequence));
+        uart.write(b" ptr=0x");
+        uart.write(&hex8(record.pointer as u32));
+        uart.write(b" caller=0x");
+        uart.write(&hex8(record.caller as u32));
+        uart.write(b"\r\n");
+    }
 }
 
 #[cfg(feature = "coexistence-wifi-ble")]
