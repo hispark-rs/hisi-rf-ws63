@@ -288,6 +288,7 @@ async fn wifi_scan_while_ble_active(
         uart.write(b" count=0x");
         uart.write(&hex8(u32::try_from(outcome.count).unwrap_or(u32::MAX)));
         uart.write(b"\r\n");
+        write_heap_metrics(uart, b"RFDBG_COEX_HEAP_AFTER_SCAN");
         Timer::after(Duration::from_millis(COEX_SCAN_SETTLE_MS)).await;
     }
 
@@ -325,7 +326,35 @@ fn report_scan_error(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, error: R
     uart.write(b" code=0x");
     uart.write(&hex8(code));
     uart.write(b"\r\n");
+    write_heap_metrics(uart, b"RFDBG_COEX_HEAP_SCAN_ERROR");
     halt()
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker: &[u8]) {
+    let metrics = hisi_rf_ws63::rf_heap_metrics();
+    uart.write(marker);
+    uart.write(b" arena=0x");
+    uart.write(&hex8(
+        u32::try_from(metrics.arena_bytes).unwrap_or(u32::MAX),
+    ));
+    uart.write(b" used=0x");
+    uart.write(&hex8(u32::try_from(metrics.used_bytes).unwrap_or(u32::MAX)));
+    uart.write(b" free=0x");
+    uart.write(&hex8(u32::try_from(metrics.free_bytes).unwrap_or(u32::MAX)));
+    uart.write(b" peak=0x");
+    uart.write(&hex8(
+        u32::try_from(metrics.peak_used_bytes).unwrap_or(u32::MAX),
+    ));
+    uart.write(b" live=0x");
+    uart.write(&hex8(
+        u32::try_from(metrics.live_allocations).unwrap_or(u32::MAX),
+    ));
+    uart.write(b" failures=0x");
+    uart.write(&hex8(
+        u32::try_from(metrics.allocation_failures).unwrap_or(u32::MAX),
+    ));
+    uart.write(b"\r\n");
 }
 
 #[cfg(feature = "coexistence-wifi-ble")]

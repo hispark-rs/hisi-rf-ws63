@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.90] - 2026-08-31
+
+### Added
+
+- Report RF heap arena, usage, peak, live allocation, and failure counters
+  after each coexistence scan and on scan failure, so repeated-scan HIL can
+  distinguish retained ownership from an opaque native feed error.
+
+### Fixed
+
+- Update the exact `ws63-radio-sys` dependency to `0.1.0-alpha.25`, whose
+  native hostap driver retains only the SSID and WPA/RSN/RSNXE protocol IEs in
+  its deep-copied scan results. Unrelated broadcast telemetry no longer consumes
+  the fixed Wi-Fi plus BLE coexistence arena twice.
+
 ## [0.1.0-alpha.89] - 2026-08-31
 
 ### Fixed
