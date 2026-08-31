@@ -664,13 +664,6 @@ pub fn rf_heap_metrics() -> RfHeapMetrics {
 }
 
 #[doc(hidden)]
-pub fn native_scan_cache_diagnostic_word() -> u32 {
-    // SAFETY: this read-only diagnostic accesses one word owned by the linked
-    // native supplicant archive and does not touch context lifetime.
-    unsafe { ws63_radio_sys::supplicant::hisi_wpa_scan_cache_diagnostic_word() }
-}
-
-#[doc(hidden)]
 pub use alloc::{
     AllocationTraceRecord, FreeTraceRecord, allocation_trace_snapshot, free_trace_snapshot,
 };
