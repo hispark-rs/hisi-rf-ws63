@@ -354,6 +354,12 @@ fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker:
     uart.write(&hex8(
         u32::try_from(metrics.allocation_failures).unwrap_or(u32::MAX),
     ));
+    uart.write(b" scan_cache=0x");
+    uart.write(&hex8(hisi_rf_ws63::native_scan_cache_diagnostic_word()));
+    uart.write(b" scan_clear=0x");
+    uart.write(&hex8(
+        hisi_rf_ws63::wifi::scan_results_clear_diagnostic_word(),
+    ));
     uart.write(b"\r\n");
     write_heap_trace(uart);
 }

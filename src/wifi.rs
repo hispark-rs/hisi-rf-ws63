@@ -18,10 +18,8 @@ use core::cell::{Cell, UnsafeCell};
 use core::ffi::{c_char, c_uint, c_void};
 #[cfg(target_arch = "riscv32")]
 use critical_section::Mutex;
-#[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
-use portable_atomic::AtomicU32;
 #[cfg(target_arch = "riscv32")]
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 
 const IFNAME_CAPACITY: usize = 17;
 const SSID_CAPACITY: usize = 32;
@@ -39,7 +37,7 @@ const MAX_IE_LENGTH: usize = 2304;
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
 #[repr(C)]
 struct VendorRxMgmt {
-    frame: *const u8,
+    frame: *mut u8,
     frame_len: u32,
     signal_mbm: i32,
     frequency_mhz: i32,
@@ -51,12 +49,51 @@ struct VendorExternalAuth {
     action: u8,
     bssid: [u8; 6],
     reserved0: u8,
-    ssid: *const u8,
+    ssid: *mut u8,
     ssid_len: u32,
     key_mgmt_suite: u32,
     status: u16,
     reserved1: [u8; 2],
-    pmkid: *const u8,
+    pmkid: *mut u8,
+}
+
+#[cfg(target_arch = "riscv32")]
+struct TransferredBuffer {
+    field: *mut *mut u8,
+    pointer: *mut u8,
+    zeroize_len: usize,
+}
+
+#[cfg(target_arch = "riscv32")]
+impl TransferredBuffer {
+    unsafe fn take(field: *mut *mut u8, zeroize_len: usize) -> Self {
+        // SAFETY: the caller points at a mutable pointer field in the live
+        // callback descriptor. Taking a copy does not outlive the callback.
+        let pointer = unsafe { field.read() };
+        Self {
+            field,
+            pointer,
+            zeroize_len,
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+impl Drop for TransferredBuffer {
+    fn drop(&mut self) {
+        if self.pointer.is_null() {
+            return;
+        }
+        if self.zeroize_len != 0 {
+            // SAFETY: the vendor descriptor transfers at least zeroize_len
+            // writable bytes to this callback consumer.
+            unsafe { self.pointer.write_bytes(0, self.zeroize_len) };
+        }
+        crate::libc::free(self.pointer.cast());
+        // SAFETY: the descriptor remains live until the callback returns. The
+        // vendor ABI requires the consumer to clear a released pointer field.
+        unsafe { self.field.write(core::ptr::null_mut()) };
+    }
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
@@ -393,6 +430,8 @@ pub enum Error {
     Crypto(u32),
     /// The vendor scan ioctl failed.
     StartScan(c_int),
+    /// The vendor rejected release of its retained scan-result list.
+    ClearScanResults(u32),
     /// The scan finished with a non-success vendor status.
     ScanFailed(ScanStatus),
     /// The vendor rejected PMF or SAE policy before association.
@@ -1010,6 +1049,7 @@ impl<'d> Wifi<'d> {
                 state.done.set(false);
                 state.count.set(0);
                 state.status.set(ScanStatus::Success);
+                state.results_released.set(false);
                 true
             });
             if !started {
@@ -1067,7 +1107,9 @@ impl<'d> Wifi<'d> {
             if DRIVER_SCAN_DONE_MS.load(Ordering::Acquire) == 0 {
                 DRIVER_SCAN_DONE_MS.store(crate::uapi::monotonic_ms() as u32, Ordering::Release);
             }
+            let release = release_scan_results_once();
             finish_scan();
+            release?;
             if status != ScanStatus::Success {
                 return Err(Error::ScanFailed(status));
             }
@@ -1256,7 +1298,7 @@ struct VendorScanResult {
     level: i32,
     age: u32,
     ie_len: u32,
-    variable: *const u8,
+    variable: *mut u8,
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1424,6 +1466,7 @@ struct ScanState {
     done: Cell<bool>,
     count: Cell<usize>,
     status: Cell<ScanStatus>,
+    results_released: Cell<bool>,
 }
 
 #[cfg(target_arch = "riscv32")]
@@ -1432,6 +1475,7 @@ static SCAN_STATE: Mutex<ScanState> = Mutex::new(ScanState {
     done: Cell::new(false),
     count: Cell::new(0),
     status: Cell::new(ScanStatus::Success),
+    results_released: Cell::new(true),
 });
 
 #[cfg(target_arch = "riscv32")]
@@ -1543,6 +1587,49 @@ pub fn wpa_event_diagnostics() -> WpaEventDiagnostic {
 #[cfg(target_arch = "riscv32")]
 fn finish_scan() {
     critical_section::with(|cs| SCAN_STATE.borrow(cs).active.set(false));
+}
+
+#[cfg(target_arch = "riscv32")]
+fn release_scan_results_once() -> Result<(), Error> {
+    let claimed = critical_section::with(|cs| {
+        let state = SCAN_STATE.borrow(cs);
+        if state.results_released.get() {
+            false
+        } else {
+            state.results_released.set(true);
+            true
+        }
+    });
+    if !claimed {
+        return Ok(());
+    }
+
+    SCAN_CLEAR_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: scan-done is published after all result callbacks. Both the Rust
+    // result array and native supplicant queue own deep copies, so the vendor
+    // HMAC result list no longer backs either consumer.
+    let status = unsafe { uapi_wifi_scan_results_clear() };
+    if status == 0 {
+        return Ok(());
+    }
+
+    SCAN_CLEAR_FAILURES.fetch_add(1, Ordering::Relaxed);
+    critical_section::with(|cs| SCAN_STATE.borrow(cs).results_released.set(false));
+    Err(Error::ClearScanResults(status))
+}
+
+#[cfg(target_arch = "riscv32")]
+static SCAN_CLEAR_REQUESTS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(target_arch = "riscv32")]
+static SCAN_CLEAR_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// Return the vendor scan-result release request/failure counters.
+#[cfg(target_arch = "riscv32")]
+#[doc(hidden)]
+pub fn scan_results_clear_diagnostic_word() -> u32 {
+    (SCAN_CLEAR_REQUESTS.load(Ordering::Relaxed) & 0xffff)
+        | ((SCAN_CLEAR_FAILURES.load(Ordering::Relaxed) & 0xffff) << 16)
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "upstream-supplicant-port"))]
@@ -1672,9 +1759,16 @@ unsafe extern "C" fn scan_event(
             crate::upstream_supplicant::reject_external_auth_callback();
             return -1;
         }
-        // SAFETY: the vendor owns this exact descriptor for the callback. All
-        // pointer payloads are deep-copied before returning.
-        let external = unsafe { &*data.cast::<VendorExternalAuth>() };
+        let descriptor = data.cast::<VendorExternalAuth>();
+        // SAFETY: the checked descriptor transfers both payload fields to the
+        // registered consumer. The guards release them on every return path.
+        let _ssid =
+            unsafe { TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).ssid), 0) };
+        // SAFETY: the PMKID is a transferred 16-byte secret when non-null.
+        let _pmkid =
+            unsafe { TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).pmkid), 16) };
+        // SAFETY: exact event size above establishes the descriptor layout.
+        let external = unsafe { &*descriptor };
         let ssid_len = external.ssid_len as usize;
         if external.action > 1
             || ssid_len > 32
@@ -1717,9 +1811,14 @@ unsafe extern "C" fn scan_event(
         && !data.is_null()
         && length as usize == core::mem::size_of::<VendorRxMgmt>()
     {
+        let descriptor = data.cast::<VendorRxMgmt>();
+        // SAFETY: the checked descriptor transfers the management frame to
+        // the registered callback consumer.
+        let _frame =
+            unsafe { TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).frame), 0) };
         // SAFETY: the vendor callback owns the descriptor and frame for this
         // call. enqueue_mgmt_rx deep-copies the complete frame before return.
-        let rx = unsafe { &*data.cast::<VendorRxMgmt>() };
+        let rx = unsafe { &*descriptor };
         if !rx.frame.is_null() && rx.frame_len != 0 {
             // SAFETY: the descriptor promises frame_len readable bytes for
             // this callback. The queue copies them before this function exits.
@@ -1742,8 +1841,13 @@ unsafe extern "C" fn scan_event(
         && !data.is_null()
         && length as usize == core::mem::size_of::<VendorScanResult>()
     {
+        let descriptor = data.cast::<VendorScanResult>();
+        // SAFETY: the checked descriptor transfers its IE allocation to the
+        // registered callback consumer.
+        let _variable =
+            unsafe { TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).variable), 0) };
         // SAFETY: exact event size above establishes the descriptor layout.
-        let vendor = unsafe { &*data.cast::<VendorScanResult>() };
+        let vendor = unsafe { &*descriptor };
         #[cfg(feature = "upstream-supplicant-port")]
         if let Some(total_len) = (vendor.ie_len as usize).checked_add(vendor.beacon_ie_len as usize)
             && total_len <= MAX_IE_LENGTH
@@ -1836,9 +1940,19 @@ unsafe extern "C" fn scan_event(
         if data.is_null() || length as usize != core::mem::size_of::<VendorConnectResult>() {
             return -1;
         }
+        let descriptor = data.cast::<VendorConnectResult>();
+        // SAFETY: both IE allocations are transferred with the checked
+        // descriptor and must be released on success and rejection paths.
+        let _request_ie = unsafe {
+            TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).request_ie), 0)
+        };
+        // SAFETY: same ownership contract as request_ie.
+        let _response_ie = unsafe {
+            TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).response_ie), 0)
+        };
         // SAFETY: the vendor callback reports the exact connect-result layout
         // and the value is copied before the callback returns.
-        let result = unsafe { &*data.cast::<VendorConnectResult>() };
+        let result = unsafe { &*descriptor };
         #[cfg(feature = "upstream-supplicant-port")]
         {
             // SAFETY: the callback descriptor owns both payloads until return.
@@ -1887,8 +2001,12 @@ unsafe extern "C" fn scan_event(
         && !data.is_null()
         && length as usize == core::mem::size_of::<VendorDisconnect>()
     {
+        let descriptor = data.cast::<VendorDisconnect>();
+        // SAFETY: the checked descriptor transfers its disconnect IE payload
+        // to the registered callback consumer.
+        let _ie = unsafe { TransferredBuffer::take(core::ptr::addr_of_mut!((*descriptor).ie), 0) };
         // SAFETY: the callback length was checked against the vendor layout.
-        let disconnect = unsafe { &*data.cast::<VendorDisconnect>() };
+        let disconnect = unsafe { &*descriptor };
         #[cfg(feature = "upstream-supplicant-port")]
         {
             crate::log_emit(b"RFDBG_WPA_DISCONNECT reason=");
@@ -1986,6 +2104,7 @@ unsafe extern "C" fn wpa_event(event: *const VendorWpaEvent) {
 #[cfg(target_arch = "riscv32")]
 unsafe extern "C" {
     fn uapi_wifi_init(vap_res_num: u8, user_res_num: u8) -> u32;
+    fn uapi_wifi_scan_results_clear() -> u32;
     fn wal_init_drv_wlan_netdev(
         interface_type: u8,
         mode: c_uint,

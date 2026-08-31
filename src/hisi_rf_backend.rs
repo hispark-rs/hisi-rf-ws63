@@ -742,6 +742,9 @@ fn map_error(error: Ws63Error) -> BackendError {
         Ws63Error::StartScan(code) => {
             (BackendErrorClass::Other, code as u32, DiagnosticStage::Scan)
         }
+        Ws63Error::ClearScanResults(code) => {
+            (BackendErrorClass::Other, code, DiagnosticStage::Scan)
+        }
         Ws63Error::CryptoInitialize(code) => (
             BackendErrorClass::Initialize,
             code as u32,
@@ -788,6 +791,7 @@ fn ws63_error_trace(error: Ws63Error) -> Option<(DiagnosticTraceKind, u32)> {
         | Ws63Error::ConfigureSecurity(code)
         | Ws63Error::StartConnect(code)
         | Ws63Error::StartDisconnect(code) => vendor(code as u32),
+        Ws63Error::ClearScanResults(code) => vendor(code),
         Ws63Error::ScanFailed(status) => vendor(scan_status_code(status)),
         Ws63Error::ConnectFailed(status) => {
             Some((DiagnosticTraceKind::IeeeStatus, u32::from(status)))
