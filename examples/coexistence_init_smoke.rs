@@ -9,28 +9,56 @@ use embassy_time::{Duration, Timer, with_timeout};
 use hisi_hal::Peripherals;
 use hisi_hal::delay::Delay;
 use hisi_hal::rf_power::RfPower;
+#[cfg(feature = "coexistence-wifi-ble")]
+use hisi_hal::time::Instant as HalInstant;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
 #[cfg(feature = "coexistence-wifi-ble")]
 use hisi_rf_core::{
-    BackendErrorClass, Error as RadioError, ScanConfig, ScanResult, WifiController, WorkBudget,
+    BackendErrorClass, Error as RadioError, OperationTimeout, Passphrase, ScanConfig, ScanResult,
+    StationConfig, WifiController, WorkBudget,
 };
 use hisi_rf_ws63::declare_radio_storage;
 #[cfg(feature = "coexistence-wifi-ble")]
 use hisi_rf_ws63::{IncrementalRadioParts, IncrementalRadioRunner};
 use hisi_riscv_rt::entry;
+#[cfg(feature = "coexistence-wifi-ble")]
+use smoltcp::iface::{Config as NetConfig, Interface, SocketSet, SocketStorage};
+#[cfg(feature = "coexistence-wifi-ble")]
+use smoltcp::socket::udp;
+#[cfg(feature = "coexistence-wifi-ble")]
+use smoltcp::time::Instant as NetInstant;
+#[cfg(feature = "coexistence-wifi-ble")]
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use static_cell::StaticCell;
 
 const EVENT_DEPTH: usize = 8;
 #[cfg(feature = "coexistence-wifi-ble")]
-const SCAN_RESULT_DEPTH: usize = 32;
+const SCAN_RESULT_DEPTH: usize = 16;
 #[cfg(feature = "coexistence-wifi-ble")]
 const COEX_SCAN_ROUNDS: u8 = 3;
 #[cfg(feature = "coexistence-wifi-ble")]
 const COEX_SCAN_TIMEOUT_MS: u32 = 30_000;
 #[cfg(feature = "coexistence-wifi-ble")]
 const COEX_SCAN_SETTLE_MS: u64 = 1_000;
+#[cfg(feature = "coexistence-wifi-ble")]
+const COEX_TEST_SSID: &[u8] = b"WS63-RUST-HIL";
+#[cfg(feature = "coexistence-wifi-ble")]
+const COEX_TEST_PASSPHRASE: &[u8] = b"ws63-rust-hil";
+#[cfg(feature = "coexistence-wifi-ble")]
+const COEX_CONNECT_TIMEOUT: OperationTimeout =
+    OperationTimeout::try_from_millis(60_000).expect("non-zero connect timeout");
+#[cfg(feature = "coexistence-wifi-ble")]
+const LOCAL_ADDRESS: Ipv4Address = Ipv4Address::new(192, 168, 4, 2);
+#[cfg(feature = "coexistence-wifi-ble")]
+const LOCAL_PEER: Ipv4Address = Ipv4Address::new(192, 168, 4, 1);
+#[cfg(feature = "coexistence-wifi-ble")]
+const LOCAL_ECHO_PORT: u16 = 9;
+#[cfg(feature = "coexistence-wifi-ble")]
+const LOCAL_ECHO_ATTEMPTS: u8 = 10;
+#[cfg(feature = "coexistence-wifi-ble")]
+const LOCAL_ECHO_TIMEOUT_MS: u64 = 15_000;
 #[cfg(feature = "coexistence-wifi-ble")]
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero coexistence work budget");
@@ -162,7 +190,10 @@ fn run_wifi_ble_activity(
     executor.run(|spawner: Spawner| {
         spawner.spawn(radio_runner(&mut wifi.runner, uart).unwrap());
         spawner.spawn(ble_advertising_activity(ble, uart).unwrap());
-        spawner.spawn(wifi_scan_while_ble_active(&mut wifi.wifi.controller, uart).unwrap());
+        spawner.spawn(
+            wifi_traffic_while_ble_active(&mut wifi.wifi.controller, &mut wifi.wifi.device, uart)
+                .unwrap(),
+        );
     })
 }
 
@@ -241,8 +272,9 @@ async fn ble_advertising_activity(
 
 #[cfg(feature = "coexistence-wifi-ble")]
 #[embassy_executor::task]
-async fn wifi_scan_while_ble_active(
+async fn wifi_traffic_while_ble_active(
     controller: &'static mut WifiController<EVENT_DEPTH>,
+    device: &'static mut hisi_rf_ws63::WifiDevice,
     uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
 ) {
     let advertising_deadline = embassy_time::Instant::now() + Duration::from_secs(15);
@@ -260,6 +292,7 @@ async fn wifi_scan_while_ble_active(
 
     let mut results = [ScanResult::empty(); SCAN_RESULT_DEPTH];
     let mut round = 0_u8;
+    let mut selected = None;
     while round < COEX_SCAN_ROUNDS {
         if !BLE_ADVERTISING_ACTIVE.load(Ordering::Acquire) {
             fail(
@@ -288,8 +321,36 @@ async fn wifi_scan_while_ble_active(
         uart.write(b" count=0x");
         uart.write(&hex8(u32::try_from(outcome.count).unwrap_or(u32::MAX)));
         uart.write(b"\r\n");
+        selected = results[..outcome.count]
+            .iter()
+            .copied()
+            .find(|result| result.ssid.as_bytes() == COEX_TEST_SSID);
         write_heap_metrics(uart, b"RFDBG_COEX_HEAP_AFTER_SCAN");
         Timer::after(Duration::from_millis(COEX_SCAN_SETTLE_MS)).await;
+    }
+
+    let Some(network) = selected else {
+        fail(uart, b"RFDBG_COEX_WIFI_CONNECT_ERR stage=ssid\r\n")
+    };
+    let passphrase = Passphrase::try_from_ascii(COEX_TEST_PASSPHRASE)
+        .expect("valid fixed dual-board passphrase");
+    let station = StationConfig::wpa2_personal(&network, passphrase, COEX_CONNECT_TIMEOUT)
+        .expect("fixed dual-board AP advertises WPA2-Personal");
+    match with_timeout(Duration::from_secs(90), controller.connect(station)).await {
+        Ok(Ok(_)) => uart.write(b"RFDBG_COEX_WIFI_CONNECT_OK\r\n"),
+        _ => fail(uart, b"RFDBG_COEX_WIFI_CONNECT_ERR stage=associate\r\n"),
+    }
+
+    let (sent, received, attempts) = run_local_echo(device, uart).await;
+    if sent != LOCAL_ECHO_ATTEMPTS || received != LOCAL_ECHO_ATTEMPTS {
+        uart.write(b"RFDBG_COEX_LOCAL_ECHO_ERR sent=0x");
+        uart.write(&hex8(u32::from(sent)));
+        uart.write(b" received=0x");
+        uart.write(&hex8(u32::from(received)));
+        uart.write(b" attempts=0x");
+        uart.write(&hex8(u32::from(attempts)));
+        uart.write(b"\r\n");
+        halt()
     }
 
     let events = controller.event_diagnostics();
@@ -299,13 +360,121 @@ async fn wifi_scan_while_ble_active(
         uart.write(b"\r\n");
         halt()
     }
-    uart.write(b"RFDBG_COEX_WIFI_BLE_ACTIVITY_OK scans=0x");
+    uart.write(b"RFDBG_COEX_WIFI_BLE_TRAFFIC_OK scans=0x");
     uart.write(&hex8(u32::from(COEX_SCAN_ROUNDS)));
+    uart.write(b" echo=0x");
+    uart.write(&hex8(u32::from(received)));
     uart.write(b" wifi_dropped=0x00000000 ble_dropped=0x00000000\r\n");
 
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+async fn run_local_echo(
+    device: &mut hisi_rf_ws63::WifiDevice,
+    uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
+) -> (u8, u8, u8) {
+    let mac = device
+        .station_mac_address()
+        .expect("initialized station MAC address");
+    let mut config = NetConfig::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+    config.random_seed = 0x5753_434f;
+    let mut interface = Interface::new(config, device, net_now());
+    interface.update_ip_addrs(|addresses| {
+        addresses
+            .push(IpCidr::new(IpAddress::Ipv4(LOCAL_ADDRESS), 24))
+            .expect("coexistence IPv4 slot");
+    });
+
+    let mut socket_storage = [SocketStorage::EMPTY; 1];
+    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+    let mut rx_metadata = [udp::PacketMetadata::EMPTY; LOCAL_ECHO_ATTEMPTS as usize];
+    let mut rx_data = [0_u8; 32];
+    let mut tx_metadata = [udp::PacketMetadata::EMPTY; 2];
+    let mut tx_data = [0_u8; 32];
+    let rx = udp::PacketBuffer::new(&mut rx_metadata[..], &mut rx_data[..]);
+    let tx = udp::PacketBuffer::new(&mut tx_metadata[..], &mut tx_data[..]);
+    let mut socket = udp::Socket::new(rx, tx);
+    socket.bind(49_152).expect("bind coexistence UDP probe");
+    let socket_handle = sockets.add(socket);
+    let endpoint = IpEndpoint::new(IpAddress::Ipv4(LOCAL_PEER), LOCAL_ECHO_PORT);
+
+    let started = monotonic_ms();
+    let mut last_send = started.wrapping_sub(500);
+    let mut sent = 0_u8;
+    let mut attempts = 0_u8;
+    let mut next_sequence = 0_u8;
+    let mut received = 0_u8;
+    let mut received_sequences = 0_u16;
+    while monotonic_ms().wrapping_sub(started) < LOCAL_ECHO_TIMEOUT_MS {
+        let now = net_now();
+        let _ = interface.poll(now, device, &mut sockets);
+        let socket = sockets.get_mut::<udp::Socket>(socket_handle);
+        while socket.can_recv() {
+            let Ok((payload, metadata)) = socket.recv() else {
+                break;
+            };
+            if metadata.endpoint == endpoint && payload.len() == 1 {
+                let sequence = payload[0];
+                if sequence < LOCAL_ECHO_ATTEMPTS {
+                    let bit = 1_u16 << sequence;
+                    if received_sequences & bit == 0 {
+                        received_sequences |= bit;
+                        received = received.saturating_add(1);
+                    }
+                }
+            }
+        }
+        let current = monotonic_ms();
+        if received < LOCAL_ECHO_ATTEMPTS
+            && attempts < LOCAL_ECHO_ATTEMPTS.saturating_mul(3)
+            && current.wrapping_sub(last_send) >= 500
+            && socket.can_send()
+        {
+            let mut checked = 0_u8;
+            while checked < LOCAL_ECHO_ATTEMPTS {
+                let sequence = next_sequence;
+                next_sequence = (next_sequence + 1) % LOCAL_ECHO_ATTEMPTS;
+                checked += 1;
+                if received_sequences & (1_u16 << sequence) != 0 {
+                    continue;
+                }
+                if socket.send_slice(&[sequence], endpoint).is_ok() {
+                    sent = sent.max(sequence.saturating_add(1));
+                    attempts = attempts.saturating_add(1);
+                    last_send = current;
+                }
+                break;
+            }
+        }
+        let _ = interface.poll(net_now(), device, &mut sockets);
+        if received == LOCAL_ECHO_ATTEMPTS {
+            break;
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+    uart.write(b"RFDBG_COEX_LOCAL_ECHO sent=0x");
+    uart.write(&hex8(u32::from(sent)));
+    uart.write(b" received=0x");
+    uart.write(&hex8(u32::from(received)));
+    uart.write(b" attempts=0x");
+    uart.write(&hex8(u32::from(attempts)));
+    uart.write(b" bitmap=0x");
+    uart.write(&hex8(u32::from(received_sequences)));
+    uart.write(b"\r\n");
+    (sent, received, attempts)
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+fn monotonic_ms() -> u64 {
+    HalInstant::now().raw() / 24_000
+}
+
+#[cfg(feature = "coexistence-wifi-ble")]
+fn net_now() -> NetInstant {
+    NetInstant::from_millis(monotonic_ms().min(i64::MAX as u64) as i64)
 }
 
 #[cfg(feature = "coexistence-wifi-ble")]

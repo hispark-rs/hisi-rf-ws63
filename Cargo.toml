@@ -136,6 +136,7 @@ smoltcp = { version = "0.13", default-features = false, features = [
     "proto-ipv4",
     "socket-raw",
     "socket-dhcpv4",
+    "socket-udp",
 ], optional = true }
 
 [features]
@@ -163,8 +164,8 @@ sle-init = [
 ]
 # Maintainer-only coexistence compositions. The public facade does not expose
 # these profiles until their exact resource report and two-board HIL pass.
-coexistence-wifi-ble = ["wifi", "ble-init", "incremental-embassy-wait"]
-coexistence-wifi-sle = ["wifi", "sle-init", "incremental-embassy-wait"]
+coexistence-wifi-ble = ["wifi", "ble-init", "incremental-embassy-wait", "net"]
+coexistence-wifi-sle = ["wifi", "sle-init", "incremental-embassy-wait", "net"]
 # Maintainer-only stage markers around the synchronous vendor BLE enable path.
 # This never changes the default B1 link or exposes a user-facing BLE API.
 ble-init-diag = ["ble-init", "hisi-crypto-ws63/diagnostics"]
