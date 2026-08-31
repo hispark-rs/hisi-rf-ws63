@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.88] - 2026-08-31
+
+### Fixed
+
+- Update the exact `ws63-radio-sys` dependency to `0.1.0-alpha.23`, whose
+  native supplicant bounds the retained BSS cache and reports distinct scan
+  feed capacity, allocation, and invalid-input failures. This prevents repeated
+  coexistence scans from exhausting the fixed caller-owned RF arena.
+
 ## [0.1.0-alpha.87] - 2026-08-29
 
 ### Added
@@ -1213,7 +1222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.83...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.88...HEAD
+[0.1.0-alpha.88]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.87...v0.1.0-alpha.88
+[0.1.0-alpha.87]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.86...v0.1.0-alpha.87
+[0.1.0-alpha.86]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.85...v0.1.0-alpha.86
+[0.1.0-alpha.85]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.84...v0.1.0-alpha.85
+[0.1.0-alpha.84]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.83...v0.1.0-alpha.84
 [0.1.0-alpha.83]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.82...v0.1.0-alpha.83
 [0.1.0-alpha.82]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.81...v0.1.0-alpha.82
 [0.1.0-alpha.81]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.80...v0.1.0-alpha.81
