@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.89] - 2026-08-31
+
+### Fixed
+
+- Update the exact `ws63-radio-sys` dependency to `0.1.0-alpha.24`, whose
+  native supplicant releases unused BSS entries before allocating the next
+  externally captured scan batch. This reduces the retained-cache plus fresh
+  scan-results peak in the fixed caller-owned RF arena.
+
 ## [0.1.0-alpha.88] - 2026-08-31
 
 ### Fixed
@@ -1222,7 +1231,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo-only link path through `ws63-radio-sys 0.1.0-alpha.5` normalized
   archives and relocatable ROM patch table.
 
-[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.88...HEAD
+[Unreleased]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.89...HEAD
+[0.1.0-alpha.89]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.88...v0.1.0-alpha.89
 [0.1.0-alpha.88]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.87...v0.1.0-alpha.88
 [0.1.0-alpha.87]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.86...v0.1.0-alpha.87
 [0.1.0-alpha.86]: https://github.com/hispark-rs/hisi-rf-ws63/compare/v0.1.0-alpha.85...v0.1.0-alpha.86
