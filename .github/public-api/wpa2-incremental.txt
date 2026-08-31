@@ -282,6 +282,7 @@ pub mod hisi_rf_ws63::wifi
 pub enum hisi_rf_ws63::wifi::Error
 pub hisi_rf_ws63::wifi::Error::AlreadyInitialized
 pub hisi_rf_ws63::wifi::Error::Busy
+pub hisi_rf_ws63::wifi::Error::ClearScanResults(u32)
 pub hisi_rf_ws63::wifi::Error::ConfigureSecurity(core::ffi::primitives::c_int)
 pub hisi_rf_ws63::wifi::Error::ConnectFailed(u16)
 pub hisi_rf_ws63::wifi::Error::CreateStation(core::ffi::primitives::c_int)
