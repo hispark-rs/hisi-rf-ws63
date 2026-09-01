@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.93] - 2026-09-01
+
+### Fixed
+
+- Retain the most recently observed target AP across the three coexistence scan
+  rounds instead of clearing it when a later scan omits the SSID. The paired
+  SoftAP plus SLE-client fixture improved from 16/20 to 20/20 reset passes, with
+  200/200 local UDP echo replies and the SLE link active in every passing run.
+
 ## [0.1.0-alpha.92] - 2026-09-01
 
 ### Fixed
