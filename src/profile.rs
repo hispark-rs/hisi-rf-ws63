@@ -24,8 +24,8 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v11";
-pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-08-31-r11";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v12";
+pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-09-01-r12";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "coexistence-wifi-sle") {
@@ -35,11 +35,11 @@ const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "coexistence-wifi-sl
     // remains the physical source of truth instead of overlapping `.stacks`.
     272 * 1024
 } else if cfg!(feature = "coexistence-wifi-ble") {
-    // The combined target closure contributes additional fixed BGLE control
-    // BSS before `.hisi_shared_arenas`. A stock-rust-lld map measured 0x2480
-    // fewer bytes before the fixed task stacks; reserve 16 KiB so the linker
-    // remains fail-closed with explicit headroom until two-board calibration.
-    276 * 1024
+    // The combined target closure grows independently of the caller-owned
+    // arena. Round the current stock-rust-lld boundary down by one 4 KiB page;
+    // the post-scan heap peak remains below this calibrated RF allocation, and
+    // the linker guard must retain physical space before `.stacks`.
+    272 * 1024
 } else if cfg!(feature = "incremental-embassy-wait") {
     // The worker adds just under 4 KiB of bounded control state in ordinary
     // BSS. Keep the firmware's total SRAM envelope honest by returning one
@@ -1302,7 +1302,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v11");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v12");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -1448,7 +1448,7 @@ mod tests {
     #[cfg(feature = "coexistence-wifi-ble")]
     #[test]
     fn ble_coexistence_shared_arena_matches_linker_calibration() {
-        assert_eq!(PROFILE_SHARED_ARENA_BYTES, 276 * 1024);
+        assert_eq!(PROFILE_SHARED_ARENA_BYTES, 272 * 1024);
     }
 
     #[cfg(feature = "coexistence-wifi-sle")]
@@ -1463,7 +1463,7 @@ mod tests {
         let mut output = FixedBuffer::new();
         report.write_json(&mut output).unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v11\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v12\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output
