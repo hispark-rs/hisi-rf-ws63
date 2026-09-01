@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.94] - 2026-09-01
+
+### Fixed
+
+- Recalibrate the Wi-Fi plus BLE caller-owned shared arena to the current
+  stock-rust-lld SRAM boundary. The 272 KiB page-rounded budget leaves a
+  3,648-byte gap before the fixed task stacks while retaining the measured
+  post-scan RF heap envelope, and restores the macOS, Linux, and Windows final
+  link gate.
+- Advance the machine-readable resource report to schema v12 and profile
+  revision `ws63-radio-2026-09-01-r12` so consumers can reject stale resource
+  assumptions.
+
 ## [0.1.0-alpha.93] - 2026-09-01
 
 ### Fixed
