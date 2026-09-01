@@ -81,7 +81,7 @@ jobs:
           - profile: wpa2-legacy-oracle
             features: wpa2-personal,smoltcp,legacy-blocking-backend
           - profile: wpa2-ble-coexistence
-            features: wpa2-personal,coexistence-wifi-ble
+            features: wpa2-personal,coexistence-wifi-ble,incremental-embassy-wait
           - profile: wpa2-sle-connected
             features: wpa2-personal,coexistence-wifi-sle,incremental-embassy-wait
     steps:

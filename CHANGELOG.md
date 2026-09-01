@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.97] - 2026-09-01
+
+### Fixed
+
+- Make the station Wi-Fi/BLE CI profile select the incremental runner
+  explicitly after the shared coexistence feature stopped selecting a station
+  target archive on behalf of access-point consumers.
+
 ## [0.1.0-alpha.96] - 2026-09-01
 
 ### Fixed
