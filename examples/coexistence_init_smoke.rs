@@ -1,7 +1,11 @@
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+use core::cell::RefCell;
 use core::num::{NonZeroU32, NonZeroUsize};
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+use critical_section::Mutex;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use embassy_executor::{Executor, Spawner};
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
@@ -15,9 +19,12 @@ use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+use hisi_rf_core::control::EventQueueDiagnostics;
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use hisi_rf_core::{
-    BackendErrorClass, Error as RadioError, OperationTimeout, Passphrase, ScanConfig, ScanResult,
-    StationConfig, WifiController, WorkBudget,
+    BackendErrorClass, Error as RadioError, EventDiagnostics as WifiEventDiagnostics,
+    OperationTimeout, Passphrase, ScanConfig, ScanResult, StationConfig, WifiController,
+    WorkBudget,
 };
 use hisi_rf_ws63::declare_radio_storage;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
@@ -64,6 +71,12 @@ const LOCAL_ECHO_TIMEOUT_MS: u64 = 15_000;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero coexistence work budget");
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+const MIN_RF_HEAP_FREE_BYTES: usize = 16 * 1024;
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+const MAX_READY_LATENCY_MS: u64 = 2_000;
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+const MAX_IRQ_SPAN_MS: u64 = 100;
 #[cfg(feature = "coexistence-wifi-ble")]
 static BLE_ADVERTISING_DATA: &[u8] = &[
     2, 0x01, 0x06, 9, 0x09, b'H', b'I', b'S', b'I', b'C', b'O', b'E', b'X',
@@ -85,6 +98,9 @@ static BLE_CONTROLLER: StaticCell<hisi_rf_ws63::BleB1Controller> = StaticCell::n
 static SLE_CONTROLLER: StaticCell<hisi_rf_ws63::SleS1Controller> = StaticCell::new();
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 static COEX_ACTIVITY_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+static PROTOCOL_EVENT_DIAGNOSTICS: Mutex<RefCell<Option<EventQueueDiagnostics>>> =
+    Mutex::new(RefCell::new(None));
 
 #[cfg(feature = "coexistence-wifi-sle")]
 const SLE_CLIENT_ADDRESS: Address = Address {
@@ -324,6 +340,7 @@ async fn ble_advertising_activity(
                 _ => {}
             }
         }
+        publish_protocol_event_diagnostics(controller.event_diagnostics());
         if !BLE_CONNECTED_CLIENT
             && data_ready
             && parameters_ready
@@ -415,6 +432,7 @@ async fn sle_announce_activity(
                 _ => {}
             }
         }
+        publish_protocol_event_diagnostics(controller.event_diagnostics());
         if controller.dropped_events() != 0 {
             uart.write(b"RFDBG_COEX_SLE_EVENT_DROP count=0x");
             uart.write(&hex8(controller.dropped_events()));
@@ -523,7 +541,15 @@ async fn wifi_traffic_while_protocol_active(
     }
 
     let events = controller.event_diagnostics();
-    if events.dropped != 0 || !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
+    let Some(protocol_events) = protocol_event_diagnostics() else {
+        fail(
+            uart,
+            b"RFDBG_COEX_ACCEPTANCE_ERR reason=protocol_snapshot\r\n",
+        )
+    };
+    write_event_acceptance(uart, events, protocol_events);
+    write_resource_acceptance(uart);
+    if !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
         uart.write(b"RFDBG_COEX_EVENT_ERR wifi_dropped=0x");
         uart.write(&hex8(events.dropped));
         uart.write(b"\r\n");
@@ -551,6 +577,146 @@ async fn wifi_traffic_while_protocol_active(
 
     loop {
         Timer::after(Duration::from_secs(1)).await;
+    }
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn publish_protocol_event_diagnostics(diagnostics: EventQueueDiagnostics) {
+    critical_section::with(|cs| {
+        *PROTOCOL_EVENT_DIAGNOSTICS.borrow(cs).borrow_mut() = Some(diagnostics);
+    });
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn protocol_event_diagnostics() -> Option<EventQueueDiagnostics> {
+    critical_section::with(|cs| *PROTOCOL_EVENT_DIAGNOSTICS.borrow(cs).borrow())
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn event_queue_conserves(diagnostics: EventQueueDiagnostics, capacity: usize) -> bool {
+    let pending = u32::try_from(diagnostics.pending).unwrap_or(u32::MAX);
+    diagnostics.accepted == diagnostics.consumed.saturating_add(pending)
+        && diagnostics.dropped == 0
+        && diagnostics.pending <= capacity
+        && diagnostics.high_water <= capacity
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn wifi_event_queue_conserves(diagnostics: WifiEventDiagnostics) -> bool {
+    let pending = u32::try_from(diagnostics.pending).unwrap_or(u32::MAX);
+    diagnostics.accepted == diagnostics.consumed.saturating_add(pending)
+        && diagnostics.dropped == 0
+        && diagnostics.pending <= diagnostics.capacity
+        && diagnostics.high_water <= diagnostics.capacity
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn write_event_acceptance(
+    uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
+    wifi: WifiEventDiagnostics,
+    protocol: EventQueueDiagnostics,
+) {
+    uart.write(b"RFDBG_COEX_EVENT_CONSERVATION wifi_accepted=0x");
+    uart.write(&hex8(wifi.accepted));
+    uart.write(b" wifi_consumed=0x");
+    uart.write(&hex8(wifi.consumed));
+    uart.write(b" wifi_pending=0x");
+    uart.write(&hex8(u32::try_from(wifi.pending).unwrap_or(u32::MAX)));
+    uart.write(b" wifi_dropped=0x");
+    uart.write(&hex8(wifi.dropped));
+    uart.write(b" wifi_high_water=0x");
+    uart.write(&hex8(u32::try_from(wifi.high_water).unwrap_or(u32::MAX)));
+    uart.write(b" protocol_accepted=0x");
+    uart.write(&hex8(protocol.accepted));
+    uart.write(b" protocol_consumed=0x");
+    uart.write(&hex8(protocol.consumed));
+    uart.write(b" protocol_pending=0x");
+    uart.write(&hex8(u32::try_from(protocol.pending).unwrap_or(u32::MAX)));
+    uart.write(b" protocol_dropped=0x");
+    uart.write(&hex8(protocol.dropped));
+    uart.write(b" protocol_high_water=0x");
+    uart.write(&hex8(
+        u32::try_from(protocol.high_water).unwrap_or(u32::MAX),
+    ));
+    uart.write(b"\r\n");
+
+    #[cfg(feature = "coexistence-wifi-ble")]
+    let protocol_capacity = hisi_rf_ws63::BLE_B2_EVENT_CAPACITY;
+    #[cfg(feature = "coexistence-wifi-sle")]
+    let protocol_capacity = hisi_rf_ws63::SLE_S1_EVENT_CAPACITY;
+    if !wifi_event_queue_conserves(wifi) || !event_queue_conserves(protocol, protocol_capacity) {
+        fail(
+            uart,
+            b"RFDBG_COEX_ACCEPTANCE_ERR reason=event_conservation\r\n",
+        )
+    }
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+fn write_resource_acceptance(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    let heap = hisi_rf_ws63::rf_heap_metrics();
+    let scheduler = hisi_rtos::diagnostics();
+    let mut tasks = [hisi_rtos::TaskDiagnostic::default(); 17];
+    let count = hisi_rtos::task_diagnostics(&mut tasks);
+    let max_ready_ms = tasks[..count]
+        .iter()
+        .map(|task| task.max_ready_latency_ms)
+        .max()
+        .unwrap_or(0);
+    let max_irq_ms = tasks[..count]
+        .iter()
+        .map(|task| task.max_irq_span_ms)
+        .max()
+        .unwrap_or(0);
+
+    uart.write(b"RFDBG_COEX_RESOURCE_ACCEPTANCE arena=0x");
+    uart.write(&hex8(u32::try_from(heap.arena_bytes).unwrap_or(u32::MAX)));
+    uart.write(b" free=0x");
+    uart.write(&hex8(u32::try_from(heap.free_bytes).unwrap_or(u32::MAX)));
+    uart.write(b" peak=0x");
+    uart.write(&hex8(
+        u32::try_from(heap.peak_used_bytes).unwrap_or(u32::MAX),
+    ));
+    uart.write(b" failures=0x");
+    uart.write(&hex8(
+        u32::try_from(heap.allocation_failures).unwrap_or(u32::MAX),
+    ));
+    uart.write(b" min_free=0x");
+    uart.write(&hex8(MIN_RF_HEAP_FREE_BYTES as u32));
+    uart.write(b" max_ready_ms=0x");
+    uart.write(&hex8(max_ready_ms.min(u64::from(u32::MAX)) as u32));
+    uart.write(b" ready_limit_ms=0x");
+    uart.write(&hex8(MAX_READY_LATENCY_MS as u32));
+    uart.write(b" max_irq_ms=0x");
+    uart.write(&hex8(max_irq_ms.min(u64::from(u32::MAX)) as u32));
+    uart.write(b" irq_limit_ms=0x");
+    uart.write(&hex8(MAX_IRQ_SPAN_MS as u32));
+    uart.write(b" ready_owner_err=0x");
+    uart.write(&hex8(u32::from(scheduler.ready_ownership_violations)));
+    uart.write(b" ready_dup=0x");
+    uart.write(&hex8(u32::from(
+        scheduler.ready_queue_duplicate_memberships,
+    )));
+    uart.write(b" ready_wrong_bucket=0x");
+    uart.write(&hex8(u32::from(scheduler.ready_queue_wrong_priorities)));
+    uart.write(b" ready_bad_link=0x");
+    uart.write(&hex8(u32::from(scheduler.ready_queue_invalid_links)));
+    uart.write(b"\r\n");
+
+    if heap.allocation_failures != 0
+        || heap.peak_used_bytes > heap.arena_bytes
+        || heap.free_bytes < MIN_RF_HEAP_FREE_BYTES
+        || max_ready_ms > MAX_READY_LATENCY_MS
+        || max_irq_ms > MAX_IRQ_SPAN_MS
+        || scheduler.ready_ownership_violations != 0
+        || scheduler.ready_queue_duplicate_memberships != 0
+        || scheduler.ready_queue_wrong_priorities != 0
+        || scheduler.ready_queue_invalid_links != 0
+    {
+        fail(
+            uart,
+            b"RFDBG_COEX_ACCEPTANCE_ERR reason=resource_latency\r\n",
+        )
     }
 }
 
