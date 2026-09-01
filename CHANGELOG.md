@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.91] - 2026-09-01
+
+### Added
+
+- Add a maintainer-only WPA2 SoftAP plus SLE composition that admits Wi-Fi and
+  BGLE task groups atomically, shares one allocator and crypto service, and
+  keeps the station-only incremental worker out of the access-point profile.
+- Add an SLE-connected station fixture for measuring local Wi-Fi traffic while
+  the SLE link remains established on a two-board rig.
+
+### Changed
+
+- Separate the shared Wi-Fi/SLE feature shape from the station incremental
+  runner so AP authenticator and STA supplicant target archives remain
+  mutually exclusive and fail closed under Cargo feature unification.
+
 ## [0.1.0-alpha.90] - 2026-08-31
 
 ### Added
