@@ -455,11 +455,16 @@ async fn wifi_traffic_while_protocol_active(
         uart.write(&hex8(u32::from(round)));
         uart.write(b" count=0x");
         uart.write(&hex8(u32::try_from(outcome.count).unwrap_or(u32::MAX)));
-        uart.write(b"\r\n");
-        selected = results[..outcome.count]
+        let observed = results[..outcome.count]
             .iter()
             .copied()
             .find(|result| result.ssid.as_bytes() == COEX_TEST_SSID);
+        uart.write(b" target=0x");
+        uart.write(&hex8(u32::from(observed.is_some())));
+        uart.write(b"\r\n");
+        if observed.is_some() {
+            selected = observed;
+        }
         write_heap_metrics(uart, b"RFDBG_COEX_HEAP_AFTER_SCAN");
         Timer::after(Duration::from_millis(COEX_SCAN_SETTLE_MS)).await;
     }
