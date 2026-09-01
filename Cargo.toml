@@ -110,7 +110,22 @@ required-features = ["coexistence-wifi-ble", "wpa2-personal", "firmware-example"
 [[example]]
 name = "wifi_sle_coexistence_smoke"
 path = "examples/wifi_sle_coexistence_smoke.rs"
-required-features = ["coexistence-wifi-sle", "wpa2-personal", "firmware-example"]
+required-features = [
+    "coexistence-wifi-sle",
+    "incremental-embassy-wait",
+    "wpa2-personal",
+    "firmware-example",
+]
+
+[[example]]
+name = "wifi_sle_connected_client_smoke"
+path = "examples/wifi_sle_connected_client_smoke.rs"
+required-features = [
+    "coexistence-wifi-sle",
+    "incremental-embassy-wait",
+    "wpa2-personal",
+    "firmware-example",
+]
 
 [dependencies]
 hisi-alloc = "0.1.0-alpha.3"
@@ -165,7 +180,7 @@ sle-init = [
 # Maintainer-only coexistence compositions. The public facade does not expose
 # these profiles until their exact resource report and two-board HIL pass.
 coexistence-wifi-ble = ["wifi", "ble-init", "incremental-embassy-wait", "net"]
-coexistence-wifi-sle = ["wifi", "sle-init", "incremental-embassy-wait", "net"]
+coexistence-wifi-sle = ["wifi", "sle-init", "net"]
 # Maintainer-only stage markers around the synchronous vendor BLE enable path.
 # This never changes the default B1 link or exposes a user-facing BLE API.
 ble-init-diag = ["ble-init", "hisi-crypto-ws63/diagnostics"]

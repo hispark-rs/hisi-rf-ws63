@@ -1055,12 +1055,7 @@ pub fn init_access_point<const N: usize>(
         )
         .map_err(AccessPointInitError::Runtime)?;
         hisi_rf_rtos_driver::current_task().map_err(AccessPointInitError::Runtime)?;
-        if AP_CLAIMED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(AccessPointInitError::StorageAlreadyClaimed);
-        }
+        claim_access_point_instance()?;
 
         let control = resources.storage.control;
         if control
@@ -1077,79 +1072,106 @@ pub fn init_access_point<const N: usize>(
             return Err(AccessPointInitError::Runtime(error));
         }
 
-        crate::force_link_contract();
-        unsafe { crate::prepare_vendor_memory() };
-        let timebase = crate::uapi::initialize_rom_timebases();
-        if timebase != 0 {
-            return Err(AccessPointInitError::Timebase(timebase));
-        }
-        let _efuse = resources.efuse;
-        crate::uapi::enable_efuse_reads();
         let crypto = control.crypto.init(Ws63CryptoStorage::new());
-        crate::crypto::install_hardware_crypto(
+        initialize_access_point_platform(
+            resources.efuse,
             resources.km,
             resources.spacc,
             resources.pke,
             resources.trng,
             crypto,
-        )
-        .map_err(|_| AccessPointInitError::Crypto(0xffff_2001))?;
-        #[cfg(feature = "upstream-authenticator-wpa3")]
-        crate::crypto::ws63_p256_self_test()
-            .map_err(|_| AccessPointInitError::Crypto(0xffff_2002))?;
-
-        let init = unsafe { uapi_wifi_init(2, 7) };
-        if init != 0 {
-            return Err(AccessPointInitError::WifiInitialize(init));
-        }
-        let mut ifname = [0_u8; IFNAME_CAPACITY];
-        let mut length = (IFNAME_CAPACITY - 1) as u32;
-        let create = unsafe {
-            wal_init_drv_wlan_netdev(
-                AP_INTERFACE_TYPE,
-                MODE_11B_G_N_AX,
-                ifname.as_mut_ptr().cast(),
-                &mut length,
-            )
-        };
-        if create != 0
-            || length == 0
-            || length as usize >= IFNAME_CAPACITY
-            || ifname[length as usize] != 0
-        {
-            return Err(AccessPointInitError::CreateInterface(create));
-        }
-        let register = unsafe { drv_soc_register_send_event_cb(Some(ap_event)) };
-        if register != 0 {
-            return Err(AccessPointInitError::RegisterEvents(register));
-        }
-        prepare_upstream_authenticator_port(&ifname[..length as usize])
-            .map_err(AccessPointInitError::Authenticator)?;
-        let mut eapol = EnableEapol {
-            callback: Some(eapol_event),
-            context: core::ptr::null_mut(),
-        };
-        let enable = crate::wal::ioctl(
-            DRIVER_CONTEXT.ifname(),
-            IOCTL_ENABLE_EAPOL,
-            (&mut eapol as *mut EnableEapol).cast(),
-        );
-        if enable != 0 {
-            return Err(AccessPointInitError::Authenticator(
-                NativeAuthenticatorError::Abi(enable),
-            ));
-        }
-        let mut authenticator =
-            NativeAuthenticator::new(config).map_err(AccessPointInitError::Authenticator)?;
-        authenticator
-            .start()
-            .map_err(AccessPointInitError::Authenticator)?;
-        crate::netif_smoltcp::set_tx_sink(crate::netif::vendor_tx_sink);
-        Ok(AccessPoint {
-            authenticator,
-            network_device_taken: false,
-        })
+        )?;
+        start_access_point(config)
     }
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn claim_access_point_instance() -> Result<(), AccessPointInitError> {
+    AP_CLAIMED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| AccessPointInitError::StorageAlreadyClaimed)
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn initialize_access_point_platform(
+    _efuse: Efuse<'static>,
+    km: Km<'static>,
+    spacc: Spacc<'static>,
+    pke: Option<Pke<'static>>,
+    trng: Trng<'static>,
+    crypto: &'static mut Ws63CryptoStorage,
+) -> Result<(), AccessPointInitError> {
+    crate::force_link_contract();
+    unsafe { crate::prepare_vendor_memory() };
+    let timebase = crate::uapi::initialize_rom_timebases();
+    if timebase != 0 {
+        return Err(AccessPointInitError::Timebase(timebase));
+    }
+    crate::uapi::enable_efuse_reads();
+    crate::crypto::install_hardware_crypto(km, spacc, pke, trng, crypto)
+        .map_err(|_| AccessPointInitError::Crypto(0xffff_2001))?;
+    #[cfg(feature = "upstream-authenticator-wpa3")]
+    crate::crypto::ws63_p256_self_test().map_err(|_| AccessPointInitError::Crypto(0xffff_2002))?;
+
+    let init = unsafe { uapi_wifi_init(2, 7) };
+    if init != 0 {
+        return Err(AccessPointInitError::WifiInitialize(init));
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv32")]
+pub(crate) fn start_access_point(
+    config: AccessPointConfig<'_>,
+) -> Result<AccessPoint, AccessPointInitError> {
+    let mut ifname = [0_u8; IFNAME_CAPACITY];
+    let mut length = (IFNAME_CAPACITY - 1) as u32;
+    let create = unsafe {
+        wal_init_drv_wlan_netdev(
+            AP_INTERFACE_TYPE,
+            MODE_11B_G_N_AX,
+            ifname.as_mut_ptr().cast(),
+            &mut length,
+        )
+    };
+    if create != 0
+        || length == 0
+        || length as usize >= IFNAME_CAPACITY
+        || ifname[length as usize] != 0
+    {
+        return Err(AccessPointInitError::CreateInterface(create));
+    }
+    let register = unsafe { drv_soc_register_send_event_cb(Some(ap_event)) };
+    if register != 0 {
+        return Err(AccessPointInitError::RegisterEvents(register));
+    }
+    prepare_upstream_authenticator_port(&ifname[..length as usize])
+        .map_err(AccessPointInitError::Authenticator)?;
+    let mut eapol = EnableEapol {
+        callback: Some(eapol_event),
+        context: core::ptr::null_mut(),
+    };
+    let enable = crate::wal::ioctl(
+        DRIVER_CONTEXT.ifname(),
+        IOCTL_ENABLE_EAPOL,
+        (&mut eapol as *mut EnableEapol).cast(),
+    );
+    if enable != 0 {
+        return Err(AccessPointInitError::Authenticator(
+            NativeAuthenticatorError::Abi(enable),
+        ));
+    }
+    let mut authenticator =
+        NativeAuthenticator::new(config).map_err(AccessPointInitError::Authenticator)?;
+    authenticator
+        .start()
+        .map_err(AccessPointInitError::Authenticator)?;
+    crate::netif_smoltcp::set_tx_sink(crate::netif::vendor_tx_sink);
+    Ok(AccessPoint {
+        authenticator,
+        network_device_taken: false,
+    })
 }
 
 #[cfg(target_arch = "riscv32")]

@@ -683,7 +683,14 @@ pub use station_pm_diag::{
     target_arch = "riscv32",
     all(
         feature = "net",
-        any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+        any(
+            feature = "wifi-personal",
+            feature = "upstream-supplicant-port",
+            all(
+                feature = "coexistence-wifi-sle",
+                feature = "upstream-authenticator-wpa2"
+            )
+        )
     )
 ))]
 pub(crate) const WS63_WIFI_VENDOR_DYNAMIC_TASKS_REQUIRED: usize = 7;
@@ -775,8 +782,23 @@ pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supp
 
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        all(
+            feature = "coexistence-wifi-sle",
+            feature = "upstream-authenticator-wpa2"
+        )
+    )
 ))]
+#[cfg_attr(
+    all(
+        feature = "coexistence-wifi-sle",
+        feature = "upstream-authenticator-wpa2",
+        not(feature = "upstream-supplicant-port")
+    ),
+    allow(dead_code)
+)]
 mod composition;
 #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
 #[allow(dead_code)] // STA and AP diagnostic fixtures consume different counters.
@@ -800,8 +822,23 @@ mod incremental_worker;
 pub use incremental_wait::{Ws63IncrementalWaitDiagnostics, incremental_wait_diagnostics};
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        all(
+            feature = "coexistence-wifi-sle",
+            feature = "upstream-authenticator-wpa2"
+        )
+    )
 ))]
+#[cfg_attr(
+    all(
+        feature = "coexistence-wifi-sle",
+        feature = "upstream-authenticator-wpa2",
+        not(feature = "upstream-supplicant-port")
+    ),
+    allow(dead_code)
+)]
 mod profile;
 #[cfg(all(
     feature = "net",
@@ -809,6 +846,16 @@ mod profile;
     feature = "upstream-supplicant-port"
 ))]
 pub use composition::IncrementalWorkerDiagnostics;
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use composition::{
+    AccessPointSleCoexistenceController, AccessPointSleCoexistenceInitError, Resources,
+    init_access_point_sle_coexistence,
+};
 #[cfg(all(
     feature = "net",
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
@@ -844,7 +891,11 @@ pub use composition::{RadioController, init};
 pub use composition::{
     WifiBleCoexistenceController, WifiBleCoexistenceInitError, init_wifi_ble_coexistence,
 };
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub use composition::{
     WifiSleCoexistenceController, WifiSleCoexistenceInitError, init_wifi_sle_coexistence,
@@ -868,6 +919,12 @@ pub use profile::SELECTED_TASK_STACK_ARENA_BYTES;
 ))]
 pub use profile::SelectedProfile;
 #[cfg(all(
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use profile::WifiWpa2AccessPointSleCoexistence;
+#[cfg(all(
     feature = "net",
     any(
         all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
@@ -881,6 +938,15 @@ pub use profile::{
     TaskGroupPlan, WifiResourcePlan, WifiWpa2BleCoexistence, WifiWpa2SleCoexistence,
     WifiWpa2Smoltcp, WifiWpa3BleCoexistence, WifiWpa3SleCoexistence, WifiWpa3Smoltcp,
     resource_report, wifi_resource_plan,
+};
+#[cfg(all(
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use profile::{
+    InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena, RadioArenaStorage,
+    RadioStorage, Storage,
 };
 
 /// Declare all caller-owned storage for the selected named radio profile.

@@ -505,6 +505,26 @@ coexistence_profile!(
     "wpa3-personal"
 );
 
+/// WPA2 SoftAP plus SLE maintainer profile used by the two-board U7 gate.
+///
+/// The access-point runner is synchronous and therefore does not reserve the
+/// station-only incremental worker selected by the coexistence Cargo feature.
+#[cfg(feature = "upstream-authenticator-wpa2")]
+pub enum WifiWpa2AccessPointSleCoexistence {}
+
+#[cfg(feature = "upstream-authenticator-wpa2")]
+impl sealed::Sealed for WifiWpa2AccessPointSleCoexistence {}
+#[cfg(feature = "upstream-authenticator-wpa2")]
+impl Profile for WifiWpa2AccessPointSleCoexistence {
+    const ID: &'static str = "wifi-wpa2-softap-sle-coexistence";
+    const SECURITY: &'static str = "wpa2-personal";
+    const WORKER_TASKS: Option<TaskGroupPlan> = None;
+    const COEXISTENCE_TASKS: [Option<TaskGroupPlan>; 4] = BGLE_COEXISTENCE_TASKS;
+    const RF_ARENA_BYTES: usize =
+        PROFILE_SHARED_ARENA_BYTES - Self::RUNTIME_ARENA_BYTES - RADIO_ARENA_STORAGE_OVERHEAD_BYTES;
+    const RUNTIME_RESOURCES_CALIBRATED: bool = false;
+}
+
 /// Marker for profiles that share the Wi-Fi composition with one BGLE stack.
 #[doc(hidden)]
 pub trait CoexistenceProfile: Profile {}
@@ -513,6 +533,8 @@ impl CoexistenceProfile for WifiWpa2BleCoexistence {}
 impl CoexistenceProfile for WifiWpa2SleCoexistence {}
 impl CoexistenceProfile for WifiWpa3BleCoexistence {}
 impl CoexistenceProfile for WifiWpa3SleCoexistence {}
+#[cfg(feature = "upstream-authenticator-wpa2")]
+impl CoexistenceProfile for WifiWpa2AccessPointSleCoexistence {}
 
 /// Marker implemented only for the profile selected by Cargo features.
 #[doc(hidden)]
@@ -1403,6 +1425,24 @@ mod tests {
         assert_eq!(report.coexistence_task_slots, 4);
         assert_eq!(report.coexistence_stack_bytes, 10_240);
         assert!(!report.runtime_resources_calibrated);
+    }
+
+    #[cfg(feature = "upstream-authenticator-wpa2")]
+    #[test]
+    fn access_point_sle_profile_excludes_station_worker() {
+        let plan = wifi_resource_plan::<WifiWpa2AccessPointSleCoexistence, 8>();
+        assert_eq!(plan.worker, None);
+        assert_eq!(plan.coexistence, BGLE_COEXISTENCE_TASKS);
+        assert_eq!(plan.total_task_slots(), 11);
+        assert_eq!(plan.total_stack_bytes(), 7 * 24 * 1024 + 10_240);
+        assert_eq!(
+            plan.runtime_arena_bytes(),
+            WifiWpa2AccessPointSleCoexistence::RUNTIME_ARENA_BYTES
+        );
+        let report = resource_report::<WifiWpa2AccessPointSleCoexistence, 8>();
+        assert_eq!(report.profile, "wifi-wpa2-softap-sle-coexistence");
+        assert_eq!(report.worker_task_slots, None);
+        assert_eq!(report.coexistence_task_slots, 4);
     }
 
     #[cfg(feature = "coexistence-wifi-ble")]

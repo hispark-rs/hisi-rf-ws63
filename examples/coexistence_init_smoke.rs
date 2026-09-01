@@ -32,6 +32,8 @@ use smoltcp::time::Instant as NetInstant;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use static_cell::StaticCell;
+#[cfg(feature = "coexistence-wifi-sle")]
+use ws63_radio_sys::sle::{Address, CONNECTION_STATE_CONNECTED};
 
 const EVENT_DEPTH: usize = 8;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
@@ -83,6 +85,17 @@ static BLE_CONTROLLER: StaticCell<hisi_rf_ws63::BleB1Controller> = StaticCell::n
 static SLE_CONTROLLER: StaticCell<hisi_rf_ws63::SleS1Controller> = StaticCell::new();
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 static COEX_ACTIVITY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "coexistence-wifi-sle")]
+const SLE_CLIENT_ADDRESS: Address = Address {
+    address_type: 0,
+    bytes: [0x13, 0x67, 0x5c, 0x07, 0x00, 0x51],
+};
+#[cfg(feature = "coexistence-wifi-sle")]
+const SLE_SERVER_ADDRESS: Address = Address {
+    address_type: 0,
+    bytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+};
 
 hisi_rtos::bind_interrupts!(struct RtosIrqs {
     TIMER_INT0 => hisi_rtos::ws63::TimerInterrupt;
@@ -308,17 +321,27 @@ async fn sle_announce_activity(
     uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
 ) {
     let mut started = false;
+    let mut connect_after_stop = false;
     loop {
         while let Some(event) = controller.next_event() {
             match event {
                 hisi_rf_ws63::SleS1Event::Enabled { status: 0 } if !started => {
-                    static mut ANNOUNCE_DATA: [u8; 7] = [1, 1, 1, 3, 2, 0x0b, 0x06];
-                    static mut SEEK_RESPONSE_DATA: [u8; 10] =
-                        [5, 8, b'H', b'I', b'S', b'I', b'S', b'L', b'E', b'1'];
-                    let announce = unsafe { &mut *core::ptr::addr_of_mut!(ANNOUNCE_DATA) };
-                    let response = unsafe { &mut *core::ptr::addr_of_mut!(SEEK_RESPONSE_DATA) };
-                    if controller.start_announce(announce, response).is_err() {
-                        fail(uart, b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=start\r\n")
+                    if SLE_CONNECTED_CLIENT {
+                        if controller.set_local_address(SLE_CLIENT_ADDRESS).is_err()
+                            || controller.configure_default_connection().is_err()
+                            || controller.start_seek().is_err()
+                        {
+                            fail(uart, b"RFDBG_COEX_SLE_CONNECT_ERR stage=seek\r\n")
+                        }
+                    } else {
+                        static mut ANNOUNCE_DATA: [u8; 7] = [1, 1, 1, 3, 2, 0x0b, 0x06];
+                        static mut SEEK_RESPONSE_DATA: [u8; 10] =
+                            [5, 8, b'H', b'I', b'S', b'I', b'S', b'L', b'E', b'1'];
+                        let announce = unsafe { &mut *core::ptr::addr_of_mut!(ANNOUNCE_DATA) };
+                        let response = unsafe { &mut *core::ptr::addr_of_mut!(SEEK_RESPONSE_DATA) };
+                        if controller.start_announce(announce, response).is_err() {
+                            fail(uart, b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=start\r\n")
+                        }
                     }
                     started = true;
                 }
@@ -327,6 +350,31 @@ async fn sle_announce_activity(
                         COEX_ACTIVITY_ACTIVE.store(true, Ordering::Release);
                         uart.write(b"RFDBG_COEX_SLE_ANNOUNCE_ACTIVE\r\n");
                     }
+                }
+                hisi_rf_ws63::SleS1Event::SeekResult { address, .. }
+                    if SLE_CONNECTED_CLIENT
+                        && address == SLE_SERVER_ADDRESS
+                        && !connect_after_stop =>
+                {
+                    if controller.stop_seek().is_err() {
+                        fail(uart, b"RFDBG_COEX_SLE_CONNECT_ERR stage=stop_seek\r\n")
+                    }
+                    connect_after_stop = true;
+                }
+                hisi_rf_ws63::SleS1Event::SeekDisabled { status: 0 }
+                    if SLE_CONNECTED_CLIENT && connect_after_stop =>
+                {
+                    if controller.connect(&SLE_SERVER_ADDRESS).is_err() {
+                        fail(uart, b"RFDBG_COEX_SLE_CONNECT_ERR stage=connect\r\n")
+                    }
+                    connect_after_stop = false;
+                }
+                hisi_rf_ws63::SleS1Event::ConnectionStateChanged {
+                    connection_state: CONNECTION_STATE_CONNECTED,
+                    ..
+                } if SLE_CONNECTED_CLIENT => {
+                    COEX_ACTIVITY_ACTIVE.store(true, Ordering::Release);
+                    uart.write(b"RFDBG_COEX_SLE_CONNECTED\r\n");
                 }
                 hisi_rf_ws63::SleS1Event::Enabled { status }
                 | hisi_rf_ws63::SleS1Event::AnnounceEnabled { status, .. } => {
@@ -361,7 +409,7 @@ async fn wifi_traffic_while_protocol_active(
             #[cfg(feature = "coexistence-wifi-ble")]
             fail(uart, b"RFDBG_COEX_BLE_ADV_ERR stage=timeout\r\n");
             #[cfg(feature = "coexistence-wifi-sle")]
-            fail(uart, b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=timeout\r\n");
+            fail(uart, b"RFDBG_COEX_SLE_ACTIVITY_ERR stage=timeout\r\n");
         }
         Timer::after(Duration::from_millis(5)).await;
     }
@@ -384,7 +432,7 @@ async fn wifi_traffic_while_protocol_active(
             #[cfg(feature = "coexistence-wifi-sle")]
             fail(
                 uart,
-                b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=inactive_during_scan\r\n",
+                b"RFDBG_COEX_SLE_ACTIVITY_ERR stage=inactive_during_scan\r\n",
             );
         }
         let scan = controller.scan(
@@ -450,7 +498,11 @@ async fn wifi_traffic_while_protocol_active(
     #[cfg(feature = "coexistence-wifi-ble")]
     uart.write(b"RFDBG_COEX_WIFI_BLE_TRAFFIC_OK scans=0x");
     #[cfg(feature = "coexistence-wifi-sle")]
-    uart.write(b"RFDBG_COEX_WIFI_SLE_TRAFFIC_OK scans=0x");
+    if SLE_CONNECTED_CLIENT {
+        uart.write(b"RFDBG_COEX_WIFI_SLE_CONNECTED_TRAFFIC_OK scans=0x");
+    } else {
+        uart.write(b"RFDBG_COEX_WIFI_SLE_TRAFFIC_OK scans=0x");
+    }
     uart.write(&hex8(u32::from(COEX_SCAN_ROUNDS)));
     uart.write(b" echo=0x");
     uart.write(&hex8(u32::from(received)));

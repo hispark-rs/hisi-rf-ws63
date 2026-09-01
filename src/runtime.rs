@@ -22,7 +22,7 @@ pub(crate) fn task_reservation_installed() -> bool {
         any(feature = "wifi-personal", feature = "upstream-supplicant-port")
     ),
     all(
-        target_arch = "riscv32",
+        any(target_arch = "riscv32", feature = "coexistence-wifi-sle"),
         any(
             feature = "upstream-authenticator-wpa2",
             feature = "upstream-authenticator-wpa3"

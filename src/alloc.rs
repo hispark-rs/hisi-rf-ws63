@@ -10,7 +10,14 @@ use portable_atomic::{AtomicU32, AtomicUsize, Ordering};
 
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        all(
+            feature = "coexistence-wifi-sle",
+            feature = "upstream-authenticator-wpa2"
+        )
+    )
 ))]
 use crate::profile::{ArenaAdmissionError, Profile, RadioArena};
 
@@ -174,7 +181,14 @@ fn ensure_heap() -> bool {
 
 #[cfg(all(
     feature = "net",
-    any(feature = "wifi-personal", feature = "upstream-supplicant-port")
+    any(
+        feature = "wifi-personal",
+        feature = "upstream-supplicant-port",
+        all(
+            feature = "coexistence-wifi-sle",
+            feature = "upstream-authenticator-wpa2"
+        )
+    )
 ))]
 pub(crate) fn install_arena<P: Profile>(arena: RadioArena<P>) -> Result<(), ArenaAdmissionError> {
     // SAFETY: `RadioArena` is produced by the one-shot claim on static storage,

@@ -1,5 +1,6 @@
 //! WS63 implementation of the chip-neutral `hisi-rf` control contract.
 
+use crate::error::{runtime_code, task_admission_code};
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Pke, Spacc, Trng};
 use hisi_rf_core::{BackendError, BackendErrorClass, DiagnosticStage, DiagnosticTraceKind};
@@ -955,65 +956,6 @@ const fn channel_to_frequency(channel: u8) -> u16 {
         2407 + channel as u16 * 5
     } else {
         0
-    }
-}
-
-pub(crate) fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
-    use hisi_rf_rtos_driver::Error;
-    match error {
-        Error::NotInstalled => 1,
-        Error::AlreadyInstalled => 2,
-        Error::ResourceExhausted => 3,
-        Error::NoTaskSlots => 4,
-        Error::InvalidHandle => 5,
-        Error::InvalidContext => 6,
-        Error::TimedOut => 7,
-        Error::Runtime => 8,
-        Error::IncompatibleContract => 9,
-        Error::IncompatibleExecutionProfile => 10,
-    }
-}
-
-pub(crate) fn task_admission_code(error: hisi_rf_rtos_driver::TaskAdmissionError) -> u32 {
-    match error {
-        hisi_rf_rtos_driver::TaskAdmissionError::Runtime(error) => 0x1_0000 | runtime_code(error),
-        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
-            required,
-            available,
-        } => {
-            let required = required.min(u8::MAX as usize) as u32;
-            let available = available.min(u8::MAX as usize) as u32;
-            (required << 8) | available
-        }
-        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskStackMemory {
-            required,
-            available,
-        } => {
-            let required_kib = (required / 1024).min(u16::MAX as usize) as u32;
-            let available_kib = (available / 1024).min(u16::MAX as usize) as u32;
-            0x8000_0000 | (required_kib << 16) | available_kib
-        }
-        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupSlots {
-            owner,
-            required,
-            available,
-        } => {
-            let owner = owner.into_raw().get().min(u8::MAX as u32);
-            let required = required.min(u8::MAX as usize) as u32;
-            let available = available.min(u8::MAX as usize) as u32;
-            0x4000_0000 | (owner << 16) | (required << 8) | available
-        }
-        hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskGroupStackMemory {
-            owner,
-            required,
-            available,
-            ..
-        } => {
-            let owner = owner.into_raw().get().min(u8::MAX as u32);
-            let required_kib = (required / 1024).min(u8::MAX as usize) as u32;
-            let available_kib = (available / 1024).min(u8::MAX as usize) as u32;
-            0xc000_0000 | (owner << 16) | (required_kib << 8) | available_kib
-        }
     }
 }
 

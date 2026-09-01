@@ -1062,14 +1062,22 @@ pub fn init_wifi_ble_coexistence<
 }
 
 /// Maintainer-only Wi-Fi/SLE composition returned after one atomic admission.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub struct WifiSleCoexistenceController<P: Profile + 'static, const EVENTS: usize> {
     wifi: IncrementalRadioController<P, EVENTS>,
     sle: crate::sle::SleS1Controller,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "incremental-embassy-wait"
+))]
 impl<P: Profile + 'static, const EVENTS: usize> WifiSleCoexistenceController<P, EVENTS> {
     /// Split the already-admitted protocol controllers for maintainer HIL.
     pub fn split(
@@ -1083,7 +1091,11 @@ impl<P: Profile + 'static, const EVENTS: usize> WifiSleCoexistenceController<P, 
 }
 
 /// Failure while starting the maintainer Wi-Fi/SLE coexistence composition.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "incremental-embassy-wait"
+))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub enum WifiSleCoexistenceInitError {
@@ -1092,7 +1104,11 @@ pub enum WifiSleCoexistenceInitError {
 }
 
 /// Start Wi-Fi and SLE from one arena, one crypto service, and one admission transaction.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-sle"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub fn init_wifi_sle_coexistence<
     P: crate::profile::CoexistenceProfile + ActiveProfile + 'static,
@@ -1115,6 +1131,92 @@ pub fn init_wifi_sle_coexistence<
     let sle = crate::sle::init_sle_s1_coexisting(sle_storage, reservations, offset)
         .map_err(WifiSleCoexistenceInitError::Sle)?;
     Ok(WifiSleCoexistenceController { wifi, sle })
+}
+
+/// Maintainer-only WPA2 SoftAP/SLE composition for two-board connected traffic HIL.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub struct AccessPointSleCoexistenceController {
+    access_point: crate::upstream_authenticator::AccessPoint,
+    sle: crate::sle::SleS1Controller,
+}
+
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+impl AccessPointSleCoexistenceController {
+    /// Split the already-admitted access-point and SLE controllers.
+    pub fn split(
+        self,
+    ) -> (
+        crate::upstream_authenticator::AccessPoint,
+        crate::sle::SleS1Controller,
+    ) {
+        (self.access_point, self.sle)
+    }
+}
+
+/// Failure while starting the maintainer WPA2 SoftAP/SLE composition.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum AccessPointSleCoexistenceInitError {
+    Admission(InitError),
+    AccessPoint(crate::upstream_authenticator::AccessPointInitError),
+    Sle(crate::sle::SleS1InitError),
+}
+
+/// Start a WPA2 SoftAP and SLE from one arena, crypto service, and admission transaction.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-sle",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub fn init_access_point_sle_coexistence<
+    P: crate::profile::CoexistenceProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: crate::upstream_authenticator::AccessPointConfig<'_>,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<AccessPointSleCoexistenceController, AccessPointSleCoexistenceInitError> {
+    let (claimed, reservations, offset) = claim_profile_storage_with_coexistence(storage)
+        .map_err(AccessPointSleCoexistenceInitError::Admission)?;
+    crate::upstream_authenticator::claim_access_point_instance()
+        .map_err(AccessPointSleCoexistenceInitError::AccessPoint)?;
+    let Resources {
+        efuse,
+        km,
+        spacc,
+        pke,
+        trng,
+        _arena: _,
+    } = resources;
+    crate::upstream_authenticator::initialize_access_point_platform(
+        efuse,
+        km,
+        spacc,
+        pke,
+        trng,
+        claimed.crypto,
+    )
+    .map_err(AccessPointSleCoexistenceInitError::AccessPoint)?;
+    let access_point = crate::upstream_authenticator::start_access_point(config)
+        .map_err(AccessPointSleCoexistenceInitError::AccessPoint)?;
+    let sle = crate::sle::init_sle_s1_coexisting(claimed.sle, reservations, offset)
+        .map_err(AccessPointSleCoexistenceInitError::Sle)?;
+    Ok(AccessPointSleCoexistenceController { access_point, sle })
 }
 
 /// Migration alias for [`init_incremental`].
@@ -1148,10 +1250,7 @@ fn claim_profile_storage<
     Ok(claimed)
 }
 
-fn claim_profile_storage_with_coexistence<
-    P: Profile + ActiveProfile + 'static,
-    const EVENTS: usize,
->(
+fn claim_profile_storage_with_coexistence<P: Profile + 'static, const EVENTS: usize>(
     storage: &'static Storage<P, EVENTS>,
 ) -> Result<
     (
@@ -1321,7 +1420,7 @@ fn runtime_diagnostic(error: hisi_rf_rtos_driver::Error) -> Diagnostic {
         hisi_rf_rtos_driver::Error::TimedOut => BackendErrorClass::BackendTimeout,
         _ => BackendErrorClass::Other,
     };
-    let code = crate::hisi_rf_backend::runtime_code(error);
+    let code = crate::error::runtime_code(error);
     Error::Backend(
         BackendError::new(class, 0x5732_e000 | code)
             .with_stage(DiagnosticStage::Runtime)
@@ -1332,7 +1431,7 @@ fn runtime_diagnostic(error: hisi_rf_rtos_driver::Error) -> Diagnostic {
 }
 
 fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> Diagnostic {
-    let code = crate::hisi_rf_backend::task_admission_code(error);
+    let code = crate::error::task_admission_code(error);
     let mut backend = match error {
         hisi_rf_rtos_driver::TaskAdmissionError::Runtime(runtime) => {
             let class = match runtime {
@@ -1343,7 +1442,7 @@ fn task_admission_diagnostic(error: hisi_rf_rtos_driver::TaskAdmissionError) -> 
             };
             BackendError::new(class, 0x5732_a000 | code).with_trace(
                 DiagnosticTraceKind::RuntimeCode,
-                crate::hisi_rf_backend::runtime_code(runtime),
+                crate::error::runtime_code(runtime),
             )
         }
         hisi_rf_rtos_driver::TaskAdmissionError::InsufficientTaskSlots {
