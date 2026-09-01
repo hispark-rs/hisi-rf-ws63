@@ -262,6 +262,7 @@ async fn ble_advertising_activity(
     uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
 ) {
     let mut command_started = false;
+    let mut connecting = false;
     let mut data_ready = false;
     let mut parameters_ready = false;
     let mut advertising_started = false;
@@ -271,8 +272,35 @@ async fn ble_advertising_activity(
             match event {
                 hisi_rf_ws63::BleB2Event::Enabled { status: 0 } if !command_started => {
                     command_started = true;
-                    if controller.start_advertising(BLE_ADVERTISING_DATA).is_err() {
+                    if BLE_CONNECTED_CLIENT {
+                        if controller.start_scanning().is_err() {
+                            fail(uart, b"RFDBG_COEX_BLE_CONNECT_ERR stage=scan\r\n")
+                        }
+                    } else if controller.start_advertising(BLE_ADVERTISING_DATA).is_err() {
                         fail(uart, b"RFDBG_COEX_BLE_ADV_ERR stage=start\r\n")
+                    }
+                }
+                hisi_rf_ws63::BleB2Event::ScanResult {
+                    address,
+                    address_type,
+                    data_len,
+                    data,
+                    ..
+                } if BLE_CONNECTED_CLIENT && !connecting => {
+                    let length = usize::from(data_len).min(data.len());
+                    if data[..length] == *BLE_ADVERTISING_DATA {
+                        if controller.connect(address, address_type).is_err() {
+                            fail(uart, b"RFDBG_COEX_BLE_CONNECT_ERR stage=connect\r\n")
+                        }
+                        connecting = true;
+                    }
+                }
+                hisi_rf_ws63::BleB2Event::ConnectionState {
+                    connected: true, ..
+                } if BLE_CONNECTED_CLIENT => {
+                    if !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
+                        COEX_ACTIVITY_ACTIVE.store(true, Ordering::Release);
+                        uart.write(b"RFDBG_COEX_BLE_CONNECTED\r\n");
                     }
                 }
                 hisi_rf_ws63::BleB2Event::AdvertisingData { status: 0, .. } => {
@@ -296,7 +324,8 @@ async fn ble_advertising_activity(
                 _ => {}
             }
         }
-        if data_ready
+        if !BLE_CONNECTED_CLIENT
+            && data_ready
             && parameters_ready
             && advertising_started
             && !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire)
@@ -501,7 +530,11 @@ async fn wifi_traffic_while_protocol_active(
         halt()
     }
     #[cfg(feature = "coexistence-wifi-ble")]
-    uart.write(b"RFDBG_COEX_WIFI_BLE_TRAFFIC_OK scans=0x");
+    if BLE_CONNECTED_CLIENT {
+        uart.write(b"RFDBG_COEX_WIFI_BLE_CONNECTED_TRAFFIC_OK scans=0x");
+    } else {
+        uart.write(b"RFDBG_COEX_WIFI_BLE_TRAFFIC_OK scans=0x");
+    }
     #[cfg(feature = "coexistence-wifi-sle")]
     if SLE_CONNECTED_CLIENT {
         uart.write(b"RFDBG_COEX_WIFI_SLE_CONNECTED_TRAFFIC_OK scans=0x");

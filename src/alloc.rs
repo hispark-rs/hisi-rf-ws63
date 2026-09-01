@@ -14,7 +14,7 @@ use portable_atomic::{AtomicU32, AtomicUsize, Ordering};
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
         all(
-            feature = "coexistence-wifi-sle",
+            any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
             feature = "upstream-authenticator-wpa2"
         )
     )
@@ -185,7 +185,7 @@ fn ensure_heap() -> bool {
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
         all(
-            feature = "coexistence-wifi-sle",
+            any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
             feature = "upstream-authenticator-wpa2"
         )
     )

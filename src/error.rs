@@ -32,7 +32,7 @@ pub fn check(code: Errcode) -> Result<(), WifiError> {
     feature = "wifi-personal",
     feature = "upstream-supplicant-port",
     all(
-        feature = "coexistence-wifi-sle",
+        any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
         feature = "upstream-authenticator-wpa2"
     )
 ))]
@@ -56,7 +56,7 @@ pub(crate) const fn runtime_code(error: hisi_rf_rtos_driver::Error) -> u32 {
     feature = "wifi-personal",
     feature = "upstream-supplicant-port",
     all(
-        feature = "coexistence-wifi-sle",
+        any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
         feature = "upstream-authenticator-wpa2"
     )
 ))]

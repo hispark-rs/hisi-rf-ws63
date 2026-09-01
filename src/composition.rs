@@ -1006,14 +1006,22 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
 }
 
 /// Maintainer-only Wi-Fi/BLE composition returned after one atomic admission.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub struct WifiBleCoexistenceController<P: Profile + 'static, const EVENTS: usize> {
     wifi: IncrementalRadioController<P, EVENTS>,
     ble: crate::ble::BleB1Controller,
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "incremental-embassy-wait"
+))]
 impl<P: Profile + 'static, const EVENTS: usize> WifiBleCoexistenceController<P, EVENTS> {
     /// Split the already-admitted protocol controllers for maintainer HIL.
     pub fn split(
@@ -1027,7 +1035,11 @@ impl<P: Profile + 'static, const EVENTS: usize> WifiBleCoexistenceController<P, 
 }
 
 /// Failure while starting the maintainer Wi-Fi/BLE coexistence composition.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "incremental-embassy-wait"
+))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub enum WifiBleCoexistenceInitError {
@@ -1036,7 +1048,11 @@ pub enum WifiBleCoexistenceInitError {
 }
 
 /// Start Wi-Fi and BLE from one arena, one crypto service, and one admission transaction.
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub fn init_wifi_ble_coexistence<
     P: crate::profile::CoexistenceProfile + ActiveProfile + 'static,
@@ -1131,6 +1147,92 @@ pub fn init_wifi_sle_coexistence<
     let sle = crate::sle::init_sle_s1_coexisting(sle_storage, reservations, offset)
         .map_err(WifiSleCoexistenceInitError::Sle)?;
     Ok(WifiSleCoexistenceController { wifi, sle })
+}
+
+/// Maintainer-only WPA2 SoftAP/BLE composition for two-board connected traffic HIL.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub struct AccessPointBleCoexistenceController {
+    access_point: crate::upstream_authenticator::AccessPoint,
+    ble: crate::ble::BleB1Controller,
+}
+
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "upstream-authenticator-wpa2"
+))]
+impl AccessPointBleCoexistenceController {
+    /// Split the already-admitted access-point and BLE controllers.
+    pub fn split(
+        self,
+    ) -> (
+        crate::upstream_authenticator::AccessPoint,
+        crate::ble::BleB1Controller,
+    ) {
+        (self.access_point, self.ble)
+    }
+}
+
+/// Failure while starting the maintainer WPA2 SoftAP/BLE composition.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum AccessPointBleCoexistenceInitError {
+    Admission(InitError),
+    AccessPoint(crate::upstream_authenticator::AccessPointInitError),
+    Ble(crate::ble::BleB1InitError),
+}
+
+/// Start a WPA2 SoftAP and BLE from one arena, crypto service, and admission transaction.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub fn init_access_point_ble_coexistence<
+    P: crate::profile::CoexistenceProfile + 'static,
+    const EVENTS: usize,
+>(
+    config: crate::upstream_authenticator::AccessPointConfig<'_>,
+    resources: Resources<P>,
+    storage: &'static Storage<P, EVENTS>,
+) -> Result<AccessPointBleCoexistenceController, AccessPointBleCoexistenceInitError> {
+    let (claimed, reservations, offset) = claim_profile_storage_with_coexistence(storage)
+        .map_err(AccessPointBleCoexistenceInitError::Admission)?;
+    crate::upstream_authenticator::claim_access_point_instance()
+        .map_err(AccessPointBleCoexistenceInitError::AccessPoint)?;
+    let Resources {
+        efuse,
+        km,
+        spacc,
+        pke,
+        trng,
+        _arena: _,
+    } = resources;
+    crate::upstream_authenticator::initialize_access_point_platform(
+        efuse,
+        km,
+        spacc,
+        pke,
+        trng,
+        claimed.crypto,
+    )
+    .map_err(AccessPointBleCoexistenceInitError::AccessPoint)?;
+    let access_point = crate::upstream_authenticator::start_access_point(config)
+        .map_err(AccessPointBleCoexistenceInitError::AccessPoint)?;
+    let ble = crate::ble::init_ble_b1_coexisting(claimed.ble, reservations, offset)
+        .map_err(AccessPointBleCoexistenceInitError::Ble)?;
+    Ok(AccessPointBleCoexistenceController { access_point, ble })
 }
 
 /// Maintainer-only WPA2 SoftAP/SLE composition for two-board connected traffic HIL.

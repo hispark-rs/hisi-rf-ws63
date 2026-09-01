@@ -687,7 +687,7 @@ pub use station_pm_diag::{
             feature = "wifi-personal",
             feature = "upstream-supplicant-port",
             all(
-                feature = "coexistence-wifi-sle",
+                any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
                 feature = "upstream-authenticator-wpa2"
             )
         )
@@ -786,14 +786,14 @@ pub use upstream_supplicant::{UpstreamSupplicantPortError, prepare_upstream_supp
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
         all(
-            feature = "coexistence-wifi-sle",
+            any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
             feature = "upstream-authenticator-wpa2"
         )
     )
 ))]
 #[cfg_attr(
     all(
-        feature = "coexistence-wifi-sle",
+        any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
         feature = "upstream-authenticator-wpa2",
         not(feature = "upstream-supplicant-port")
     ),
@@ -826,14 +826,14 @@ pub use incremental_wait::{Ws63IncrementalWaitDiagnostics, incremental_wait_diag
         feature = "wifi-personal",
         feature = "upstream-supplicant-port",
         all(
-            feature = "coexistence-wifi-sle",
+            any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
             feature = "upstream-authenticator-wpa2"
         )
     )
 ))]
 #[cfg_attr(
     all(
-        feature = "coexistence-wifi-sle",
+        any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
         feature = "upstream-authenticator-wpa2",
         not(feature = "upstream-supplicant-port")
     ),
@@ -846,6 +846,16 @@ mod profile;
     feature = "upstream-supplicant-port"
 ))]
 pub use composition::IncrementalWorkerDiagnostics;
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use composition::{
+    AccessPointBleCoexistenceController, AccessPointBleCoexistenceInitError,
+    init_access_point_ble_coexistence,
+};
 #[cfg(all(
     target_arch = "riscv32",
     feature = "coexistence-wifi-sle",
@@ -886,7 +896,11 @@ pub use composition::{IncrementalRadioParts, IncrementalRadioRunner};
     any(feature = "wifi-personal", feature = "upstream-supplicant-port")
 ))]
 pub use composition::{RadioController, init};
-#[cfg(all(target_arch = "riscv32", feature = "coexistence-wifi-ble"))]
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "coexistence-wifi-ble",
+    feature = "incremental-embassy-wait"
+))]
 #[doc(hidden)]
 pub use composition::{
     WifiBleCoexistenceController, WifiBleCoexistenceInitError, init_wifi_ble_coexistence,
@@ -919,12 +933,6 @@ pub use profile::SELECTED_TASK_STACK_ARENA_BYTES;
 ))]
 pub use profile::SelectedProfile;
 #[cfg(all(
-    feature = "coexistence-wifi-sle",
-    feature = "upstream-authenticator-wpa2"
-))]
-#[doc(hidden)]
-pub use profile::WifiWpa2AccessPointSleCoexistence;
-#[cfg(all(
     feature = "net",
     any(
         all(feature = "wpa2-personal", not(feature = "wpa3-personal")),
@@ -940,7 +948,7 @@ pub use profile::{
     resource_report, wifi_resource_plan,
 };
 #[cfg(all(
-    feature = "coexistence-wifi-sle",
+    any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
     feature = "upstream-authenticator-wpa2"
 ))]
 #[doc(hidden)]
@@ -948,6 +956,12 @@ pub use profile::{
     InstalledRadioArena, InstalledRadioStorage, Profile, RadioArena, RadioArenaStorage,
     RadioStorage, Storage,
 };
+#[cfg(all(
+    any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use profile::{WifiWpa2AccessPointBleCoexistence, WifiWpa2AccessPointSleCoexistence};
 
 /// Declare all caller-owned storage for the selected named radio profile.
 ///

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.95] - 2026-09-01
+
+### Added
+
+- Add a maintainer-only WPA2 SoftAP plus BLE composition and a connected BLE
+  station fixture for two-board Wi-Fi/BLE coexistence acceptance.
+
+### Fixed
+
+- Separate the shared Wi-Fi/BLE resource feature from the station-only
+  incremental runner so an access-point build selects only the authenticator
+  target archive, while station fixtures opt into the supplicant explicitly.
+
 ## [0.1.0-alpha.94] - 2026-09-01
 
 ### Fixed

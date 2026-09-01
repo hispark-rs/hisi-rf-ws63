@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.94"
+version = "0.1.0-alpha.95"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -105,7 +105,22 @@ required-features = ["sle-init", "firmware-example"]
 [[example]]
 name = "wifi_ble_coexistence_smoke"
 path = "examples/wifi_ble_coexistence_smoke.rs"
-required-features = ["coexistence-wifi-ble", "wpa2-personal", "firmware-example"]
+required-features = [
+    "coexistence-wifi-ble",
+    "incremental-embassy-wait",
+    "wpa2-personal",
+    "firmware-example",
+]
+
+[[example]]
+name = "wifi_ble_connected_client_smoke"
+path = "examples/wifi_ble_connected_client_smoke.rs"
+required-features = [
+    "coexistence-wifi-ble",
+    "incremental-embassy-wait",
+    "wpa2-personal",
+    "firmware-example",
+]
 
 [[example]]
 name = "wifi_sle_coexistence_smoke"
@@ -179,7 +194,7 @@ sle-init = [
 ]
 # Maintainer-only coexistence compositions. The public facade does not expose
 # these profiles until their exact resource report and two-board HIL pass.
-coexistence-wifi-ble = ["wifi", "ble-init", "incremental-embassy-wait", "net"]
+coexistence-wifi-ble = ["wifi", "ble-init", "net"]
 coexistence-wifi-sle = ["wifi", "sle-init", "net"]
 # Maintainer-only stage markers around the synchronous vendor BLE enable path.
 # This never changes the default B1 link or exposes a user-facing BLE API.

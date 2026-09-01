@@ -118,6 +118,8 @@ jobs:
             features: upstream-authenticator-wpa3
           - profile: wpa2-sle-coexistence
             features: upstream-authenticator-wpa2,coexistence-wifi-sle
+          - profile: wpa2-ble-coexistence
+            features: upstream-authenticator-wpa2,coexistence-wifi-ble
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -187,7 +189,9 @@ jobs:
       - name: Link the redacted WPA3 incremental connect profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa3-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-connect-profile,bootstrap-stage-diag,firmware-example
       - name: Link the credential-free Wi-Fi plus BLE shared-resource composition
-        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example wifi_ble_coexistence_smoke --features wpa2-personal,firmware-example,coexistence-wifi-ble
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example wifi_ble_coexistence_smoke --features wpa2-personal,firmware-example,coexistence-wifi-ble,incremental-embassy-wait
+      - name: Link the credential-free Wi-Fi plus connected BLE composition
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example wifi_ble_connected_client_smoke --features wpa2-personal,firmware-example,coexistence-wifi-ble,incremental-embassy-wait
       - name: Link the credential-free Wi-Fi plus SLE shared-resource composition
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example wifi_sle_coexistence_smoke --features wpa2-personal,firmware-example,coexistence-wifi-sle,incremental-embassy-wait
       - name: Link the credential-free Wi-Fi plus connected SLE composition

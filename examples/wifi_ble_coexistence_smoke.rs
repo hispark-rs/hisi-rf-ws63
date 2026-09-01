@@ -3,4 +3,6 @@
 #![no_std]
 #![no_main]
 
+const BLE_CONNECTED_CLIENT: bool = false;
+
 include!("coexistence_init_smoke.rs");
