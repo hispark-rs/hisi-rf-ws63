@@ -72,7 +72,10 @@ const LOCAL_ECHO_TIMEOUT_MS: u64 = 15_000;
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero coexistence work budget");
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
-const MIN_RF_HEAP_FREE_BYTES: usize = 16 * 1024;
+// Keep two 4 KiB pages available for post-connect packet bursts. This is an
+// RF-heap watermark, not the separate 16 KiB RTOS runtime-object headroom in
+// the profile report.
+const MIN_RF_HEAP_FREE_BYTES: usize = 8 * 1024;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const MAX_READY_LATENCY_MS: u64 = 2_000;
 #[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
