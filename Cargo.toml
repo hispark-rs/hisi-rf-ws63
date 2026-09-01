@@ -1,6 +1,6 @@
 [package]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.98"
+version = "0.1.0-alpha.99"
 edition = "2024"
 description = "WS63 radio backend and composition root for hisi-rf"
 license = "MIT"
@@ -146,7 +146,7 @@ required-features = [
 hisi-alloc = "0.1.0-alpha.3"
 hisi-storage = "=0.1.0-alpha.3"
 hisi-nvs = "=0.1.0-alpha.3"
-hisi-rf-core = "=0.1.0-alpha.23"
+hisi-rf-core = "=0.1.0-alpha.24"
 hisi-rf-rtos-driver = "=0.1.0-alpha.20"
 hisi-crypto = { version = "0.1.0-alpha.5", optional = true }
 hisi-crypto-ws63 = { version = "=0.1.0-alpha.5", optional = true, default-features = false }

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.99] - 2026-09-01
+
+### Added
+
+- Add linearizable accepted/consumed/dropped/pending/high-water snapshots for
+  the bounded BLE and SLE vendor event queues.
+- Add the U7 connected coexistence fixture gate for Wi-Fi plus protocol event
+  conservation, RF heap headroom, RTOS ready/IRQ latency, and ready-queue
+  ownership invariants.
+
+### Changed
+
+- Align the Wi-Fi event acceptance fixture with `hisi-rf-core
+  0.1.0-alpha.24` production/consumption counters.
+
 ## [0.1.0-alpha.98] - 2026-09-01
 
 ### Fixed
