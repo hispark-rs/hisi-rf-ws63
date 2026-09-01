@@ -848,6 +848,13 @@ mod profile;
 pub use composition::IncrementalWorkerDiagnostics;
 #[cfg(all(
     target_arch = "riscv32",
+    any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"),
+    feature = "upstream-authenticator-wpa2"
+))]
+#[doc(hidden)]
+pub use composition::Resources;
+#[cfg(all(
+    target_arch = "riscv32",
     feature = "coexistence-wifi-ble",
     feature = "upstream-authenticator-wpa2"
 ))]
@@ -863,7 +870,7 @@ pub use composition::{
 ))]
 #[doc(hidden)]
 pub use composition::{
-    AccessPointSleCoexistenceController, AccessPointSleCoexistenceInitError, Resources,
+    AccessPointSleCoexistenceController, AccessPointSleCoexistenceInitError,
     init_access_point_sle_coexistence,
 };
 #[cfg(all(
