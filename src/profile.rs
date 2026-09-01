@@ -24,8 +24,8 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v12";
-pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-09-01-r12";
+const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v13";
+pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-09-01-r13";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "coexistence-wifi-sle") {
@@ -75,7 +75,7 @@ const WS63_CONTROL_STORAGE_FIXED_BYTES: usize = if cfg!(feature = "legacy-blocki
     not(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))
 ))]
 const WS63_CONTROL_STORAGE_ALIGNMENT: usize = 32;
-const WS63_RADIO_STATE_BASE_BYTES: usize = 0x708
+const WS63_RADIO_STATE_BASE_BYTES: usize = 0x710
     // The incremental profile adds 18 instance-owned counters published by the
     // runner for controller-side snapshots after executor task splitting.
     + if cfg!(feature = "incremental-backend-experiment") {
@@ -1324,7 +1324,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v12");
+        assert_eq!(report.schema, "hisi-rf-resource-report/v13");
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -1503,7 +1503,7 @@ mod tests {
         let mut output = FixedBuffer::new();
         report.write_json(&mut output).unwrap();
         assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v12\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
+            "{\"schema\":\"hisi-rf-resource-report/v13\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
         ));
         assert!(
             output

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the RV32 caller-owned radio-state size and machine-readable resource
+  report synchronized with the two Wi-Fi event-conservation counters added in
+  `hisi-rf-core 0.1.0-alpha.24`; advance the report schema to v13 and the WS63
+  profile revision to `ws63-radio-2026-09-01-r13`.
+
 ## [0.1.0-alpha.99] - 2026-09-01
 
 ### Added
