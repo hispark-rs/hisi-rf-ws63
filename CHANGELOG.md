@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.92] - 2026-09-01
+
+### Fixed
+
+- Refresh the independently published crate lockfile after the package version
+  bump so tag-triggered `cargo package --locked` is reproducible outside the
+  parent workspace. Alpha.91 was tagged but not published.
+
 ## [0.1.0-alpha.91] - 2026-09-01
 
 ### Added
