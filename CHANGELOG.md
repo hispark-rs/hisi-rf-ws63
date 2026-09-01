@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.100] - 2026-09-01
+
 ### Fixed
 
 - Keep the RV32 caller-owned radio-state size and machine-readable resource
