@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.98] - 2026-09-01
+
+### Fixed
+
+- Re-export the SLE address and connected-state ABI values needed by the
+  bounded coexistence controller, so facade consumers no longer depend on
+  `ws63-radio-sys` directly.
+
 ## [0.1.0-alpha.97] - 2026-09-01
 
 ### Fixed

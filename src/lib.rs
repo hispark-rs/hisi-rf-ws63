@@ -726,6 +726,11 @@ pub use sle::{
     SleS1ControlStorage, SleS1Controller, SleS1Event, SleS1InitError, SleS1OperationError,
     SleS1Resources, SleS1Storage, SsapServerHandles, init_sle_s1,
 };
+#[cfg(feature = "sle-init")]
+#[doc(hidden)]
+pub use ws63_radio_sys::sle::{
+    Address as SleAddress, CONNECTION_STATE_CONNECTED as SLE_CONNECTION_STATE_CONNECTED,
+};
 
 /// Declare caller-owned storage for the internal BLE B1 init profile.
 #[cfg(feature = "ble-init")]
