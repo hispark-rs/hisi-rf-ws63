@@ -25,13 +25,16 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
 const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v11";
-pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-08-29-r10";
+pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-08-31-r11";
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
-const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(any(
-    feature = "coexistence-wifi-ble",
-    feature = "coexistence-wifi-sle"
-)) {
+const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "coexistence-wifi-sle") {
+    // The SLE archive closure leaves 0xFC0 fewer bytes than the BLE closure
+    // before the fixed task stacks once the shared network executor is linked.
+    // Round that measured boundary down by one 4 KiB page so the linker guard
+    // remains the physical source of truth instead of overlapping `.stacks`.
+    272 * 1024
+} else if cfg!(feature = "coexistence-wifi-ble") {
     // The combined target closure contributes additional fixed BGLE control
     // BSS before `.hisi_shared_arenas`. A stock-rust-lld map measured 0x2480
     // fewer bytes before the fixed task stacks; reserve 16 KiB so the linker
@@ -1400,6 +1403,18 @@ mod tests {
         assert_eq!(report.coexistence_task_slots, 4);
         assert_eq!(report.coexistence_stack_bytes, 10_240);
         assert!(!report.runtime_resources_calibrated);
+    }
+
+    #[cfg(feature = "coexistence-wifi-ble")]
+    #[test]
+    fn ble_coexistence_shared_arena_matches_linker_calibration() {
+        assert_eq!(PROFILE_SHARED_ARENA_BYTES, 276 * 1024);
+    }
+
+    #[cfg(feature = "coexistence-wifi-sle")]
+    #[test]
+    fn sle_coexistence_shared_arena_matches_linker_calibration() {
+        assert_eq!(PROFILE_SHARED_ARENA_BYTES, 272 * 1024);
     }
 
     #[test]

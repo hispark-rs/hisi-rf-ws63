@@ -1,65 +1,65 @@
 use core::num::{NonZeroU32, NonZeroUsize};
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use core::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use embassy_executor::{Executor, Spawner};
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use embassy_time::{Duration, Timer, with_timeout};
 use hisi_hal::Peripherals;
 use hisi_hal::delay::Delay;
 use hisi_hal::rf_power::RfPower;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use hisi_hal::time::Instant as HalInstant;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use hisi_rf_core::{
     BackendErrorClass, Error as RadioError, OperationTimeout, Passphrase, ScanConfig, ScanResult,
     StationConfig, WifiController, WorkBudget,
 };
 use hisi_rf_ws63::declare_radio_storage;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use hisi_rf_ws63::{IncrementalRadioParts, IncrementalRadioRunner};
 use hisi_riscv_rt::entry;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use smoltcp::iface::{Config as NetConfig, Interface, SocketSet, SocketStorage};
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use smoltcp::socket::udp;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use smoltcp::time::Instant as NetInstant;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use static_cell::StaticCell;
 
 const EVENT_DEPTH: usize = 8;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const SCAN_RESULT_DEPTH: usize = 16;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_SCAN_ROUNDS: u8 = 3;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_SCAN_TIMEOUT_MS: u32 = 30_000;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_SCAN_SETTLE_MS: u64 = 1_000;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_TEST_SSID: &[u8] = b"WS63-RUST-HIL";
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_TEST_PASSPHRASE: &[u8] = b"ws63-rust-hil";
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const COEX_CONNECT_TIMEOUT: OperationTimeout =
     OperationTimeout::try_from_millis(60_000).expect("non-zero connect timeout");
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const LOCAL_ADDRESS: Ipv4Address = Ipv4Address::new(192, 168, 4, 2);
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const LOCAL_PEER: Ipv4Address = Ipv4Address::new(192, 168, 4, 1);
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const LOCAL_ECHO_PORT: u16 = 9;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const LOCAL_ECHO_ATTEMPTS: u8 = 10;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const LOCAL_ECHO_TIMEOUT_MS: u64 = 15_000;
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const RUNNER_BUDGET: WorkBudget =
     WorkBudget::try_new(8, 10_000).expect("non-zero coexistence work budget");
 #[cfg(feature = "coexistence-wifi-ble")]
@@ -73,14 +73,16 @@ static RTOS_STORAGE: hisi_rtos::SchedulerStorage<15> = hisi_rtos::SchedulerStora
 static RTOS_ARENA: hisi_rtos::SchedulerArena<{ hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES }> =
     hisi_rtos::SchedulerArena::new();
 static UART: StaticCell<Uart<'static, hisi_hal::peripherals::Uart0<'static>>> = StaticCell::new();
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 static WIFI_PARTS: StaticCell<IncrementalRadioParts<EVENT_DEPTH>> = StaticCell::new();
 #[cfg(feature = "coexistence-wifi-ble")]
 static BLE_CONTROLLER: StaticCell<hisi_rf_ws63::BleB1Controller> = StaticCell::new();
-#[cfg(feature = "coexistence-wifi-ble")]
-static BLE_ADVERTISING_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "coexistence-wifi-sle")]
+static SLE_CONTROLLER: StaticCell<hisi_rf_ws63::SleS1Controller> = StaticCell::new();
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+static COEX_ACTIVITY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 hisi_rtos::bind_interrupts!(struct RtosIrqs {
     TIMER_INT0 => hisi_rtos::ws63::TimerInterrupt;
@@ -160,7 +162,7 @@ fn main() -> ! {
 
     #[cfg(feature = "coexistence-wifi-sle")]
     {
-        let _controllers = hisi_rf_ws63::init_wifi_sle_coexistence(
+        let controllers = hisi_rf_ws63::init_wifi_sle_coexistence(
             hisi_rf_core::RadioConfig::default(),
             resources,
             control,
@@ -168,9 +170,7 @@ fn main() -> ! {
         .expect("initialize Wi-Fi plus SLE");
         uart.write(b"RFDBG_SLE_S1_SHARED_PLATFORM_OK\r\n");
         uart.write(b"RFDBG_COEX_INIT_OK\r\n");
-        loop {
-            let _ = hisi_rf_rtos_driver::yield_now();
-        }
+        run_wifi_sle_activity(controllers, uart)
     }
 }
 
@@ -191,13 +191,44 @@ fn run_wifi_ble_activity(
         spawner.spawn(radio_runner(&mut wifi.runner, uart).unwrap());
         spawner.spawn(ble_advertising_activity(ble, uart).unwrap());
         spawner.spawn(
-            wifi_traffic_while_ble_active(&mut wifi.wifi.controller, &mut wifi.wifi.device, uart)
-                .unwrap(),
+            wifi_traffic_while_protocol_active(
+                &mut wifi.wifi.controller,
+                &mut wifi.wifi.device,
+                uart,
+            )
+            .unwrap(),
         );
     })
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(feature = "coexistence-wifi-sle")]
+#[inline(never)]
+fn run_wifi_sle_activity(
+    controllers: hisi_rf_ws63::WifiSleCoexistenceController<
+        hisi_rf_ws63::SelectedProfile,
+        EVENT_DEPTH,
+    >,
+    uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
+) -> ! {
+    let (wifi, sle) = controllers.split();
+    let wifi = WIFI_PARTS.init(wifi.split(RUNNER_BUDGET));
+    let sle = SLE_CONTROLLER.init(sle);
+    let executor = EXECUTOR.init(Executor::new());
+    executor.run(|spawner: Spawner| {
+        spawner.spawn(radio_runner(&mut wifi.runner, uart).unwrap());
+        spawner.spawn(sle_announce_activity(sle, uart).unwrap());
+        spawner.spawn(
+            wifi_traffic_while_protocol_active(
+                &mut wifi.wifi.controller,
+                &mut wifi.wifi.device,
+                uart,
+            )
+            .unwrap(),
+        );
+    })
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 #[embassy_executor::task]
 async fn radio_runner(
     runner: &'static mut IncrementalRadioRunner<EVENT_DEPTH>,
@@ -255,9 +286,9 @@ async fn ble_advertising_activity(
         if data_ready
             && parameters_ready
             && advertising_started
-            && !BLE_ADVERTISING_ACTIVE.load(Ordering::Acquire)
+            && !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire)
         {
-            BLE_ADVERTISING_ACTIVE.store(true, Ordering::Release);
+            COEX_ACTIVITY_ACTIVE.store(true, Ordering::Release);
             uart.write(b"RFDBG_COEX_BLE_ADV_ACTIVE\r\n");
         }
         if controller.dropped_events() != 0 {
@@ -270,17 +301,67 @@ async fn ble_advertising_activity(
     }
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(feature = "coexistence-wifi-sle")]
 #[embassy_executor::task]
-async fn wifi_traffic_while_ble_active(
+async fn sle_announce_activity(
+    controller: &'static mut hisi_rf_ws63::SleS1Controller,
+    uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
+) {
+    let mut started = false;
+    loop {
+        while let Some(event) = controller.next_event() {
+            match event {
+                hisi_rf_ws63::SleS1Event::Enabled { status: 0 } if !started => {
+                    static mut ANNOUNCE_DATA: [u8; 7] = [1, 1, 1, 3, 2, 0x0b, 0x06];
+                    static mut SEEK_RESPONSE_DATA: [u8; 10] =
+                        [5, 8, b'H', b'I', b'S', b'I', b'S', b'L', b'E', b'1'];
+                    let announce = unsafe { &mut *core::ptr::addr_of_mut!(ANNOUNCE_DATA) };
+                    let response = unsafe { &mut *core::ptr::addr_of_mut!(SEEK_RESPONSE_DATA) };
+                    if controller.start_announce(announce, response).is_err() {
+                        fail(uart, b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=start\r\n")
+                    }
+                    started = true;
+                }
+                hisi_rf_ws63::SleS1Event::AnnounceEnabled { status: 0, .. } => {
+                    if !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
+                        COEX_ACTIVITY_ACTIVE.store(true, Ordering::Release);
+                        uart.write(b"RFDBG_COEX_SLE_ANNOUNCE_ACTIVE\r\n");
+                    }
+                }
+                hisi_rf_ws63::SleS1Event::Enabled { status }
+                | hisi_rf_ws63::SleS1Event::AnnounceEnabled { status, .. } => {
+                    uart.write(b"RFDBG_COEX_SLE_ANNOUNCE_ERR status=0x");
+                    uart.write(&hex8(status));
+                    uart.write(b"\r\n");
+                    halt()
+                }
+                _ => {}
+            }
+        }
+        if controller.dropped_events() != 0 {
+            uart.write(b"RFDBG_COEX_SLE_EVENT_DROP count=0x");
+            uart.write(&hex8(controller.dropped_events()));
+            uart.write(b"\r\n");
+            halt()
+        }
+        Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
+#[embassy_executor::task]
+async fn wifi_traffic_while_protocol_active(
     controller: &'static mut WifiController<EVENT_DEPTH>,
     device: &'static mut hisi_rf_ws63::WifiDevice,
     uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
 ) {
-    let advertising_deadline = embassy_time::Instant::now() + Duration::from_secs(15);
-    while !BLE_ADVERTISING_ACTIVE.load(Ordering::Acquire) {
-        if embassy_time::Instant::now() >= advertising_deadline {
-            fail(uart, b"RFDBG_COEX_BLE_ADV_ERR stage=timeout\r\n")
+    let activity_deadline = embassy_time::Instant::now() + Duration::from_secs(15);
+    while !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
+        if embassy_time::Instant::now() >= activity_deadline {
+            #[cfg(feature = "coexistence-wifi-ble")]
+            fail(uart, b"RFDBG_COEX_BLE_ADV_ERR stage=timeout\r\n");
+            #[cfg(feature = "coexistence-wifi-sle")]
+            fail(uart, b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=timeout\r\n");
         }
         Timer::after(Duration::from_millis(5)).await;
     }
@@ -294,11 +375,17 @@ async fn wifi_traffic_while_ble_active(
     let mut round = 0_u8;
     let mut selected = None;
     while round < COEX_SCAN_ROUNDS {
-        if !BLE_ADVERTISING_ACTIVE.load(Ordering::Acquire) {
+        if !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
+            #[cfg(feature = "coexistence-wifi-ble")]
             fail(
                 uart,
                 b"RFDBG_COEX_BLE_ADV_ERR stage=inactive_during_scan\r\n",
-            )
+            );
+            #[cfg(feature = "coexistence-wifi-sle")]
+            fail(
+                uart,
+                b"RFDBG_COEX_SLE_ANNOUNCE_ERR stage=inactive_during_scan\r\n",
+            );
         }
         let scan = controller.scan(
             ScanConfig::new(
@@ -354,24 +441,30 @@ async fn wifi_traffic_while_ble_active(
     }
 
     let events = controller.event_diagnostics();
-    if events.dropped != 0 || !BLE_ADVERTISING_ACTIVE.load(Ordering::Acquire) {
+    if events.dropped != 0 || !COEX_ACTIVITY_ACTIVE.load(Ordering::Acquire) {
         uart.write(b"RFDBG_COEX_EVENT_ERR wifi_dropped=0x");
         uart.write(&hex8(events.dropped));
         uart.write(b"\r\n");
         halt()
     }
+    #[cfg(feature = "coexistence-wifi-ble")]
     uart.write(b"RFDBG_COEX_WIFI_BLE_TRAFFIC_OK scans=0x");
+    #[cfg(feature = "coexistence-wifi-sle")]
+    uart.write(b"RFDBG_COEX_WIFI_SLE_TRAFFIC_OK scans=0x");
     uart.write(&hex8(u32::from(COEX_SCAN_ROUNDS)));
     uart.write(b" echo=0x");
     uart.write(&hex8(u32::from(received)));
+    #[cfg(feature = "coexistence-wifi-ble")]
     uart.write(b" wifi_dropped=0x00000000 ble_dropped=0x00000000\r\n");
+    #[cfg(feature = "coexistence-wifi-sle")]
+    uart.write(b" wifi_dropped=0x00000000 sle_dropped=0x00000000\r\n");
 
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 async fn run_local_echo(
     device: &mut hisi_rf_ws63::WifiDevice,
     uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
@@ -467,23 +560,23 @@ async fn run_local_echo(
     (sent, received, attempts)
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn monotonic_ms() -> u64 {
     HalInstant::now().raw() / 24_000
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn net_now() -> NetInstant {
     NetInstant::from_millis(monotonic_ms().min(i64::MAX as u64) as i64)
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn fail(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker: &[u8]) -> ! {
     uart.write(marker);
     halt()
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn report_scan_error(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, error: RadioError) -> ! {
     let (class, code) = match error {
         RadioError::AlreadyInitialized => (1, 0),
@@ -499,7 +592,7 @@ fn report_scan_error(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, error: R
     halt()
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker: &[u8]) {
     let metrics = hisi_rf_ws63::rf_heap_metrics();
     uart.write(marker);
@@ -531,7 +624,7 @@ fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, marker:
     write_heap_trace(uart);
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn write_heap_trace(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
     let mut allocations = [hisi_rf_ws63::AllocationTraceRecord::default(); 16];
     let mut frees = [hisi_rf_ws63::FreeTraceRecord::default(); 16];
@@ -560,7 +653,7 @@ fn write_heap_trace(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
     }
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 const fn backend_error_class_code(class: BackendErrorClass) -> u32 {
     match class {
         BackendErrorClass::Initialize => 0x100,
@@ -575,14 +668,14 @@ const fn backend_error_class_code(class: BackendErrorClass) -> u32 {
     }
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn halt() -> ! {
     loop {
         core::hint::spin_loop();
     }
 }
 
-#[cfg(feature = "coexistence-wifi-ble")]
+#[cfg(any(feature = "coexistence-wifi-ble", feature = "coexistence-wifi-sle"))]
 fn hex8(value: u32) -> [u8; 8] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = [b'0'; 8];
