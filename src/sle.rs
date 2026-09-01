@@ -9,6 +9,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use hisi_crypto_ws63::Ws63CryptoStorage;
 use hisi_hal::peripherals::{Efuse, Km, Spacc, Trng};
+use hisi_rf_core::control::EventQueueDiagnostics;
 use hisi_rf_core::sle::{AnnounceConfig, SeekConfig, SsapServerDefinition};
 #[cfg(any(target_arch = "riscv32", test))]
 use hisi_rf_core::sle::{SsapOperations, SsapPermissions, SsapUuid};
@@ -275,6 +276,10 @@ struct EventRing {
     events: [SleS1Event; EVENT_CAPACITY],
     head: usize,
     len: usize,
+    accepted: u32,
+    consumed: u32,
+    dropped: u32,
+    high_water: usize,
 }
 
 impl EventRing {
@@ -283,13 +288,16 @@ impl EventRing {
             events: [SleS1Event::EMPTY; EVENT_CAPACITY],
             head: 0,
             len: 0,
+            accepted: 0,
+            consumed: 0,
+            dropped: 0,
+            high_water: 0,
         }
     }
 }
 
 struct EventQueue {
     ring: critical_section::Mutex<RefCell<EventRing>>,
-    dropped: AtomicU32,
     enable_seen: AtomicBool,
     enable_status: AtomicU32,
 }
@@ -298,7 +306,6 @@ impl EventQueue {
     const fn new() -> Self {
         Self {
             ring: critical_section::Mutex::new(RefCell::new(EventRing::new())),
-            dropped: AtomicU32::new(0),
             enable_seen: AtomicBool::new(false),
             enable_status: AtomicU32::new(0),
         }
@@ -312,19 +319,18 @@ impl EventQueue {
 
     #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
     fn push(&self, event: SleS1Event) {
-        let accepted = critical_section::with(|cs| {
+        critical_section::with(|cs| {
             let mut ring = self.ring.borrow(cs).borrow_mut();
             if ring.len == EVENT_CAPACITY {
-                return false;
+                ring.dropped = ring.dropped.saturating_add(1);
+                return;
             }
             let index = (ring.head + ring.len) % EVENT_CAPACITY;
             ring.events[index] = event;
             ring.len += 1;
-            true
+            ring.accepted = ring.accepted.saturating_add(1);
+            ring.high_water = ring.high_water.max(ring.len);
         });
-        if !accepted {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
     }
 
     fn pop(&self) -> Option<SleS1Event> {
@@ -336,7 +342,21 @@ impl EventQueue {
             let event = ring.events[ring.head];
             ring.head = (ring.head + 1) % EVENT_CAPACITY;
             ring.len -= 1;
+            ring.consumed = ring.consumed.saturating_add(1);
             Some(event)
+        })
+    }
+
+    fn diagnostics(&self) -> EventQueueDiagnostics {
+        critical_section::with(|cs| {
+            let ring = self.ring.borrow(cs).borrow();
+            EventQueueDiagnostics {
+                accepted: ring.accepted,
+                consumed: ring.consumed,
+                dropped: ring.dropped,
+                pending: ring.len,
+                high_water: ring.high_water,
+            }
         })
     }
 }
@@ -515,7 +535,13 @@ impl SleS1Controller {
     }
 
     pub fn dropped_events(&self) -> u32 {
-        self.events.dropped.load(Ordering::Relaxed)
+        self.event_diagnostics().dropped
+    }
+
+    /// Return one linearizable snapshot of the bounded vendor event queue.
+    #[doc(hidden)]
+    pub fn event_diagnostics(&self) -> EventQueueDiagnostics {
+        self.events.diagnostics()
     }
 
     /// Return the asynchronous vendor enable result without consuming its event.
@@ -1746,11 +1772,25 @@ mod tests {
             queue.push(SleS1Event::Enabled { status });
         }
         queue.push(SleS1Event::Enabled { status: 99 });
-        assert_eq!(queue.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            queue.diagnostics(),
+            EventQueueDiagnostics {
+                accepted: EVENT_CAPACITY as u32,
+                consumed: 0,
+                dropped: 1,
+                pending: EVENT_CAPACITY,
+                high_water: EVENT_CAPACITY,
+            }
+        );
         for status in 0..EVENT_CAPACITY as u32 {
             assert_eq!(queue.pop(), Some(SleS1Event::Enabled { status }));
         }
         assert_eq!(queue.pop(), None);
+        let diagnostics = queue.diagnostics();
+        assert_eq!(diagnostics.accepted, diagnostics.consumed);
+        assert_eq!(diagnostics.pending, 0);
+        assert_eq!(diagnostics.dropped, 1);
+        assert_eq!(diagnostics.high_water, EVENT_CAPACITY);
     }
 
     #[test]

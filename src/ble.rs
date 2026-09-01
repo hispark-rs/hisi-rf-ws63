@@ -27,6 +27,7 @@ use hisi_rf_core::ble::{
 use hisi_rf_core::ble::{
     Bonding, GattPermissions, GattProperties, GattUuid, IoCapability, SecurityRequirement,
 };
+use hisi_rf_core::control::EventQueueDiagnostics;
 #[cfg(target_arch = "riscv32")]
 use portable_atomic::AtomicPtr;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -303,6 +304,10 @@ struct BleEventRing {
     events: [BleB2Event; BLE_B2_EVENT_CAPACITY],
     head: usize,
     len: usize,
+    accepted: u32,
+    consumed: u32,
+    dropped: u32,
+    high_water: usize,
 }
 
 impl BleEventRing {
@@ -311,13 +316,16 @@ impl BleEventRing {
             events: [BleB2Event::EMPTY; BLE_B2_EVENT_CAPACITY],
             head: 0,
             len: 0,
+            accepted: 0,
+            consumed: 0,
+            dropped: 0,
+            high_water: 0,
         }
     }
 }
 
 struct BleEventQueue {
     ring: critical_section::Mutex<RefCell<BleEventRing>>,
-    dropped: AtomicU32,
     enable_seen: AtomicBool,
     enable_status: AtomicU32,
 }
@@ -454,7 +462,6 @@ impl BleEventQueue {
     const fn new() -> Self {
         Self {
             ring: critical_section::Mutex::new(RefCell::new(BleEventRing::new())),
-            dropped: AtomicU32::new(0),
             enable_seen: AtomicBool::new(false),
             enable_status: AtomicU32::new(0),
         }
@@ -468,19 +475,18 @@ impl BleEventQueue {
 
     #[cfg_attr(not(any(target_arch = "riscv32", test)), allow(dead_code))]
     fn push(&self, event: BleB2Event) {
-        let accepted = critical_section::with(|cs| {
+        critical_section::with(|cs| {
             let mut ring = self.ring.borrow(cs).borrow_mut();
             if ring.len == BLE_B2_EVENT_CAPACITY {
-                return false;
+                ring.dropped = ring.dropped.saturating_add(1);
+                return;
             }
             let index = (ring.head + ring.len) % BLE_B2_EVENT_CAPACITY;
             ring.events[index] = event;
             ring.len += 1;
-            true
+            ring.accepted = ring.accepted.saturating_add(1);
+            ring.high_water = ring.high_water.max(ring.len);
         });
-        if !accepted {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
     }
 
     fn pop(&self) -> Option<BleB2Event> {
@@ -492,7 +498,21 @@ impl BleEventQueue {
             let event = ring.events[ring.head];
             ring.head = (ring.head + 1) % BLE_B2_EVENT_CAPACITY;
             ring.len -= 1;
+            ring.consumed = ring.consumed.saturating_add(1);
             Some(event)
+        })
+    }
+
+    fn diagnostics(&self) -> EventQueueDiagnostics {
+        critical_section::with(|cs| {
+            let ring = self.ring.borrow(cs).borrow();
+            EventQueueDiagnostics {
+                accepted: ring.accepted,
+                consumed: ring.consumed,
+                dropped: ring.dropped,
+                pending: ring.len,
+                high_water: ring.high_water,
+            }
         })
     }
 }
@@ -715,7 +735,13 @@ impl BleB1Controller {
 
     /// Number of vendor events rejected because the bounded queue was full.
     pub fn dropped_events(&self) -> u32 {
-        self.events.dropped.load(Ordering::Relaxed)
+        self.event_diagnostics().dropped
+    }
+
+    /// Return one linearizable snapshot of the bounded vendor event queue.
+    #[doc(hidden)]
+    pub fn event_diagnostics(&self) -> EventQueueDiagnostics {
+        self.events.diagnostics()
     }
 
     /// Take one copied, opaque vendor SMP record for integration-owned storage.
@@ -2703,11 +2729,25 @@ mod tests {
             queue.push(BleB2Event::Enabled { status });
         }
         queue.push(BleB2Event::Enabled { status: 99 });
-        assert_eq!(queue.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            queue.diagnostics(),
+            EventQueueDiagnostics {
+                accepted: BLE_B2_EVENT_CAPACITY as u32,
+                consumed: 0,
+                dropped: 1,
+                pending: BLE_B2_EVENT_CAPACITY,
+                high_water: BLE_B2_EVENT_CAPACITY,
+            }
+        );
         for status in 0..BLE_B2_EVENT_CAPACITY as u32 {
             assert_eq!(queue.pop(), Some(BleB2Event::Enabled { status }));
         }
         assert_eq!(queue.pop(), None);
+        let diagnostics = queue.diagnostics();
+        assert_eq!(diagnostics.accepted, diagnostics.consumed);
+        assert_eq!(diagnostics.pending, 0);
+        assert_eq!(diagnostics.dropped, 1);
+        assert_eq!(diagnostics.high_water, BLE_B2_EVENT_CAPACITY);
     }
 
     #[test]
@@ -2737,7 +2777,7 @@ mod tests {
         };
         queue.push(event);
         assert_eq!(queue.pop(), Some(event));
-        assert_eq!(queue.dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(queue.diagnostics().dropped, 0);
     }
 
     #[test]
