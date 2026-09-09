@@ -667,9 +667,9 @@ checksum = "82838ac70a30951282f15df5741eeb38f748f5347d419c91b93751ceccc49876"
 
 [[package]]
 name = "hisi-rf-core"
-version = "0.1.0-alpha.25"
+version = "0.1.0-alpha.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a6e485f8981eb030385581a031c20251232bd72620914d6c87e568fc75a7e9d"
+checksum = "4e1429b327b52b3297c6ef1c540e8928f05f1027c04647b74b6fdb8e705b0366"
 dependencies = [
  "critical-section",
  "embassy-net-driver",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "hisi-rf-ws63"
-version = "0.1.0-alpha.101"
+version = "0.1.0-alpha.102"
 dependencies = [
  "ar_archive_writer",
  "critical-section",

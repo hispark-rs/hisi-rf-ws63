@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.102] - 2026-09-09
+
+### Changed
+
+- Resolve published `hisi-rf-core 0.1.0-alpha.26` and
+  `ws63-radio-sys 0.1.0-alpha.26`. Keep standard L2 opt-in and closed;
+  this release does not claim native producer drainage or new-path traffic.
+
 ### Fixed
 
 - Refuse NET0 reopening while an observed DMAC-to-host call is in flight, or
