@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- In the non-default NET0 lane, correlate HMAC user deletion with the actual
+  MAC resource-free return. Preserve inner failures even when both native
+  user-delete and kick-user discard them. Missing, duplicate and stale nested
+  completions fail closed; native calls remain outside critical sections.
+  This is checked host-user teardown, not a DMAC/FRW drain or reconnect claim.
 - Keep the allocation-time close revision with standard-L2 native pbufs so a
   delayed host-queue callback cannot retag an old packet after close/reopen or
   route replacement. Closed allocations fail closed. Preserve the native pbuf

@@ -687,7 +687,10 @@ async fn run_connect_profile(
     net0_initial_network::run(device, uart).await;
 
     let disconnect_started = monotonic_ms();
-    match with_timeout(Duration::from_secs(20), controller.disconnect()).await {
+    let disconnected = with_timeout(Duration::from_secs(20), controller.disconnect()).await;
+    #[cfg(feature = "standard-l2")]
+    write_user_cleanup_diagnostics(uart);
+    match disconnected {
         Ok(Ok(())) => {
             write_metric(
                 uart,
@@ -715,6 +718,27 @@ async fn run_connect_profile(
         assert!(device.transmit(&mut cx).is_none());
         uart.write(b"RFDBG_NET0_INITIAL_SESSION_CLOSED\r\n");
     }
+}
+
+#[cfg(all(feature = "incremental-connect-profile", feature = "standard-l2"))]
+fn write_user_cleanup_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    let d = hisi_rf_ws63::netif_l2::native_user_cleanup_diagnostics();
+    write_snapshot(
+        uart,
+        b"RFDBG_NET0_USER_CLEANUP",
+        &[
+            d.entered as u32,
+            d.completed as u32,
+            d.active,
+            d.free_completed as u32,
+            d.unscoped_free as u32,
+            d.fault,
+            d.last_outer_status,
+            u32::from(d.last_free_status.is_some()),
+            d.last_free_status.unwrap_or(0),
+            d.last_checked_status,
+        ],
+    );
 }
 
 #[cfg(feature = "incremental-connect-profile")]
@@ -746,6 +770,8 @@ fn write_heap_metrics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, prefix:
 
 #[cfg(feature = "incremental-connect-profile")]
 fn write_connect_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    #[cfg(feature = "standard-l2")]
+    write_user_cleanup_diagnostics(uart);
     let recovery = hisi_rf_ws63::upstream_supplicant_recovery_diagnostic_word();
     let recovery_reconnect = hisi_rf_ws63::incremental_reconnect_diagnostic_snapshot();
     let temporary_reject =

@@ -28,6 +28,10 @@ mod device;
 pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
 mod host_delivery;
 pub use host_delivery::HostDeliveryDiagnostics;
+#[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
+pub(crate) mod user_cleanup;
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+pub use user_cleanup::UserCleanupDiagnostics;
 #[cfg(feature = "standard-l2-initial-session-experiment")]
 mod initial_session;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
@@ -40,6 +44,13 @@ pub use initial_session::native_initial_open_result;
 #[doc(hidden)]
 pub fn native_host_delivery_diagnostics() -> HostDeliveryDiagnostics {
     NATIVE_RX_ROUTE.host_delivery_diagnostics()
+}
+
+/// Checked HMAC user-free results; not a host/DMAC producer-drain receipt.
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+#[doc(hidden)]
+pub fn native_user_cleanup_diagnostics() -> UserCleanupDiagnostics {
+    user_cleanup::diagnostics()
 }
 
 /// First-session experiment counters, not a native-drain receipt.

@@ -623,6 +623,11 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-search=native={}", out_dir.display());
+    if wifi && env::var_os("CARGO_FEATURE_STANDARD_L2").is_some() {
+        for symbol in ["hmac_user_del_etc", "hmac_res_free_mac_user_etc"] {
+            println!("cargo:rustc-link-arg=--wrap={symbol}");
+        }
+    }
     if env::var_os("CARGO_FEATURE_RF_ELOOP_DIAG").is_some() {
         for symbol in [
             "hmac_sta_wait_auth_seq2_rx_etc",

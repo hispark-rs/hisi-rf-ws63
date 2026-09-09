@@ -2489,6 +2489,8 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
                     (&mut request.reason as *mut u16).cast(),
                 )
             });
+            #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
+            let status = crate::netif_l2::user_cleanup::checked_status(status);
             #[cfg(feature = "standard-l2")]
             {
                 let result = critical_section::with(|cs| {
@@ -2525,7 +2527,13 @@ fn disconnect_inline(ifname: &[u8], reason: &mut u16) -> c_int {
         let result = deauth::run_inline(
             &DEAUTH_QUEUE,
             reason,
-            |reason| crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast()),
+            |reason| {
+                let status =
+                    crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast());
+                #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+                let status = crate::netif_l2::user_cleanup::checked_status(status);
+                status
+            },
             || DEAUTH_WAKE.up().is_ok(),
         );
         notify_runner();

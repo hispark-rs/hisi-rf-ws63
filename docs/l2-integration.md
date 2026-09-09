@@ -1,5 +1,40 @@
 # NET0 Native L2 Integration
 
+## Checked HMAC User Cleanup
+
+The NET0 final link wraps `hmac_user_del_etc` and the exported
+`hmac_res_free_mac_user_etc`. The local `hmac_user_free_etc` cannot itself be
+wrapped: it is an ELF-local symbol in the pinned archive. Its resource-free
+result is the status it returns after the subsequent void HMAC-resource free.
+Both the enclosing delete and its kick-user caller can discard that status.
+The Rust boundary therefore checks a sticky failure again when WAL returns.
+
+`netif_l2::user_cleanup` associates at most four in-flight deletions with opaque
+user addresses and non-reusable sequence tickets. The bounded native
+`_mac_res_get_hmac_user(u16)` lookup resolves the resource index before release;
+Rust does not read a private user layout or retain a pointer after the call.
+Missing, duplicate, foreign and stale completions cannot satisfy another
+deletion. Every native call runs outside the tracker critical section, and
+delete entry closes L2 admission before native progress. A cleanup error
+poisons this boot's cleanup status instead of being cleared by a later success.
+
+ABI oracle: the pinned SDK `hmac_user.h` and `mac_resource_ext.h`, plus the
+normalized `hmac_user.c.obj`. The maintained final-ELF check decodes resolved
+AUIPC/JALR calls on all three host platforms; symbol presence alone is not
+sufficient. Six equal-size removed-call mutations must fail. The current
+non-default fixtures receive the wrapper arguments from this package's
+`build.rs`; these arguments are **not** a transitive Cargo consumer contract.
+Do not graduate this integration to a public profile before that delivery
+boundary and the full native fence are implemented and tested.
+
+`RFDBG_NET0_USER_CLEANUP` reports entered/completed/active deletes, scoped free
+completions, unscoped frees, sticky failure, last outer result, presence/value
+of the last free result and checked result. These counters show host-user
+cleanup only. They do not certify DMAC free success, queued message 595,
+TX/EAPOL drainage, work before pbuf allocation or bounded native execution.
+An unbounded native delete remains visible as active; application timeout must
+not reuse its resources. No reconnect transition is enabled by this change.
+
 Status: experimental callback path under `standard-l2`. When selected,
 `driverif_input` uses its exclusive route, initially closed. Existing named
 profiles do not select this feature and retain their verified smoltcp bridge.

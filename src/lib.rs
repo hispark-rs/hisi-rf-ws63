@@ -1145,6 +1145,14 @@ pub fn force_link_contract() {
     keep!(log::memset_s as extern "C" fn(*mut c_void, usize, c_int, usize) -> c_int);
     keep!(log::memcpy_s as extern "C" fn(*mut c_void, usize, *const c_void, usize) -> c_int);
 
+    #[cfg(all(feature = "standard-l2", feature = "wifi", target_arch = "riscv32"))]
+    {
+        keep!(
+            netif_l2::user_cleanup::delete as unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32
+        );
+        keep!(netif_l2::user_cleanup::free as unsafe extern "C" fn(u16) -> u32);
+    }
+
     #[cfg(all(feature = "rf-eloop-diag", target_arch = "riscv32"))]
     {
         keep!(
