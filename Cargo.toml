@@ -355,3 +355,12 @@ hisi-rtos = { version = "=0.1.0-alpha.25", features = ["chip-ws63", "embassy"] }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dev-dependencies]
 critical-section = { version = "1", features = ["std"] }
+
+# Standalone firmware fixtures use the same size-oriented release contract as
+# the parent, external consumer and application template. Library consumers
+# still own their workspace's profile; these settings do not override it.
+[profile.release]
+opt-level = "s"
+lto = true
+debug = true
+codegen-units = 1

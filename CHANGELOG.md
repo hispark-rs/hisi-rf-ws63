@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Embed caller-owned, one-shot NET0 RX/TX storage in the opt-in profile control
+  object. Derive queue payload/metadata and total bytes from its real type,
+  without reducing existing stacks or claiming a calibrated network profile.
+- Verify the target-built resource descriptor against final ELF control,
+  shared-arena, packet-RAM and main-stack allocations on all three host OSes.
+  Correct the bootstrap fixture to install its declared independent RTOS arena
+  using the existing scheduler storage contract instead of the RF allocator.
 - Route `driverif_input` through the exclusive caller-owned ingress when the
   experimental `standard-l2` feature is selected. Capture the epoch on callback
   entry, verify netif identity and the single-pbuf/padding boundary, and release

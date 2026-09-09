@@ -19,10 +19,13 @@ use hisi_rf_core::l2::{Generation, L2Ingress, QueueError};
 
 mod link;
 pub use link::{LinkError, NativeLink, SubmitError};
+mod storage;
+pub use storage::{NativeStorage, StorageError, StorageReport};
 
 /// Initial WS63 queue shape; the eventual named profile must account for these
 /// bytes in caller-owned storage and its resource report before graduation.
 pub const NATIVE_RX_SLOTS: usize = 4;
+pub const NATIVE_TX_SLOTS: usize = 4;
 pub const NATIVE_MTU: usize = 1514;
 
 // The context-free C ABI needs one global route, not global packet storage.

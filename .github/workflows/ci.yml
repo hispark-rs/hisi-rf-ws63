@@ -100,6 +100,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - profile: wpa2-net0-storage-contract
+            features: wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           - profile: wpa2-smoltcp
             features: wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait
           - profile: wpa3-smoltcp
@@ -202,6 +204,16 @@ jobs:
         run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example plain_firmware --features wpa2-personal,smoltcp,legacy-blocking-backend
       - name: Link the no-AP bootstrap profiler with stock rust-lld
         run: cargo build -Zbuild-std=core --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,incremental-backend-experiment,bootstrap-stage-diag,firmware-example
+      - name: Link NET0 caller-owned storage without reducing the existing arena or stacks
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example bootstrap_profile --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2,bootstrap-stage-diag,firmware-example
+      - uses: astral-sh/setup-uv@v7
+      - name: Verify NET0 target storage and negative report fixtures
+        run: uv run --script .github/scripts/check-net0-storage.py target/riscv32imfc-unknown-none-elf/release/examples/bootstrap_profile --self-test --output net0-storage.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: net0-linked-storage-${{ matrix.os }}
+          path: net0-storage.json
+          if-no-files-found: error
       - name: Link the credential-free arena admission error fixture
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example arena_admission_error --features wpa2-personal,smoltcp,firmware-example
       - name: Link the credential-free typed-error parity fixture

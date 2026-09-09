@@ -24,8 +24,16 @@ const PROFILE_WORKER_STACK_BYTES: usize = crate::incremental_worker::WORKER_STAC
 #[cfg(not(feature = "incremental-embassy-wait"))]
 const PROFILE_WORKER_STACK_BYTES: usize = 0;
 
-const RESOURCE_REPORT_SCHEMA: &str = "hisi-rf-resource-report/v13";
-pub(crate) const PROFILE_REVISION: &str = "ws63-radio-2026-09-01-r13";
+const RESOURCE_REPORT_SCHEMA: &str = if cfg!(feature = "standard-l2") {
+    "hisi-rf-resource-report/v14"
+} else {
+    "hisi-rf-resource-report/v13"
+};
+pub(crate) const PROFILE_REVISION: &str = if cfg!(feature = "standard-l2") {
+    "ws63-radio-2026-09-09-r14-net0"
+} else {
+    "ws63-radio-2026-09-01-r13"
+};
 const WIFI_PACKET_RAM_BYTES: usize = 0xc000;
 const MAIN_STACK_BYTES_REQUIRED: usize = 0x8000;
 const PROFILE_SHARED_ARENA_BYTES: usize = if cfg!(feature = "coexistence-wifi-sle") {
@@ -84,6 +92,10 @@ const WS63_RADIO_STATE_BASE_BYTES: usize = 0x710
         0
     };
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
+#[cfg(feature = "standard-l2")]
+const PROFILE_L2_STORAGE_BYTES: usize = core::mem::size_of::<crate::netif_l2::NativeStorage>();
+#[cfg(not(feature = "standard-l2"))]
+const PROFILE_L2_STORAGE_BYTES: usize = 0;
 
 mod sealed {
     pub trait Sealed {}
@@ -829,6 +841,8 @@ impl fmt::Display for ArenaAdmissionError {
 #[cfg_attr(feature = "incremental-embassy-wait", repr(C, align(32)))]
 pub struct Storage<P: Profile, const EVENTS: usize> {
     state: RadioState<EVENTS>,
+    #[cfg(feature = "standard-l2")]
+    l2: crate::netif_l2::NativeStorage,
     #[cfg(feature = "coexistence-wifi-ble")]
     ble: crate::ble::BleB1ControlStorage,
     #[cfg(feature = "coexistence-wifi-sle")]
@@ -867,6 +881,8 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         assert!(EVENTS > 0, "radio event queue must not be empty");
         Self {
             state: RadioState::new(),
+            #[cfg(feature = "standard-l2")]
+            l2: crate::netif_l2::NativeStorage::new(),
             #[cfg(feature = "coexistence-wifi-ble")]
             ble: crate::ble::BleB1ControlStorage::new(),
             #[cfg(feature = "coexistence-wifi-sle")]
@@ -887,6 +903,14 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
     /// Return the compile-time resource contract for this storage instance.
     pub const fn report(&self) -> ResourceReport {
         ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES)
+    }
+
+    /// The NET0 composition will claim this only after native bootstrap yields
+    /// the actual station MAC. Merely owning it does not open RX admission.
+    #[cfg(feature = "standard-l2")]
+    #[allow(dead_code)] // The native lifecycle/profile gate is not yet enabled.
+    pub(crate) fn l2_storage(&'static self) -> &'static crate::netif_l2::NativeStorage {
+        &self.l2
     }
 
     pub(crate) fn claim(
@@ -1070,6 +1094,13 @@ pub struct ResourceReport {
     pub radio_state_bytes: usize,
     /// Bytes used by caller-owned SPACC DMA scratch within [`Storage`].
     pub crypto_dma_bytes: usize,
+    /// Instance-owned Ethernet queues, including all metadata and padding.
+    /// Already included in control_storage_bytes; do not add them twice.
+    #[cfg(feature = "standard-l2")]
+    pub l2_storage: crate::netif_l2::StorageReport,
+    /// L2 object's byte offset inside the actual caller-owned control store.
+    #[cfg(feature = "standard-l2")]
+    pub l2_storage_offset: usize,
     /// Total target RAM reserved by the aligned arena backing object.
     pub arena_storage_bytes: usize,
     /// Linker-owned `.wifi_pkt_ram` bytes.
@@ -1115,6 +1146,7 @@ impl ResourceReport {
         let plan = P::RESOURCE_PLAN.with_event_capacity(EVENTS);
         let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
         let control_storage_bytes = core::mem::size_of::<Storage<P, EVENTS>>();
+        assert!(control_storage_bytes >= PROFILE_L2_STORAGE_BYTES);
         let arena_storage_bytes = align_up(arena_bytes + 1, 64);
         Self {
             schema: RESOURCE_REPORT_SCHEMA,
@@ -1122,7 +1154,11 @@ impl ResourceReport {
             profile: P::ID,
             profile_revision: PROFILE_REVISION,
             security: P::SECURITY,
-            network: "smoltcp",
+            network: if cfg!(feature = "standard-l2") {
+                "standard-l2-contract"
+            } else {
+                "smoltcp"
+            },
             radio_backend: "hisi-rf-ws63",
             supplicant_backend: "hostap-2.11-native",
             crypto_backend: "hisi-crypto-ws63-mixed",
@@ -1140,6 +1176,10 @@ impl ResourceReport {
             composition_handle_bytes: 0,
             radio_state_bytes,
             crypto_dma_bytes: Ws63CryptoStorage::size_bytes(),
+            #[cfg(feature = "standard-l2")]
+            l2_storage: crate::netif_l2::NativeStorage::report(),
+            #[cfg(feature = "standard-l2")]
+            l2_storage_offset: core::mem::offset_of!(Storage<P, EVENTS>, l2),
             arena_storage_bytes,
             linker_packet_ram_bytes: WIFI_PACKET_RAM_BYTES,
             main_stack_bytes_required: MAIN_STACK_BYTES_REQUIRED,
@@ -1164,7 +1204,8 @@ impl ResourceReport {
             supplicant_arena_bytes: None,
             shared_rf_arena_bytes: Some(arena_bytes),
             flash_bytes: None,
-            runtime_resources_calibrated: P::RUNTIME_RESOURCES_CALIBRATED,
+            runtime_resources_calibrated: !cfg!(feature = "standard-l2")
+                && P::RUNTIME_RESOURCES_CALIBRATED,
         }
     }
 
@@ -1192,7 +1233,7 @@ impl ResourceReport {
                 "\"minimum_task_stack_bytes\":{},",
                 "\"runtime_object_headroom_bytes\":{},\"runtime_arena_bytes\":{},",
                 "\"supplicant_arena_bytes\":null,\"shared_rf_arena_bytes\":{},\"flash_bytes\":null,",
-                "\"runtime_resources_calibrated\":{}}}"
+                "\"runtime_resources_calibrated\":{}"
             ),
             self.schema,
             self.chip,
@@ -1228,7 +1269,23 @@ impl ResourceReport {
             self.runtime_arena_bytes.unwrap_or(0),
             self.shared_rf_arena_bytes.unwrap_or(0),
             self.runtime_resources_calibrated,
-        )
+        )?;
+        #[cfg(feature = "standard-l2")]
+        write!(
+            output,
+            concat!(
+                ",\"l2_storage_offset\":{},\"l2_storage\":{{\"rx_slots\":{},\"tx_slots\":{},\"mtu\":{},",
+                "\"payload_bytes\":{},\"metadata_bytes\":{},\"total_bytes\":{}}}"
+            ),
+            self.l2_storage_offset,
+            self.l2_storage.rx_slots,
+            self.l2_storage.tx_slots,
+            self.l2_storage.mtu,
+            self.l2_storage.payload_bytes,
+            self.l2_storage.metadata_bytes,
+            self.l2_storage.total_bytes,
+        )?;
+        write!(output, "}}")
     }
 }
 
@@ -1258,6 +1315,7 @@ const _: () = {
         core::mem::size_of::<Storage<WifiWpa2Smoltcp, 4>>()
             == align_up(
                 WS63_CONTROL_STORAGE_FIXED_BYTES
+                    + PROFILE_L2_STORAGE_BYTES
                     + WS63_RADIO_STATE_BASE_BYTES
                     + 4 * WS63_RADIO_EVENT_SLOT_BYTES,
                 WS63_CONTROL_STORAGE_ALIGNMENT,
@@ -1267,6 +1325,7 @@ const _: () = {
         core::mem::size_of::<Storage<WifiWpa2Smoltcp, 8>>()
             == align_up(
                 WS63_CONTROL_STORAGE_FIXED_BYTES
+                    + PROFILE_L2_STORAGE_BYTES
                     + WS63_RADIO_STATE_BASE_BYTES
                     + 8 * WS63_RADIO_EVENT_SLOT_BYTES,
                 WS63_CONTROL_STORAGE_ALIGNMENT,
@@ -1324,7 +1383,7 @@ mod tests {
     fn report_exposes_only_proven_resource_ownership() {
         let storage = Storage::<WifiWpa2Smoltcp, 4>::new();
         let report = storage.report();
-        assert_eq!(report.schema, "hisi-rf-resource-report/v13");
+        assert_eq!(report.schema, RESOURCE_REPORT_SCHEMA);
         assert_eq!(report.chip, "ws63");
         assert_eq!(report.profile, "wifi-wpa2-smoltcp");
         assert_eq!(report.event_capacity, 4);
@@ -1385,7 +1444,10 @@ mod tests {
         assert_eq!(report.flash_bytes, None);
         assert_eq!(
             report.runtime_resources_calibrated,
-            !cfg!(feature = "incremental-embassy-wait")
+            !cfg!(any(
+                feature = "incremental-embassy-wait",
+                feature = "standard-l2"
+            ))
         );
         assert_eq!(
             report.caller_owned_bytes,
@@ -1502,9 +1564,10 @@ mod tests {
         let report = Storage::<WifiWpa3Smoltcp, 8>::new().report();
         let mut output = FixedBuffer::new();
         report.write_json(&mut output).unwrap();
-        assert!(output.as_str().starts_with(
-            "{\"schema\":\"hisi-rf-resource-report/v13\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\""
-        ));
+        assert!(output.as_str().starts_with(&std::format!(
+            "{{\"schema\":\"{}\",\"chip\":\"ws63\",\"profile\":\"wifi-wpa3-smoltcp\"",
+            RESOURCE_REPORT_SCHEMA
+        )));
         assert!(
             output
                 .as_str()
@@ -1546,8 +1609,45 @@ mod tests {
         assert!(
             output
                 .as_str()
-                .ends_with("\"runtime_resources_calibrated\":false}")
+                .contains("\"runtime_resources_calibrated\":false")
         );
+        assert!(output.as_str().ends_with('}'));
+    }
+
+    #[cfg(feature = "standard-l2")]
+    #[test]
+    fn net0_storage_report_accounts_for_queues_once_without_reducing_stacks() {
+        static STORAGE: Storage<WifiWpa2Smoltcp, 4> = Storage::new();
+        let report = STORAGE.report();
+        let l2 = report.l2_storage;
+        assert_eq!(l2.total_bytes, PROFILE_L2_STORAGE_BYTES);
+        assert_eq!(
+            report.l2_storage_offset,
+            core::mem::offset_of!(Storage<WifiWpa2Smoltcp, 4>, l2)
+        );
+        assert!(report.l2_storage_offset + l2.total_bytes <= report.control_storage_bytes);
+        assert_eq!(l2.payload_bytes + l2.metadata_bytes, l2.total_bytes);
+        assert_eq!(
+            report.control_storage_bytes,
+            core::mem::size_of_val(&STORAGE)
+        );
+        assert_eq!(report.network, "standard-l2-contract");
+        assert!(!report.runtime_resources_calibrated);
+        assert_eq!(report.vendor_stack_bytes_per_task, 24 * 1024);
+        assert_eq!(report.main_stack_bytes_required, 32 * 1024);
+        assert_eq!(
+            report.caller_owned_bytes,
+            report.control_storage_bytes
+                + report.arena_storage_bytes
+                + report.runtime_arena_bytes.unwrap()
+        );
+        let address = hisi_rf_core::WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 2]).unwrap();
+        let parts = STORAGE.l2_storage().claim(address).unwrap();
+        drop(parts);
+        assert!(STORAGE.l2_storage().claim(address).is_err());
+        let mut json = std::string::String::new();
+        report.write_json(&mut json).unwrap();
+        assert!(json.contains(&std::format!("\"total_bytes\":{}", l2.total_bytes)));
     }
 
     #[test]

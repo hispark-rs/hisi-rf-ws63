@@ -7,26 +7,75 @@
 #![no_std]
 #![no_main]
 
-use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 
 use hisi_hal::Peripherals;
 use hisi_hal::delay::Delay;
-use hisi_hal::interrupt;
 use hisi_hal::rf_power::RfPower;
-use hisi_hal::software_interrupt::SoftwareInterrupt0;
-use hisi_hal::time::Instant;
-use hisi_hal::timer::TimerAlarm0;
 use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
-use hisi_rf_ws63::{BootstrapStage, InstalledRadioStorage, SelectedProfile, declare_radio_storage};
+use hisi_rf_ws63::BootstrapStage;
+#[cfg(feature = "standard-l2")]
+use hisi_rf_ws63::SelectedProfile;
 use hisi_riscv_rt::entry;
 
 const RADIO_EVENT_DEPTH: usize = 8;
-declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
+static RTOS_STORAGE: hisi_rtos::SchedulerStorage<15> = hisi_rtos::SchedulerStorage::new();
+#[unsafe(link_section = ".hisi.shared-arena")]
+static RTOS_ARENA: hisi_rtos::SchedulerArena<{ hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES }> =
+    hisi_rtos::SchedulerArena::new();
+
+hisi_rtos::bind_interrupts!(struct RtosIrqs {
+    TIMER_INT0 => hisi_rtos::ws63::TimerInterrupt;
+    SOFT_INT0 => hisi_rtos::ws63::SoftwareInterrupt;
+});
+#[cfg(not(feature = "standard-l2"))]
+hisi_rf_ws63::declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
+
+// Explicit symbols let CI compare the target report with the physical object,
+// not with a host's differently sized usize/waker layout. This test declaration
+// uses the same stores/section/from_parts contract as declare_radio_storage!.
+#[cfg(feature = "standard-l2")]
+#[unsafe(no_mangle)]
+static NET0_CONTROL: hisi_rf_ws63::Storage<SelectedProfile, RADIO_EVENT_DEPTH> =
+    hisi_rf_ws63::Storage::new();
+#[cfg(feature = "standard-l2")]
+#[unsafe(link_section = ".hisi.shared-arena")]
+static NET0_ARENA: hisi_rf_ws63::RadioArenaStorage<{ hisi_rf_ws63::SELECTED_RF_ARENA_BYTES }> =
+    hisi_rf_ws63::RadioArenaStorage::new();
+#[cfg(feature = "standard-l2")]
+static RADIO_STORAGE: hisi_rf_ws63::RadioStorage<
+    SelectedProfile,
+    RADIO_EVENT_DEPTH,
+    { hisi_rf_ws63::SELECTED_RF_ARENA_BYTES },
+> = hisi_rf_ws63::RadioStorage::from_parts(&NET0_CONTROL, &NET0_ARENA);
+
+#[cfg(feature = "standard-l2")]
+#[unsafe(no_mangle)]
+static NET0_STORAGE_LAYOUT: [u32; 13] = {
+    let report = hisi_rf_ws63::resource_report::<SelectedProfile, RADIO_EVENT_DEPTH>();
+    [
+        u32::from_le_bytes(*b"NET0"),
+        1,
+        report.control_storage_bytes as u32,
+        report.l2_storage_offset as u32,
+        report.l2_storage.total_bytes as u32,
+        report.l2_storage.payload_bytes as u32,
+        report.l2_storage.metadata_bytes as u32,
+        report.l2_storage.rx_slots as u32,
+        report.l2_storage.tx_slots as u32,
+        report.l2_storage.mtu as u32,
+        report.arena_storage_bytes as u32 + report.runtime_arena_bytes.unwrap() as u32,
+        report.main_stack_bytes_required as u32,
+        report.linker_packet_ram_bytes as u32,
+    ]
+};
 
 #[entry]
 fn main() -> ! {
+    #[cfg(feature = "standard-l2")]
+    core::hint::black_box(&NET0_STORAGE_LAYOUT);
     let p = Peripherals::take().expect("peripherals already taken");
     let uart = Uart::new_uart0(
         p.UART0,
@@ -41,6 +90,9 @@ fn main() -> ! {
     let installed_storage = RADIO_STORAGE
         .install()
         .expect("install caller-owned radio storage");
+    let scheduler_storage = RTOS_STORAGE
+        .install(&RTOS_ARENA)
+        .expect("install caller-owned scheduler storage");
     uart.write(b"RFDBG_A5U_ARENA_OK bytes=0x");
     uart.write(&hex8(hisi_rf_ws63::rf_heap_metrics().arena_bytes as u32));
     uart.write(b"\r\n");
@@ -50,10 +102,10 @@ fn main() -> ! {
     let (_cldo_crg, efuse) = rf_ready.into_parts();
     uart.write(b"RFDBG_RF_POWER_OK\r\n");
 
-    let _timer = TimerAlarm0::new(p.TIMER);
-    let _software_interrupt = SoftwareInterrupt0::new(p.SYS_CTL1);
-    let _runtime = hisi_rtos::start_with_port(
-        hisi_rtos::PortedConfig {
+    let _runtime = hisi_rtos::ws63::start(
+        hisi_rtos::ws63::Config {
+            minimum_stack_size: NonZeroUsize::new(hisi_rf_ws63::SELECTED_MINIMUM_TASK_STACK_BYTES)
+                .expect("selected minimum stack is non-zero"),
             radio_task_policy: hisi_rtos::RunPolicy::Cooperative,
             // UART stage tracing is intentionally synchronous and can extend
             // the vendor's bootstrap scheduler-lock interval. Keep the normal
@@ -61,26 +113,19 @@ fn main() -> ! {
             // wider observation window.
             #[cfg(feature = "bootstrap-stage-diag")]
             max_scheduler_lock_duration: core::num::NonZeroU32::new(5_000).unwrap(),
-            ..hisi_rtos::PortedConfig::default()
+            ..hisi_rtos::ws63::Config::default()
         },
-        hisi_rtos::Resources {
-            allocate: rtos_allocate,
-            deallocate: rtos_deallocate,
-            monotonic_ms,
-        },
-        hisi_rtos::SchedulerPort {
-            max_timer_delay: NonZeroU32::new(TimerAlarm0::MAX_DELAY_MS)
-                .expect("timer maximum delay must be non-zero"),
-            arm_timer: TimerAlarm0::arm_millis,
-            disarm_timer: TimerAlarm0::disarm,
-            pend_reschedule: SoftwareInterrupt0::pend_interrupt,
+        hisi_rtos::ws63::Resources {
+            timer: p.TIMER,
+            software_interrupt: p.SYS_CTL1,
+            storage: scheduler_storage,
             contract_violation: rtos_contract_violation,
+            irqs: RtosIrqs::new(),
         },
     )
     .expect("start ported runtime");
     uart.write(b"RFDBG_RTOS_START_OK\r\n");
 
-    unsafe { interrupt::enable_global() };
     uart.write(b"RFDBG_RTOS_IRQ_OK\r\n");
     hisi_rtos::request_reschedule();
     uart.write(b"RFDBG_RTOS_OK\r\n");
@@ -142,38 +187,6 @@ fn main() -> ! {
     loop {
         core::hint::spin_loop();
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn TIMER_INT0() {
-    TimerAlarm0::clear_interrupt();
-    hisi_rtos::interrupt_enter();
-    hisi_rtos::on_timer_interrupt();
-    hisi_rtos::interrupt_exit();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn SOFT_INT0() {
-    SoftwareInterrupt0::clear_interrupt();
-    hisi_rtos::interrupt_enter();
-    hisi_rtos::on_software_interrupt();
-    hisi_rtos::interrupt_exit();
-}
-
-unsafe fn rtos_allocate(size: usize) -> *mut u8 {
-    // SAFETY: hisi-rtos releases this allocation through `rtos_deallocate`.
-    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::allocate(size) }
-}
-
-unsafe fn rtos_deallocate(pointer: *mut u8) {
-    // SAFETY: hisi-rtos returns only pointers produced by `rtos_allocate`.
-    unsafe { InstalledRadioStorage::<SelectedProfile, RADIO_EVENT_DEPTH>::deallocate(pointer) };
-}
-
-fn monotonic_ms() -> u64 {
-    // The RF ROM timebase is initialized by a later measured bootstrap stage.
-    // TIMER0 needs a clock before that stage, so use the always-on 24 MHz TCXO.
-    Instant::now().raw() / 24_000
 }
 
 fn rtos_contract_violation(_violation: hisi_rtos::ContractViolation) -> ! {

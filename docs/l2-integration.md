@@ -13,6 +13,28 @@ owns that port and the non-cloneable `Registration` of a `CallbackRoute`.
 The route holds only an ingress capability and small metadata; no packet bytes,
 allocator, socket, or IP state belongs to a global callback object.
 
+With `standard-l2`, the profile's `Storage` now embeds `NativeStorage` (four RX
+and four TX slots) initialized in place by its static initializer. A one-shot
+claim splits it using the actual native MAC; failed bootstrap or dropped parts
+do not release that claim. The experimental v14 resource report separately
+lists payload, metadata, object size and offset, all derived from the actual
+Rust types. L2 bytes are already part of control storage and are not added to
+the total again. Existing v13 named-profile reports are unchanged without this
+feature; no new profile is claimed to be HIL calibrated.
+
+The NET0 bootstrap fixture embeds its RV32 report in the ELF. CI compares it
+against the actual control symbol, shared-arena section, packet RAM and main
+stack linker symbols. This also fixes the older bootstrap fixture's missing
+independent RTOS arena: it now uses the existing `SchedulerStorage`/
+`SchedulerArena` composition, rather than incorrectly allocating RTOS state
+from the smaller RF heap. No RF/vendor/main stack size is reduced to fit L2.
+Standalone firmware fixtures explicitly use the same release profile as the
+parent and application template (`opt-level = "s"`, LTO, one codegen unit,
+debug information). Cargo's implicit default release profile was not equivalent:
+it overflowed SRAM after the missing arena was restored. The linker guard is
+retained; downstream applications own their release profile and must pass the
+same final-layout gate rather than assume all compiler profiles fit.
+
 `bind_native` registers caller-owned static storage against the sole C callback
 route (initially four RX slots of 1514 bytes). No packet array is global. An
 incoming pbuf must belong to the registered netif and contain one complete
@@ -64,6 +86,6 @@ The same suites now exercise the real `driverif_input` entry, pbuf reference
 release, padding removal, native-buffer independence, and wrong-netif rejection.
 
 Remaining integration gates are profile-owned registration, native quiescence/
-authorization events, worker wake wiring, caller-owned storage and ELF resource
-reports, followed by exact-artifact WS63 HIL. No new user-facing network profile
+authorization events and worker wake wiring, followed by exact-artifact WS63
+HIL. Storage/layout CI is not a peak-usage or working-profile HIL result. No new user-facing network profile
 is advertised before those gates pass.
