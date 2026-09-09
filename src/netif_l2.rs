@@ -24,6 +24,16 @@ mod storage;
 pub use storage::{NativeStorage, StorageError, StorageReport};
 mod device;
 pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
+mod host_delivery;
+pub use host_delivery::HostDeliveryDiagnostics;
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+pub(crate) use host_delivery::install_host_delivery_observer;
+
+/// Diagnostic snapshot of the earlier native callback, not a drain receipt.
+#[doc(hidden)]
+pub fn native_host_delivery_diagnostics() -> HostDeliveryDiagnostics {
+    NATIVE_RX_ROUTE.host_delivery_diagnostics()
+}
 
 pub(crate) type NativeDevice =
     hisi_rf_core::l2::L2Device<'static, NATIVE_RX_SLOTS, NATIVE_TX_SLOTS, NATIVE_MTU>;
@@ -82,6 +92,7 @@ struct State<'storage, const RX: usize, const MTU: usize> {
     close_revision: Option<u64>,
     close_waker: Option<Waker>,
     diagnostics: RouteDiagnostics,
+    host_deliveries: HostDeliveryDiagnostics,
 }
 
 impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
@@ -94,6 +105,7 @@ impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
 #[must_use]
 struct OpenIntent {
     close_revision: u64,
+    host_delivery_revision: u64,
 }
 
 /// One checked route from the vendor's context-free callback ABI to an instance.
@@ -124,6 +136,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                     in_flight: 0,
                     transmits_in_flight: 0,
                 },
+                host_deliveries: HostDeliveryDiagnostics::new(),
             })),
         }
     }
@@ -178,6 +191,12 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
 
     pub fn diagnostics(&self) -> RouteDiagnostics {
         critical_section::with(|cs| self.state.borrow_ref(cs).diagnostics)
+    }
+
+    /// Earlier DMAC-to-host callback observations, separate from Ethernet
+    /// queue admission. Zero in-flight callbacks are not a native drain fence.
+    pub fn host_delivery_diagnostics(&self) -> HostDeliveryDiagnostics {
+        critical_section::with(|cs| self.state.borrow_ref(cs).host_deliveries)
     }
 
     /// A native teardown may start outside the L2 worker. Stop new callback
@@ -259,11 +278,18 @@ impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX,
             if state.generation.is_some() {
                 return Err(RouteError::AlreadyOpen);
             }
-            if state.diagnostics.in_flight != 0 || state.diagnostics.transmits_in_flight != 0 {
+            if state.host_deliveries.exhausted {
+                return Err(RouteError::LifecycleExhausted);
+            }
+            if state.diagnostics.in_flight != 0
+                || state.diagnostics.transmits_in_flight != 0
+                || state.host_deliveries.in_flight != 0
+            {
                 return Err(RouteError::CallbacksInFlight);
             }
             Ok(OpenIntent {
                 close_revision: state.close_revision.ok_or(RouteError::LifecycleExhausted)?,
+                host_delivery_revision: state.host_deliveries.entered,
             })
         })
     }
@@ -276,13 +302,21 @@ impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX,
         critical_section::with(|cs| {
             let mut state = self.route.state.borrow_ref_mut(cs);
             let revision = state.close_revision.ok_or(RouteError::LifecycleExhausted)?;
-            if revision != intent.close_revision {
+            if state.host_deliveries.exhausted {
+                return Err(RouteError::LifecycleExhausted);
+            }
+            if revision != intent.close_revision
+                || state.host_deliveries.entered != intent.host_delivery_revision
+            {
                 return Err(RouteError::OpenInterrupted);
             }
             if state.generation.is_some() {
                 return Err(RouteError::AlreadyOpen);
             }
-            if state.diagnostics.in_flight != 0 || state.diagnostics.transmits_in_flight != 0 {
+            if state.diagnostics.in_flight != 0
+                || state.diagnostics.transmits_in_flight != 0
+                || state.host_deliveries.in_flight != 0
+            {
                 return Err(RouteError::CallbacksInFlight);
             }
             state.generation = Some(generation);

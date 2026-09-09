@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refuse NET0 reopening while an observed DMAC-to-host call is in flight, or
+  when a call entered during prepare/commit even if it has already returned.
+  Counter exhaustion fails closed; unobserved upstream/downstream queues still
+  require a separate native fence.
 - Close opt-in NET0 admission at native disconnect/rejected-association callback
   publication, without waiting for hostap/control-runner progress. Link-event
   overflow, malformed payloads and unavailable ports also fail closed. A
@@ -25,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Observe the SDK-verified early DMAC-to-host callback with exactly-once
+  forwarding, checked hook ownership/readback, bounded metadata, and separate
+  call-lifetime accounting. The experimental standard-L2 profile remains
+  closed; neither a zero return nor zero observed in-flight calls is a native
+  producer fence. Management/EAPOL delivery is never blocked by this observer.
 - Bind the opt-in NET0 profile's actual caller-owned queue to an opaque
   `embassy_net_driver::Driver` and the existing native worker. Use the real
   station MAC and retain the optional smoltcp adapter on the same exclusive

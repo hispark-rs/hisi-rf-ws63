@@ -218,6 +218,7 @@ fn main() -> ! {
         assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
         assert!(device.transmit(&mut cx).is_none());
         uart.write(b"RFDBG_NET0_BOUND_CLOSED\r\n");
+        write_native_host_delivery(uart, b"bootstrap");
     }
     write_metric(
         uart,
@@ -628,6 +629,8 @@ async fn run_connect_profile(
             );
             write_connect_diagnostics(uart);
             write_heap_metrics(uart, b"RFDBG_A5U_HEAP_CONNECTED");
+            #[cfg(feature = "standard-l2")]
+            write_native_host_delivery(uart, b"connected");
         }
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_CONNECT_ERR", error);
@@ -652,6 +655,8 @@ async fn run_connect_profile(
                 monotonic_ms().wrapping_sub(disconnect_started),
             );
             write_heap_metrics(uart, b"RFDBG_A5U_HEAP_DISCONNECTED");
+            #[cfg(feature = "standard-l2")]
+            write_native_host_delivery(uart, b"disconnected");
         }
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_DISCONNECT_ERR", error);
@@ -857,6 +862,32 @@ fn write_metric(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, prefix: &[u8]
     uart.write(prefix);
     uart.write(&hex8(u32::try_from(value).unwrap_or(u32::MAX)));
     uart.write(b"\r\n");
+}
+
+#[cfg(feature = "standard-l2")]
+fn write_native_host_delivery(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, phase: &[u8]) {
+    let d = hisi_rf_ws63::netif_l2::native_host_delivery_diagnostics();
+    uart.write(b"RFDBG_NET0_HOST_DELIVERY phase=");
+    uart.write(phase);
+    for (label, value) in [
+        (b" entered=0x".as_slice(), d.entered),
+        (b" returned=0x".as_slice(), d.returned),
+        (b" abandoned=0x".as_slice(), d.abandoned),
+        (b" in_flight=0x".as_slice(), d.in_flight),
+        (b" peak=0x".as_slice(), d.peak_in_flight),
+        (b" closed=0x".as_slice(), d.entered_while_closed),
+        (b" crossed_close=0x".as_slice(), d.crossed_close),
+        (b" nonzero=0x".as_slice(), d.nonzero_returns),
+    ] {
+        uart.write(label);
+        uart.write(&hex8((value >> 32) as u32));
+        uart.write(&hex8(value as u32));
+    }
+    uart.write(if d.exhausted {
+        b" exhausted=1\r\n"
+    } else {
+        b" exhausted=0\r\n"
+    });
 }
 
 fn write_incremental_event(

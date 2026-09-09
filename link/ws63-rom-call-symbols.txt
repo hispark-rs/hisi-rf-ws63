@@ -11,3 +11,5 @@ uapi_tcxo_delay_us
 uapi_systick_init
 uapi_tcxo_init
 hh503_get_mac_tx_statistics_data
+frw_rom_cb_register
+frw_get_rom_cb
