@@ -167,6 +167,110 @@ fn native_link_drop_invalidates_the_device_and_delayed_callbacks() {
 }
 
 #[test]
+fn native_close_during_link_up_wake_cannot_be_overwritten_by_open() {
+    use std::sync::{Arc, Barrier};
+    use std::task::Wake;
+
+    struct Interleave {
+        entered: Arc<Barrier>,
+        closed: Arc<Barrier>,
+    }
+    impl Wake for Interleave {
+        fn wake(self: Arc<Self>) {
+            self.entered.wait();
+            self.closed.wait();
+        }
+    }
+
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let closed = Arc::new(Barrier::new(2));
+    let waker = Waker::from(Arc::new(Interleave {
+        entered: entered.clone(),
+        closed: closed.clone(),
+    }));
+    assert!(parts.device.link_state(&mut Context::from_waker(&waker)) == LinkState::Down);
+
+    let result = std::thread::scope(|scope| {
+        let route = &route;
+        let device = &mut parts.device;
+        scope.spawn(move || {
+            entered.wait();
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(device.link_state(&mut cx) == LinkState::Up);
+            device.transmit(&mut cx).unwrap().consume(1, |b| b[0] = 7);
+            route.close_admission();
+            closed.wait();
+        });
+        link.begin_after_native_quiescence()
+    });
+
+    assert_eq!(result, Err(LinkError::Route(RouteError::OpenInterrupted)));
+    assert!(route.enter().is_none());
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(parts.device.link_state(&mut cx) == LinkState::Down);
+    assert!(parts.device.transmit(&mut cx).is_none());
+    assert_eq!(link.tx_diagnostics().pending, 0);
+    assert_eq!(link.tx_diagnostics().dropped, 1);
+    assert_eq!(
+        link.poll_transmit(&mut cx, |_| Ok::<_, u8>(())),
+        Poll::Pending
+    );
+    assert_conserved(&route);
+}
+
+#[test]
+fn close_invalidates_prepared_open_even_when_already_closed() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut owner = route.claim(parts.port.ingress()).unwrap();
+    let generation = parts.port.begin_session().unwrap();
+    let stale = owner.prepare_open().unwrap();
+    route.close_admission();
+    assert_eq!(
+        owner.commit_open(stale, generation),
+        Err(RouteError::OpenInterrupted)
+    );
+    assert!(route.enter().is_none());
+    // Only a fresh caller-established native fence can justify a new attempt.
+    let fresh = owner.prepare_open().unwrap();
+    owner.commit_open(fresh, generation).unwrap();
+    route.enter().unwrap().receive(&[1]).unwrap();
+    assert_conserved(&route);
+}
+
+#[test]
+fn close_revision_exhaustion_cannot_reopen_or_reclaim_the_route() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut owner = route.claim(parts.port.ingress()).unwrap();
+    let generation = parts.port.begin_session().unwrap();
+    critical_section::with(|cs| route.state.borrow_ref_mut(cs).close_revision = Some(u64::MAX));
+    let last = owner.prepare_open().unwrap();
+    route.close_admission();
+    assert_eq!(
+        owner.commit_open(last, generation),
+        Err(RouteError::LifecycleExhausted)
+    );
+    assert_eq!(
+        owner.open_after_native_quiescence(generation),
+        Err(RouteError::LifecycleExhausted)
+    );
+    assert!(route.enter().is_none());
+    drop(owner);
+    assert!(matches!(
+        route.claim(parts.port.ingress()),
+        Err(RouteError::LifecycleExhausted)
+    ));
+    assert_conserved(&route);
+}
+
+#[test]
 fn tx_submission_is_bounded_and_distinguishes_native_failure() {
     let mut storage = L2Storage::<2, 2, 64>::new();
     let mut parts = storage.split(mac());

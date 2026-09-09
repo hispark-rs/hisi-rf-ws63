@@ -48,6 +48,8 @@ pub enum RouteError {
     AlreadyRegistered,
     CallbacksInFlight,
     AlreadyOpen,
+    OpenInterrupted,
+    LifecycleExhausted,
 }
 
 /// Callback-entry conservation, including entries rejected while the route is down.
@@ -65,7 +67,20 @@ pub struct RouteDiagnostics {
 struct State<'storage, const RX: usize, const MTU: usize> {
     ingress: Option<L2Ingress<'storage, RX, MTU>>,
     generation: Option<Generation>,
+    close_revision: Option<u64>,
     diagnostics: RouteDiagnostics,
+}
+
+impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
+    fn close_admission(&mut self) {
+        self.generation = None;
+        self.close_revision = self.close_revision.and_then(|n| n.checked_add(1));
+    }
+}
+
+#[must_use]
+struct OpenIntent {
+    close_revision: u64,
 }
 
 /// One checked route from the vendor's context-free callback ABI to an instance.
@@ -85,6 +100,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
             state: Mutex::new(RefCell::new(State {
                 ingress: None,
                 generation: None,
+                close_revision: Some(0),
                 diagnostics: RouteDiagnostics {
                     entered: 0,
                     queued: 0,
@@ -109,6 +125,9 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
             }
             if state.diagnostics.in_flight != 0 {
                 return Err(RouteError::CallbacksInFlight);
+            }
+            if state.close_revision.is_none() {
+                return Err(RouteError::LifecycleExhausted);
             }
             state.ingress = Some(ingress);
             state.generation = None;
@@ -151,7 +170,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
     /// and drain tickets/native producers. This does not invalidate TX tokens
     /// or revoke a payload copy that has already started.
     pub(crate) fn close_admission(&self) {
-        critical_section::with(|cs| self.state.borrow_ref_mut(cs).generation = None);
+        critical_section::with(|cs| self.state.borrow_ref_mut(cs).close_admission());
     }
 }
 
@@ -178,8 +197,36 @@ impl<const RX: usize, const MTU: usize> Registration<'_, '_, RX, MTU> {
         &mut self,
         generation: Generation,
     ) -> Result<(), RouteError> {
+        let intent = self.prepare_open()?;
+        self.commit_open(intent, generation)
+    }
+
+    fn prepare_open(&self) -> Result<OpenIntent, RouteError> {
+        critical_section::with(|cs| {
+            let state = self.route.state.borrow_ref(cs);
+            if state.generation.is_some() {
+                return Err(RouteError::AlreadyOpen);
+            }
+            if state.diagnostics.in_flight != 0 {
+                return Err(RouteError::CallbacksInFlight);
+            }
+            Ok(OpenIntent {
+                close_revision: state.close_revision.ok_or(RouteError::LifecycleExhausted)?,
+            })
+        })
+    }
+
+    fn commit_open(
+        &mut self,
+        intent: OpenIntent,
+        generation: Generation,
+    ) -> Result<(), RouteError> {
         critical_section::with(|cs| {
             let mut state = self.route.state.borrow_ref_mut(cs);
+            let revision = state.close_revision.ok_or(RouteError::LifecycleExhausted)?;
+            if revision != intent.close_revision {
+                return Err(RouteError::OpenInterrupted);
+            }
             if state.generation.is_some() {
                 return Err(RouteError::AlreadyOpen);
             }
@@ -196,7 +243,7 @@ impl<const RX: usize, const MTU: usize> Drop for Registration<'_, '_, RX, MTU> {
     fn drop(&mut self) {
         critical_section::with(|cs| {
             let mut state = self.route.state.borrow_ref_mut(cs);
-            state.generation = None;
+            state.close_admission();
             state.ingress = None;
         });
     }

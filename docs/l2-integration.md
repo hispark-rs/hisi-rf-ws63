@@ -66,6 +66,11 @@ The required ordering is:
 4. Open the new epoch with `begin_after_native_quiescence`.
 
 The last method checks Rust callback drainage and refuses an already open route.
+It captures a close revision before publishing link-up/waking the network. A
+native admission close during those wakeups invalidates that attempt: the route
+stays closed, the port returns Down, and TX queued in the window is discarded.
+Close revisions never wrap; exhaustion permanently refuses open/registration.
+This guards Rust publication, not native producer quiescence.
 It cannot inspect native DMA/FRW queues. **Native quiescence remains an unproven
 production prerequisite**; successful disconnect submission or a zero return
 code from a no-response WAL command must not be treated as that proof. Do not
@@ -119,6 +124,10 @@ callback/reconnect, abandon/drop, queue overflow and oversize, concurrent
 producers, close/reset conservation, one-frame worker budget, native TX failure,
 TX wake, and capacity held through native return. CI runs the host contract on
 Linux, macOS ARM64 and Windows, plus RV32 checks and Linux Miri.
+An interleaving regression uses the actual link-up waker to accept one TX and
+close admission before open commits; it checks rollback, closed RX, Down state
+and explicit TX drop. It fails against the pre-revision implementation. Separate
+tests cover a close on an already closed route and revision exhaustion.
 The same suites now exercise the real `driverif_input` entry, pbuf reference
 release, padding removal, native-buffer independence, and wrong-netif rejection.
 Disconnect receipt tests call the production queue helpers, including all 16

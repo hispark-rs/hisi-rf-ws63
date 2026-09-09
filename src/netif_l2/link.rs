@@ -40,22 +40,15 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
     /// quiesced. Rust-ticket drainage is checked here; vendor drainage is a
     /// separate prerequisite to be implemented by the WS63 lifecycle owner.
     pub fn begin_after_native_quiescence(&mut self) -> Result<(), LinkError> {
-        critical_section::with(|cs| {
-            let state = self.registration.route.state.borrow_ref(cs);
-            if state.generation.is_some() {
-                return Err(LinkError::Route(RouteError::AlreadyOpen));
-            }
-            if state.diagnostics.in_flight != 0 {
-                return Err(LinkError::Route(RouteError::CallbacksInFlight));
-            }
-            Ok(())
-        })?;
-        // The route remains closed while the port wakes network waiters. Only
-        // this &mut owner can open it, so reentrant RX still fails closed.
+        let intent = self.registration.prepare_open().map_err(LinkError::Route)?;
+        // Network wakeups run outside the lock. A newer native close during
+        // this window must win over this open, including TX queued by a wake.
         let generation = self.port.begin_session().map_err(LinkError::Queue)?;
-        self.registration
-            .open_after_native_quiescence(generation)
-            .map_err(LinkError::Route)
+        if let Err(error) = self.registration.commit_open(intent, generation) {
+            self.port.link_down().map_err(LinkError::Queue)?;
+            return Err(LinkError::Route(error));
+        }
+        Ok(())
     }
 
     /// Close RX admission first, then invalidate network tokens/queued frames.

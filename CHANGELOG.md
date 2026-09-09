@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep a newer native admission close from being overwritten by an in-progress
+  NET0 link open. Check a non-wrapping close revision across network wakeups and
+  roll back the port/TX queue on interruption. Reproduce the old race through
+  the real waker in host tests; this does not replace the native queue fence.
+
 ### Added
 
 - Include autonomous hostap teardown and both inline recovery disconnects in
