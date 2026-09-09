@@ -96,6 +96,31 @@ const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 const PROFILE_L2_STORAGE_BYTES: usize = core::mem::size_of::<crate::netif_l2::NativeStorage>();
 #[cfg(all(not(feature = "standard-l2"), target_arch = "riscv32"))]
 const PROFILE_L2_STORAGE_BYTES: usize = 0;
+#[cfg(all(
+    target_pointer_width = "32",
+    feature = "standard-l2",
+    feature = "upstream-supplicant-port",
+    any(
+        feature = "legacy-blocking-backend",
+        feature = "incremental-embassy-wait"
+    )
+))]
+// Measured RV32 owner delta, including nested backend/worker padding. The
+// independent target assertions below enforce both event-capacity layouts;
+// the public report still derives physical bytes from size_of, not this guard.
+const PROFILE_DISCONNECT_RECEIPT_BYTES: usize = 32;
+#[cfg(all(
+    target_pointer_width = "32",
+    not(all(
+        feature = "standard-l2",
+        feature = "upstream-supplicant-port",
+        any(
+            feature = "legacy-blocking-backend",
+            feature = "incremental-embassy-wait"
+        )
+    ))
+))]
+const PROFILE_DISCONNECT_RECEIPT_BYTES: usize = 0;
 
 mod sealed {
     pub trait Sealed {}
@@ -1317,6 +1342,7 @@ const _: () = {
             == align_up(
                 WS63_CONTROL_STORAGE_FIXED_BYTES
                     + PROFILE_L2_STORAGE_BYTES
+                    + PROFILE_DISCONNECT_RECEIPT_BYTES
                     + WS63_RADIO_STATE_BASE_BYTES
                     + 4 * WS63_RADIO_EVENT_SLOT_BYTES,
                 WS63_CONTROL_STORAGE_ALIGNMENT,
@@ -1327,6 +1353,7 @@ const _: () = {
             == align_up(
                 WS63_CONTROL_STORAGE_FIXED_BYTES
                     + PROFILE_L2_STORAGE_BYTES
+                    + PROFILE_DISCONNECT_RECEIPT_BYTES
                     + WS63_RADIO_STATE_BASE_BYTES
                     + 8 * WS63_RADIO_EVENT_SLOT_BYTES,
                 WS63_CONTROL_STORAGE_ALIGNMENT,

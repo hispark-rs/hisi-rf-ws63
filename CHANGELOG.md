@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Correlate opt-in NET0 disconnect requests with the serialized native worker's
+  exact ioctl return values. Retain pending/failed receipts across operation
+  timeout, reject premature reuse, and wake the runner on completion. Test
+  bounded history, rejection, wake failure and interleavings; ioctl return is
+  explicitly not an RX/DMA quiescence fence. Existing smoltcp profiles remain
+  unchanged, and this lifecycle still requires new-path HIL.
 - Embed caller-owned, one-shot NET0 RX/TX storage in the opt-in profile control
   object. Derive queue payload/metadata and total bytes from its real type,
   without reducing existing stacks or claiming a calibrated network profile.

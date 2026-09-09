@@ -28,6 +28,9 @@ use ws63_radio_sys::supplicant::{
     hisi_wpa_temporary_reject_recovery_diagnostic_word, key_flag,
 };
 
+#[cfg(feature = "standard-l2")]
+mod deauth;
+
 static RUNNER_WAKE: Semaphore = Semaphore::new(0);
 static DEAUTH_WAKE: Semaphore = Semaphore::new(0);
 static PORT_IDENTITY: u8 = 0;
@@ -39,6 +42,7 @@ static MGMT_RX_QUEUE: MgmtRxQueue = MgmtRxQueue::new();
 static NATIVE_SCAN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SCAN_EVENT_QUEUE: ScanEventQueue = ScanEventQueue::new();
 
+#[cfg(not(feature = "standard-l2"))]
 const DEAUTH_QUEUE_CAPACITY: usize = 4;
 const DEAUTH_WORKER_FREE: u8 = 0;
 const DEAUTH_WORKER_STARTING: u8 = 1;
@@ -48,16 +52,19 @@ const DEAUTH_WORKER_STACK_BYTES: usize = 4 * 1024;
 const DEAUTH_WORKER_PRIORITY: u8 = 11;
 
 #[derive(Clone, Copy)]
+#[cfg(not(feature = "standard-l2"))]
 struct DeauthRequest {
     reason: u16,
 }
 
+#[cfg(not(feature = "standard-l2"))]
 struct DeauthQueue {
     requests: [DeauthRequest; DEAUTH_QUEUE_CAPACITY],
     head: usize,
     len: usize,
 }
 
+#[cfg(not(feature = "standard-l2"))]
 impl DeauthQueue {
     const fn new() -> Self {
         Self {
@@ -88,7 +95,10 @@ impl DeauthQueue {
     }
 }
 
+#[cfg(not(feature = "standard-l2"))]
 static DEAUTH_QUEUE: Mutex<RefCell<DeauthQueue>> = Mutex::new(RefCell::new(DeauthQueue::new()));
+#[cfg(feature = "standard-l2")]
+static DEAUTH_QUEUE: Mutex<RefCell<deauth::Queue>> = Mutex::new(RefCell::new(deauth::Queue::new()));
 static DIAG_DEAUTH_QUEUED: AtomicU32 = AtomicU32::new(0);
 static DIAG_DEAUTH_COMPLETED: AtomicU32 = AtomicU32::new(0);
 static DIAG_DEAUTH_FAILED: AtomicU32 = AtomicU32::new(0);
@@ -1393,6 +1403,8 @@ pub(crate) struct NativeSupplicant {
     external_auth_status_sequence: u32,
     external_auth_retry_deadline_ms: u64,
     external_auth_retry_pending: bool,
+    #[cfg(feature = "standard-l2")]
+    disconnect_receipt: Result<Option<deauth::Receipt>, i32>,
 }
 
 #[allow(dead_code)]
@@ -1454,6 +1466,8 @@ impl NativeSupplicant {
             external_auth_status_sequence: 0,
             external_auth_retry_deadline_ms: 0,
             external_auth_retry_pending: false,
+            #[cfg(feature = "standard-l2")]
+            disconnect_receipt: Ok(None),
         })
     }
 
@@ -1461,6 +1475,8 @@ impl NativeSupplicant {
         &mut self,
         config: &hisi_rf_core::StationConfig,
     ) -> Result<(), NativeSupplicantError> {
+        #[cfg(feature = "standard-l2")]
+        self.require_disconnect_returned()?;
         let mut network = NetworkConfig {
             abi_version: ABI_VERSION,
             security: 0,
@@ -1506,6 +1522,8 @@ impl NativeSupplicant {
     }
 
     pub(crate) fn connect(&mut self) -> Result<(), NativeSupplicantError> {
+        #[cfg(feature = "standard-l2")]
+        self.require_disconnect_returned()?;
         // SAFETY: the unique owner serializes all context calls.
         let status = unsafe { hisi_wpa_connect(self.context.as_ptr()) };
         (status == 0)
@@ -1514,11 +1532,68 @@ impl NativeSupplicant {
     }
 
     pub(crate) fn disconnect(&mut self) -> Result<(), NativeSupplicantError> {
+        #[cfg(feature = "standard-l2")]
+        self.require_disconnect_returned()?;
+        #[cfg(feature = "standard-l2")]
+        let before = critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).checkpoint());
         // SAFETY: the unique owner serializes all context calls.
         let status = unsafe { hisi_wpa_disconnect(self.context.as_ptr()) };
+        #[cfg(feature = "standard-l2")]
+        {
+            // The unique C-context owner is the only request producer. The
+            // worker may complete during the call, so preserve ticket history
+            // instead of sampling a global completion counter afterwards.
+            self.disconnect_receipt =
+                critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).receipt_since(before))
+                    .map(Some)
+                    .map_err(deauth::Error::status);
+            // A partially accepted/rejected batch cannot be retried as though
+            // no native work exists. Retain the failure for this owner.
+            self.disconnect_receipt
+                .map_err(NativeSupplicantError::DisconnectFailed)?;
+        }
         (status == 0)
             .then_some(())
             .ok_or(NativeSupplicantError::DisconnectFailed(status))
+    }
+
+    /// Native ioctl return is a necessary sequencing boundary, not a native
+    /// RX/DMA fence. In particular, a no-user WAL success need not delete any
+    /// producer. NET0 must establish that stronger lifecycle separately.
+    #[cfg(feature = "standard-l2")]
+    fn disconnect_ioctls_returned(&mut self) -> Result<bool, NativeSupplicantError> {
+        let receipt = self
+            .disconnect_receipt
+            .map_err(NativeSupplicantError::DisconnectFailed)?;
+        let result = critical_section::with(|cs| {
+            let queue = DEAUTH_QUEUE.borrow_ref(cs);
+            queue.health()?;
+            receipt.map_or(Ok(true), |receipt| {
+                queue.poll(receipt).map(|result| result.is_ready())
+            })
+        });
+        match result {
+            Ok(false) => Ok(false),
+            Ok(true) => {
+                self.disconnect_receipt = Ok(None);
+                Ok(true)
+            }
+            Err(error) => {
+                self.disconnect_receipt = Err(error.status());
+                Err(NativeSupplicantError::DisconnectFailed(error.status()))
+            }
+        }
+    }
+
+    #[cfg(feature = "standard-l2")]
+    fn require_disconnect_returned(&mut self) -> Result<(), NativeSupplicantError> {
+        if self.disconnect_ioctls_returned()? {
+            Ok(())
+        } else {
+            // Do not overwrite a pending receipt after an outer operation
+            // timed out/cancelled. The worker still owns its native call.
+            Err(NativeSupplicantError::DisconnectFailed(-0x6307))
+        }
     }
 
     /// Capture the next vendor scan into hostap's BSS cache.
@@ -1528,6 +1603,8 @@ impl NativeSupplicant {
     /// scan from `wpa_supplicant_select_network` and keeps one scan transaction
     /// as the source of both the Rust result list and hostap's BSS cache.
     pub(crate) fn begin_scan_cache_capture(&mut self) -> Result<(), NativeSupplicantError> {
+        #[cfg(feature = "standard-l2")]
+        self.require_disconnect_returned()?;
         if PORT_STATE.load(Ordering::Acquire) != PORT_READY
             || NATIVE_SCAN_ACTIVE
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1617,6 +1694,9 @@ impl NativeSupplicant {
         &mut self,
         work_budget: NonZeroU32,
     ) -> Result<PollResult, NativeSupplicantError> {
+        // A worker error must propagate even if hostap has no output event.
+        #[cfg(feature = "standard-l2")]
+        let _ = self.disconnect_ioctls_returned()?;
         let dropped = MGMT_RX_QUEUE.dropped.load(Ordering::Acquire);
         if dropped != self.mgmt_dropped_seen {
             let delta = dropped.wrapping_sub(self.mgmt_dropped_seen);
@@ -1927,6 +2007,14 @@ impl NativeSupplicant {
 
     /// Drain one bounded event after [`Self::poll`].
     pub(crate) fn next_event(&mut self) -> Result<Option<Event>, NativeSupplicantError> {
+        // Hostap/WAL can publish Disconnected before the native ioctl returns.
+        // Keep the bounded C output queue owned until this request completes;
+        // worker completion signals the runner. The outer deadline still wins
+        // if the native call remains blocked. No busy loop or delay is added.
+        #[cfg(feature = "standard-l2")]
+        if !self.disconnect_ioctls_returned()? {
+            return Ok(None);
+        }
         let mut event = core::mem::MaybeUninit::<Event>::uninit();
         // SAFETY: C writes the complete event when it returns one. The unique
         // owner prevents concurrent queue consumption.
@@ -2326,6 +2414,18 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
                     (&mut request.reason as *mut u16).cast(),
                 )
             });
+            #[cfg(feature = "standard-l2")]
+            {
+                let result = critical_section::with(|cs| {
+                    DEAUTH_QUEUE
+                        .borrow_ref_mut(cs)
+                        .complete(request.ticket, status)
+                });
+                if result.is_err() {
+                    DEAUTH_WORKER_STATE.store(DEAUTH_WORKER_POISONED, Ordering::Release);
+                }
+                notify_runner();
+            }
             if status == 0 {
                 DIAG_DEAUTH_COMPLETED.fetch_add(1, Ordering::Relaxed);
             } else {
@@ -2337,20 +2437,33 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
 
 fn queue_deauthentication(reason: u16) -> c_int {
     if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
+        #[cfg(feature = "standard-l2")]
+        critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).worker_unavailable());
         return -1;
     }
+    #[cfg(not(feature = "standard-l2"))]
     let queued = critical_section::with(|cs| {
         DEAUTH_QUEUE
             .borrow(cs)
             .borrow_mut()
             .push(DeauthRequest { reason })
     });
+    #[cfg(feature = "standard-l2")]
+    let queued = critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).push(reason).is_ok());
     if !queued {
         DIAG_DEAUTH_DROPPED.fetch_add(1, Ordering::Relaxed);
         return -1;
     }
     DIAG_DEAUTH_QUEUED.fetch_add(1, Ordering::Relaxed);
+    #[cfg(not(feature = "standard-l2"))]
     let _ = DEAUTH_WAKE.up();
+    #[cfg(feature = "standard-l2")]
+    if DEAUTH_WAKE.up().is_err() {
+        critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).wake_failed());
+        DEAUTH_WORKER_STATE.store(DEAUTH_WORKER_POISONED, Ordering::Release);
+        notify_runner();
+        return -1;
+    }
     0
 }
 
@@ -3239,6 +3352,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(feature = "standard-l2"))]
     fn deauthentication_queue_is_bounded_fifo_and_wraps() {
         let mut queue = DeauthQueue::new();
         for reason in 1..=DEAUTH_QUEUE_CAPACITY as u16 {

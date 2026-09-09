@@ -71,6 +71,28 @@ production prerequisite**; successful disconnect submission or a zero return
 code from a no-response WAL command must not be treated as that proof. Do not
 wire reconnect by looking up the current generation for a delayed old callback.
 
+With `standard-l2`, the existing deauthentication worker now carries monotonic
+request tickets. An explicit hostap disconnect captures the exact submitted
+ticket range, including native calls that return before the C call itself
+returns. The queue retains at most four waiting requests, one running request,
+and eight terminal results. No allocation or native work runs under its lock.
+
+Hostap output is not delivered as operation completion while that receipt is
+pending. Native completion wakes the runner; native errors propagate even with
+no hostap output. Configure/connect/scan and another explicit disconnect cannot
+replace a pending or failed receipt, including after an outer cancellation or
+deadline. Queue rejection, failed wake, mismatched completion, counter exhaustion
+and overwritten result history fail closed. The existing named smoltcp profiles
+retain their previous path until this opt-in lifecycle is validated on silicon.
+
+`NoRequest` (hostap submitted no ioctl) is distinct from `Ioctls` (all captured
+calls returned zero). **Neither outcome is native quiescence**. A returned ioctl
+may take the no-user branch or have posted an earlier disconnect event. The
+receipt does not cancel a blocked native C call, drain hardware, acknowledge
+user deletion, or cover autonomous hostap requests outside its captured range.
+The outer operation deadline remains bounded, but reuse after native cleanup
+failure is deliberately refused, not silently retried.
+
 Already issued queue tokens retain their storage until consumed/dropped. A new
 epoch cannot retract a frame already submitted to hardware. Network connection
 objects must also be invalidated at a link transition.
@@ -84,6 +106,10 @@ TX wake, and capacity held through native return. CI runs the host contract on
 Linux, macOS ARM64 and Windows, plus RV32 checks and Linux Miri.
 The same suites now exercise the real `driverif_input` entry, pbuf reference
 release, padding removal, native-buffer independence, and wrong-netif rejection.
+Disconnect receipt tests call the production queue helpers, including all 16
+enqueue/worker-completion interleavings for a four-request batch, unrelated/old
+completions, queue rejection, failure retention, history eviction and u64
+exhaustion. These are command sequencing tests, not native-fence or HIL proof.
 
 Remaining integration gates are profile-owned registration, native quiescence/
 authorization events and worker wake wiring, followed by exact-artifact WS63
