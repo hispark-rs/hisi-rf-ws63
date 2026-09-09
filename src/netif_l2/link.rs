@@ -14,6 +14,7 @@ pub enum LinkError {
 pub enum SubmitError<E> {
     Native(E),
     StaleGeneration,
+    AdmissionClosed,
 }
 
 /// Session/TX owner for the native worker. It owns no packet buffers and is not
@@ -75,6 +76,9 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
         if !packet.is_current() {
             return Poll::Ready(Err(SubmitError::StaleGeneration));
         }
+        let Some(_ticket) = self.registration.enter_transmit(packet.generation()) else {
+            return Poll::Ready(Err(SubmitError::AdmissionClosed));
+        };
         if let Err(error) = submit(packet.frame()) {
             return Poll::Ready(Err(SubmitError::Native(error)));
         }

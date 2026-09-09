@@ -62,6 +62,9 @@ pub struct RouteDiagnostics {
     pub closed_drops: u64,
     pub abandoned: u64,
     pub in_flight: usize,
+    /// Rust TX submissions admitted before close and not yet returned.
+    /// This does not count frames retained by native queues after return.
+    pub transmits_in_flight: usize,
 }
 
 struct State<'storage, const RX: usize, const MTU: usize> {
@@ -108,6 +111,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                     closed_drops: 0,
                     abandoned: 0,
                     in_flight: 0,
+                    transmits_in_flight: 0,
                 },
             })),
         }
@@ -123,7 +127,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
             if state.ingress.is_some() {
                 return Err(RouteError::AlreadyRegistered);
             }
-            if state.diagnostics.in_flight != 0 {
+            if state.diagnostics.in_flight != 0 || state.diagnostics.transmits_in_flight != 0 {
                 return Err(RouteError::CallbacksInFlight);
             }
             if state.close_revision.is_none() {
@@ -167,8 +171,9 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
 
     /// A native teardown may start outside the L2 worker. Stop new callback
     /// admission before submitting it; the worker must still close the port
-    /// and drain tickets/native producers. This does not invalidate TX tokens
-    /// or revoke a payload copy that has already started.
+    /// and drain tickets/native producers. Queued TX cannot gain a new native
+    /// submission ticket, but an already admitted TX may finish. This does not
+    /// invalidate network tokens or revoke a payload copy already started.
     pub(crate) fn close_admission(&self) {
         critical_section::with(|cs| self.state.borrow_ref_mut(cs).close_admission());
     }
@@ -181,11 +186,26 @@ pub struct Registration<'route, 'storage, const RX: usize, const MTU: usize> {
     route: &'route CallbackRoute<'storage, RX, MTU>,
 }
 
-impl<const RX: usize, const MTU: usize> Registration<'_, '_, RX, MTU> {
+impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX, MTU> {
     /// Stop admission before resetting the L2 port. Already entered callbacks
     /// keep their old generation; reset makes their later publication fail.
     pub fn close(&mut self) {
         self.route.close_admission();
+    }
+
+    fn enter_transmit(
+        &self,
+        generation: Generation,
+    ) -> Option<TransmitTicket<'_, 'storage, RX, MTU>> {
+        critical_section::with(|cs| {
+            let mut state = self.route.state.borrow_ref_mut(cs);
+            if state.generation != Some(generation) {
+                return None;
+            }
+            state.diagnostics.transmits_in_flight =
+                state.diagnostics.transmits_in_flight.checked_add(1)?;
+            Some(TransmitTicket { route: self.route })
+        })
     }
 
     /// Publish a newly established link after native RX/TX quiescence.
@@ -207,7 +227,7 @@ impl<const RX: usize, const MTU: usize> Registration<'_, '_, RX, MTU> {
             if state.generation.is_some() {
                 return Err(RouteError::AlreadyOpen);
             }
-            if state.diagnostics.in_flight != 0 {
+            if state.diagnostics.in_flight != 0 || state.diagnostics.transmits_in_flight != 0 {
                 return Err(RouteError::CallbacksInFlight);
             }
             Ok(OpenIntent {
@@ -230,7 +250,7 @@ impl<const RX: usize, const MTU: usize> Registration<'_, '_, RX, MTU> {
             if state.generation.is_some() {
                 return Err(RouteError::AlreadyOpen);
             }
-            if state.diagnostics.in_flight != 0 {
+            if state.diagnostics.in_flight != 0 || state.diagnostics.transmits_in_flight != 0 {
                 return Err(RouteError::CallbacksInFlight);
             }
             state.generation = Some(generation);
@@ -245,6 +265,25 @@ impl<const RX: usize, const MTU: usize> Drop for Registration<'_, '_, RX, MTU> {
             let mut state = self.route.state.borrow_ref_mut(cs);
             state.close_admission();
             state.ingress = None;
+        });
+    }
+}
+
+/// A native submit permission linearized against close. Keep it alive while
+/// native code borrows the queue payload, including unwinding/error paths.
+#[must_use]
+struct TransmitTicket<'route, 'storage, const RX: usize, const MTU: usize> {
+    route: &'route CallbackRoute<'storage, RX, MTU>,
+}
+
+impl<const RX: usize, const MTU: usize> Drop for TransmitTicket<'_, '_, RX, MTU> {
+    fn drop(&mut self) {
+        critical_section::with(|cs| {
+            self.route
+                .state
+                .borrow_ref_mut(cs)
+                .diagnostics
+                .transmits_in_flight -= 1;
         });
     }
 }

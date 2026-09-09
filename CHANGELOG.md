@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refuse new NET0 native TX submissions after admission closes, including
+  frames already queued by the network stack. Track admitted calls through
+  return/drop and refuse reopening while a Rust TX borrow remains. Native
+  queue/DMA drainage is still a separate, unclosed integration gate.
 - Keep a newer native admission close from being overwritten by an in-progress
   NET0 link open. Check a non-wrapping close revision across network wakeups and
   roll back the port/TX queue on interruption. Reproduce the old race through

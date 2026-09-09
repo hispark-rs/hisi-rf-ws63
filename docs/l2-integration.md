@@ -55,6 +55,13 @@ as the core contract; they do not prove over-the-air delivery.
 held until the native call has copied/finished reading the frame. Native errors
 count as drops, not delivery. The worker waker is registered before checking the
 TX queue. No timer polling is needed to notice a newly queued TX frame.
+Before entering native code, the worker claims a non-cloneable submission
+ticket for the packet's original generation, linearized against admission close.
+A packet queued before close is explicitly dropped if it has not yet gained
+that ticket. An already admitted call may finish after close; its ticket and
+payload remain owned through native return/error. `transmits_in_flight` counts
+these Rust borrows, and reopening refuses them. It does not count native-owned
+frames still queued or in DMA after return, nor prove over-the-air delivery.
 
 ## Connection Fence
 
@@ -100,8 +107,9 @@ complete and wake outside the metadata lock. The completion wake is necessary:
 a request enqueued during native execution may have consumed its first wake
 before the slot became available. Association and its retry refuse known
 pending teardown. Every disconnect entry closes new Rust callback admission
-before native submission. This early close does not revoke a copy already in
-progress or a TX token; the worker still owes `NativeLink::close`, native
+before native submission. This early close rejects new TX submission tickets
+but does not revoke a copy/native call already in progress or a network TX
+token; the worker still owes `NativeLink::close`, native
 quiescence, and Rust-ticket drainage before opening another epoch.
 
 `NoRequest` (hostap submitted no ioctl) is distinct from `Ioctls` (all captured
@@ -130,6 +138,10 @@ and explicit TX drop. It fails against the pre-revision implementation. Separate
 tests cover a close on an already closed route and revision exhaustion.
 The same suites now exercise the real `driverif_input` entry, pbuf reference
 release, padding removal, native-buffer independence, and wrong-netif rejection.
+TX tests reject prequeued frames after native admission closes, preserve the
+ticket/capacity through a close reentered from native code, refuse reopening
+with a live submit ticket, reject old epochs, and release on native error or
+host unwind. The closed-admission regression fails on the older implementation.
 Disconnect receipt tests call the production queue helpers, including all 16
 enqueue/worker-completion interleavings for a four-request batch, unrelated/old
 completions, queue rejection, failure retention, history eviction and u64

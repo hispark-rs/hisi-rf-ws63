@@ -271,6 +271,122 @@ fn close_revision_exhaustion_cannot_reopen_or_reclaim_the_route() {
 }
 
 #[test]
+fn native_admission_close_rejects_already_queued_tx() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    let mut cx = Context::from_waker(Waker::noop());
+    parts
+        .device
+        .transmit(&mut cx)
+        .unwrap()
+        .consume(1, |b| b[0] = 1);
+    // The native teardown thread closes admission before the L2 worker next runs.
+    route.close_admission();
+    let mut submitted = false;
+    assert_eq!(
+        link.poll_transmit(&mut cx, |_| {
+            submitted = true;
+            Ok::<_, u8>(())
+        }),
+        Poll::Ready(Err(SubmitError::AdmissionClosed))
+    );
+    assert!(
+        !submitted,
+        "closed native admission must reject new TX submission"
+    );
+    assert_eq!(link.tx_diagnostics().delivered, 0);
+    assert_eq!(link.tx_diagnostics().dropped, 1);
+}
+
+#[test]
+fn admitted_tx_retains_its_permit_across_close_until_native_return() {
+    for success in [false, true] {
+        let mut storage = L2Storage::<2, 1, 64>::new();
+        let mut parts = storage.split(mac());
+        let route = CallbackRoute::new();
+        let mut link = NativeLink::bind(parts.port, &route).unwrap();
+        link.begin_after_native_quiescence().unwrap();
+        let mut cx = Context::from_waker(Waker::noop());
+        parts
+            .device
+            .transmit(&mut cx)
+            .unwrap()
+            .consume(1, |b| b[0] = 1);
+        let mut worker = Context::from_waker(Waker::noop());
+        let result = link.poll_transmit(&mut worker, |_| {
+            assert_eq!(route.diagnostics().transmits_in_flight, 1);
+            route.close_admission();
+            assert_eq!(route.diagnostics().transmits_in_flight, 1);
+            assert!(parts.device.transmit(&mut cx).is_none());
+            if success { Ok(()) } else { Err(42) }
+        });
+        assert_eq!(route.diagnostics().transmits_in_flight, 0);
+        assert_eq!(
+            result,
+            Poll::Ready(if success {
+                Ok(())
+            } else {
+                Err(SubmitError::Native(42))
+            })
+        );
+        assert_eq!(link.tx_diagnostics().pending, 0);
+        assert_eq!(link.tx_diagnostics().delivered, u64::from(success));
+        assert_eq!(link.tx_diagnostics().dropped, u64::from(!success));
+        assert!(route.enter().is_none());
+    }
+}
+
+#[test]
+fn tx_ticket_blocks_reopen_and_rejects_a_stale_epoch() {
+    let mut storage = L2Storage::<2, 1, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut owner = route.claim(parts.port.ingress()).unwrap();
+    let old = parts.port.begin_session().unwrap();
+    owner.open_after_native_quiescence(old).unwrap();
+    let ticket = owner.enter_transmit(old).unwrap();
+    route.close_admission();
+    assert!(matches!(
+        owner.prepare_open(),
+        Err(RouteError::CallbacksInFlight)
+    ));
+    assert!(owner.enter_transmit(old).is_none());
+    drop(ticket);
+    let current = parts.port.begin_session().unwrap();
+    owner.open_after_native_quiescence(current).unwrap();
+    assert!(owner.enter_transmit(old).is_none());
+    drop(owner.enter_transmit(current).unwrap());
+    assert_eq!(route.diagnostics().transmits_in_flight, 0);
+}
+
+#[test]
+fn panicking_native_submit_releases_tx_payload_and_permit() {
+    let mut storage = L2Storage::<2, 1, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    let mut cx = Context::from_waker(Waker::noop());
+    parts
+        .device
+        .transmit(&mut cx)
+        .unwrap()
+        .consume(1, |b| b[0] = 1);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        link.poll_transmit(&mut cx, |_| -> Result<(), u8> {
+            panic!("injected native panic")
+        })
+    }));
+    assert!(result.is_err());
+    assert_eq!(route.diagnostics().transmits_in_flight, 0);
+    assert_eq!(link.tx_diagnostics().dropped, 1);
+    assert_eq!(link.tx_diagnostics().pending, 0);
+}
+
+#[test]
 fn tx_submission_is_bounded_and_distinguishes_native_failure() {
     let mut storage = L2Storage::<2, 2, 64>::new();
     let mut parts = storage.split(mac());
