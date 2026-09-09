@@ -883,6 +883,23 @@ impl LinkEventQueue {
         queued
     }
 
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    fn enqueue_initial_association<const RX: usize, const MTU: usize>(
+        &self,
+        port_ready: bool,
+        meta: LinkMeta,
+        first: &[u8],
+        second: &[u8],
+        route: &crate::netif_l2::CallbackRoute<'_, RX, MTU>,
+    ) -> bool {
+        // The close hook below intentionally does NOT run on valid success.
+        // Observe that result before publishing, not from the rejection hook.
+        route.initial_association_result(
+            port_ready && meta.kind == LINK_EVENT_ASSOCIATE && meta.status_or_reason == 0,
+        );
+        self.enqueue_with_admission(port_ready, meta, first, second, || route.close_admission())
+    }
+
     fn take_oldest(&self) -> Option<LinkEvent<'_>> {
         take_oldest_slot(&self.slots).map(|slot| LinkEvent { slot })
     }
@@ -2274,41 +2291,42 @@ pub(crate) fn enqueue_associate_result(
     } else {
         (request_ies, response_ies)
     };
-    let queued = LINK_EVENT_QUEUE.enqueue_with_admission(
-        port_ready,
-        LinkMeta {
-            kind: if deliver_as_disconnect {
-                LINK_EVENT_DISCONNECT
-            } else {
-                LINK_EVENT_ASSOCIATE
-            },
-            status_or_reason: if deliver_as_disconnect {
-                status
-            } else {
-                normalized_status
-            },
-            frequency_mhz,
-            bssid,
-            first_len: first.len(),
-            second_len: second.len(),
+    let meta = LinkMeta {
+        kind: if deliver_as_disconnect {
+            LINK_EVENT_DISCONNECT
+        } else {
+            LINK_EVENT_ASSOCIATE
         },
+        status_or_reason: if deliver_as_disconnect {
+            status
+        } else {
+            normalized_status
+        },
+        frequency_mhz,
+        bssid,
+        first_len: first.len(),
+        second_len: second.len(),
+    };
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    let queued = LINK_EVENT_QUEUE.enqueue_initial_association(
+        port_ready,
+        meta,
         first,
         second,
-        || {
-            #[cfg(feature = "standard-l2-initial-session-experiment")]
-            crate::netif_l2::NATIVE_RX_ROUTE
-                .initial_association_result(!deliver_as_disconnect && normalized_status == 0);
-            #[cfg(not(feature = "standard-l2-initial-session-experiment"))]
-            close_native_link_admission();
-        },
+        &crate::netif_l2::NATIVE_RX_ROUTE,
+    );
+    #[cfg(not(feature = "standard-l2-initial-session-experiment"))]
+    let queued = LINK_EVENT_QUEUE.enqueue_with_admission(
+        port_ready,
+        meta,
+        first,
+        second,
+        close_native_link_admission,
     );
     if queued {
         DIAG_ASSOCIATE_EVENTS.fetch_add(1, Ordering::Relaxed);
         DIAG_ASSOCIATION_EVENT.observe();
         notify_runner();
-    } else {
-        #[cfg(feature = "standard-l2-initial-session-experiment")]
-        close_native_link_admission();
     }
     queued
 }
@@ -3868,6 +3886,52 @@ mod tests {
         assert!(route.enter().is_none());
         assert!(parts.device.link_state(&mut cx) == LinkState::Down);
         assert!(parts.device.transmit(&mut cx).is_none());
+    }
+
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    #[test]
+    fn initial_session_observes_success_before_queue_publication_and_rejects_overflow() {
+        use crate::netif_l2::{CallbackRoute, NativeLink};
+        use hisi_rf_core::{OperationTracker, WifiL2Capabilities, l2::L2Storage};
+        for (status, full, malformed) in [
+            (0, false, false),
+            (30, false, false),
+            (0, true, false),
+            (0, false, true),
+        ] {
+            let queue = LinkEventQueue::new();
+            let mut storage = L2Storage::<2, 2, 64>::new();
+            let parts = storage.split(WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 1]).unwrap());
+            let route = CallbackRoute::new();
+            let mut link = NativeLink::bind(parts.port, &route).unwrap();
+            let id = OperationTracker::new().queue(0).unwrap();
+            route.initial_bootstrap_complete();
+            route.initial_connect_started(id);
+            route.initial_association_started();
+            let mut meta = LinkMeta {
+                kind: LINK_EVENT_ASSOCIATE,
+                status_or_reason: status,
+                frequency_mhz: 2412,
+                bssid: [2, 0, 0, 0, 0, 1],
+                first_len: 0,
+                second_len: 0,
+            };
+            if full {
+                for _ in 0..LINK_EVENT_QUEUE_DEPTH {
+                    assert!(queue.enqueue(meta, &[], &[]));
+                }
+            }
+            meta.first_len = usize::from(malformed);
+            assert_eq!(
+                queue.enqueue_initial_association(true, meta, &[], &[], &route),
+                !full && !malformed
+            );
+            assert!(route.enter().is_none()); // Still needs correlated authorization.
+            assert_eq!(
+                link.begin_initial_session_experiment(id).is_ok(),
+                status == 0 && !full && !malformed
+            );
+        }
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub use host_delivery::HostDeliveryDiagnostics;
 mod initial_session;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 pub(crate) use host_delivery::install_host_delivery_observer;
+#[cfg(feature = "standard-l2-initial-session-experiment")]
+#[doc(hidden)]
+pub use initial_session::native_initial_open_result;
 
 /// Diagnostic snapshot of the earlier native callback, not a drain receipt.
 #[doc(hidden)]
@@ -101,6 +104,8 @@ struct State<'storage, const RX: usize, const MTU: usize> {
     host_deliveries: HostDeliveryDiagnostics,
     #[cfg(feature = "standard-l2-initial-session-experiment")]
     initial: initial_session::InitialSession,
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    initial_open_result: Option<Result<(), LinkError>>,
 }
 
 impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
@@ -149,6 +154,8 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                 host_deliveries: HostDeliveryDiagnostics::new(),
                 #[cfg(feature = "standard-l2-initial-session-experiment")]
                 initial: initial_session::InitialSession::Uninitialized,
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                initial_open_result: None,
             })),
         }
     }

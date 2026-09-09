@@ -8,6 +8,17 @@ use hisi_rf_core::OperationId;
 
 use super::{CallbackRoute, RouteError};
 
+/// Bring-up result only. This is not a native drain receipt.
+#[doc(hidden)]
+pub fn native_initial_open_result() -> Option<Result<(), super::LinkError>> {
+    critical_section::with(|cs| {
+        super::NATIVE_RX_ROUTE
+            .state
+            .borrow_ref(cs)
+            .initial_open_result
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum InitialSession {
     Uninitialized,
@@ -59,6 +70,12 @@ impl InitialSession {
 
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
 impl<const RX: usize, const MTU: usize> CallbackRoute<'_, RX, MTU> {
+    pub(crate) fn record_initial_open_result(&self, result: Result<(), super::LinkError>) {
+        critical_section::with(|cs| {
+            self.state.borrow_ref_mut(cs).initial_open_result = Some(result)
+        });
+    }
+
     pub(crate) fn initial_bootstrap_complete(&self) {
         critical_section::with(|cs| self.state.borrow_ref_mut(cs).initial.bootstrap());
     }

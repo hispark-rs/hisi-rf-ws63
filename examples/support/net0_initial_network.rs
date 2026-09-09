@@ -19,10 +19,25 @@ const DEADLINE_MS: u64 = 15_000;
 
 pub async fn run(device: &mut WifiDevice, uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
     let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+    use hisi_rf_ws63::netif_l2::{LinkError, RouteError};
+    let result: &[u8] = match hisi_rf_ws63::netif_l2::native_initial_open_result() {
+        None => b"not-attempted",
+        Some(Ok(())) => b"open",
+        Some(Err(LinkError::Route(RouteError::InitialSessionRejected))) => b"initial-rejected",
+        Some(Err(LinkError::Route(RouteError::CallbacksInFlight))) => b"callbacks-in-flight",
+        Some(Err(LinkError::Route(RouteError::OpenInterrupted))) => b"open-interrupted",
+        Some(Err(LinkError::Queue(_))) => b"queue-error",
+        Some(Err(_)) => b"route-error",
+    };
+    uart.write(b"RFDBG_NET0_INITIAL_RESULT result=");
+    uart.write(result);
+    uart.write(b"\r\n");
     if device.link_state(&mut cx) != LinkState::Up {
+        uart.write(b"RFDBG_NET0_INITIAL_SESSION_REJECTED\r\n");
         uart.write(b"RFDBG_NET0_PAYLOAD_ERR reason=closed\r\n");
         super::halt();
     }
+    uart.write(b"RFDBG_NET0_INITIAL_SESSION_OPEN\r\n");
     let mac = device
         .station_mac_address()
         .expect("initialized station address");

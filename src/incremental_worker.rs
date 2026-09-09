@@ -397,12 +397,8 @@ impl IncrementalWorkerState {
                 // SAFETY: this worker is the sole link owner. Open precedes
                 // publishing Connected; failure leaves the data path closed.
                 let link = unsafe { &mut *self.l2.get() };
-                let marker: &[u8] = if link.begin_initial_session_experiment(*id).is_ok() {
-                    b"RFDBG_NET0_INITIAL_SESSION_OPEN\r\n"
-                } else {
-                    b"RFDBG_NET0_INITIAL_SESSION_REJECTED\r\n"
-                };
-                crate::log_emit(marker);
+                let result = link.begin_initial_session_experiment(*id);
+                crate::netif_l2::NATIVE_RX_ROUTE.record_initial_open_result(result);
             }
             let active = next_active(previous_active, response.as_ref());
             let deadline = active.and_then(|id| backend.next_deadline_us(id));
