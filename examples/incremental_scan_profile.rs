@@ -41,6 +41,15 @@ use hisi_rf_ws63::{
 use hisi_riscv_rt::entry;
 use static_cell::StaticCell;
 
+#[cfg(feature = "standard-l2-initial-session-experiment")]
+#[path = "support/net0_initial_network.rs"]
+mod net0_initial_network;
+#[cfg(all(
+    feature = "standard-l2-initial-session-experiment",
+    not(feature = "incremental-connect-profile")
+))]
+compile_error!("initial-session network fixture requires incremental-connect-profile");
+
 const RADIO_EVENT_DEPTH: usize = 8;
 const SCAN_RESULT_DEPTH: usize = 32;
 #[cfg(not(feature = "incremental-connect-profile"))]
@@ -241,7 +250,15 @@ fn start_executor(
     let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner: Spawner| {
         spawner.spawn(radio_runner(runner, uart).unwrap());
-        spawner.spawn(scan_profile(&mut wifi.controller, uart).unwrap());
+        spawner.spawn(
+            scan_profile(
+                &mut wifi.controller,
+                uart,
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                &mut wifi.device,
+            )
+            .unwrap(),
+        );
     })
 }
 
@@ -290,6 +307,8 @@ async fn radio_runner(
 async fn scan_profile(
     controller: &'static mut WifiController<RADIO_EVENT_DEPTH>,
     uart: &'static Uart<'static, hisi_hal::peripherals::Uart0<'static>>,
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    device: &'static mut hisi_rf_ws63::netif_l2::WifiDevice,
 ) {
     let initialize_started = monotonic_ms();
     match with_timeout(Duration::from_secs(30), controller.initialize()).await {
@@ -381,7 +400,14 @@ async fn scan_profile(
     uart.write(b"\r\n");
 
     #[cfg(feature = "incremental-connect-profile")]
-    run_connect_profile(controller, uart, &scan_results[..outcome.count]).await;
+    run_connect_profile(
+        controller,
+        uart,
+        &scan_results[..outcome.count],
+        #[cfg(feature = "standard-l2-initial-session-experiment")]
+        device,
+    )
+    .await;
 
     let event = controller.event_diagnostics();
     uart.write(b"RFDBG_A5B_EVENT pending=0x");
@@ -582,6 +608,8 @@ async fn run_connect_profile(
     controller: &mut WifiController<RADIO_EVENT_DEPTH>,
     uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
     scan_results: &[ScanResult],
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    device: &mut hisi_rf_ws63::netif_l2::WifiDevice,
 ) {
     let Some(result) = scan_results
         .iter()
@@ -646,6 +674,9 @@ async fn run_connect_profile(
         }
     }
 
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    net0_initial_network::run(device, uart).await;
+
     let disconnect_started = monotonic_ms();
     match with_timeout(Duration::from_secs(20), controller.disconnect()).await {
         Ok(Ok(())) => {
@@ -666,6 +697,14 @@ async fn run_connect_profile(
             uart.write(b"RFDBG_A5B_DISCONNECT_ERR reason=outer_timeout\r\n");
             halt()
         }
+    }
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    {
+        use embassy_net_driver::Driver;
+        let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+        assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
+        assert!(device.transmit(&mut cx).is_none());
+        uart.write(b"RFDBG_NET0_INITIAL_SESSION_CLOSED\r\n");
     }
 }
 

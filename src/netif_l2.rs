@@ -11,6 +11,8 @@
 //! With `standard-l2`, `driverif_input` uses the native route below exclusively.
 //! Until composition binds caller-owned storage and opens a verified session,
 //! RX fails closed; it never falls back to the legacy global packet bridge.
+//! The separate `standard-l2-initial-session-experiment` is a one-shot physical
+//! bring-up lane. It is not a native reset/drain or reconnect guarantee.
 
 use core::cell::RefCell;
 use core::task::Waker;
@@ -26,6 +28,8 @@ mod device;
 pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
 mod host_delivery;
 pub use host_delivery::HostDeliveryDiagnostics;
+#[cfg(feature = "standard-l2-initial-session-experiment")]
+mod initial_session;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 pub(crate) use host_delivery::install_host_delivery_observer;
 
@@ -69,6 +73,8 @@ pub enum RouteError {
     AlreadyOpen,
     OpenInterrupted,
     LifecycleExhausted,
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    InitialSessionRejected,
 }
 
 /// Callback-entry conservation, including entries rejected while the route is down.
@@ -93,6 +99,8 @@ struct State<'storage, const RX: usize, const MTU: usize> {
     close_waker: Option<Waker>,
     diagnostics: RouteDiagnostics,
     host_deliveries: HostDeliveryDiagnostics,
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    initial: initial_session::InitialSession,
 }
 
 impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
@@ -106,6 +114,8 @@ impl<const RX: usize, const MTU: usize> State<'_, RX, MTU> {
 struct OpenIntent {
     close_revision: u64,
     host_delivery_revision: u64,
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    initial_operation: Option<hisi_rf_core::OperationId>,
 }
 
 /// One checked route from the vendor's context-free callback ABI to an instance.
@@ -137,6 +147,8 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                     transmits_in_flight: 0,
                 },
                 host_deliveries: HostDeliveryDiagnostics::new(),
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                initial: initial_session::InitialSession::Uninitialized,
             })),
         }
     }
@@ -207,6 +219,10 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
     pub(crate) fn close_admission(&self) {
         let wake = critical_section::with(|cs| {
             let mut state = self.state.borrow_ref_mut(cs);
+            #[cfg(feature = "standard-l2-initial-session-experiment")]
+            {
+                state.initial = initial_session::InitialSession::Rejected;
+            }
             state.close_admission();
             state.close_waker.take()
         });
@@ -290,8 +306,21 @@ impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX,
             Ok(OpenIntent {
                 close_revision: state.close_revision.ok_or(RouteError::LifecycleExhausted)?,
                 host_delivery_revision: state.host_deliveries.entered,
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                initial_operation: None,
             })
         })
+    }
+
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    fn prepare_initial_open(
+        &self,
+        id: hisi_rf_core::OperationId,
+    ) -> Result<OpenIntent, RouteError> {
+        let mut intent = self.prepare_open()?;
+        critical_section::with(|cs| self.route.state.borrow_ref(cs).initial.check(id))?;
+        intent.initial_operation = Some(id);
+        Ok(intent)
     }
 
     fn commit_open(
@@ -319,6 +348,11 @@ impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX,
             {
                 return Err(RouteError::CallbacksInFlight);
             }
+            #[cfg(feature = "standard-l2-initial-session-experiment")]
+            if let Some(id) = intent.initial_operation {
+                state.initial.check(id)?;
+                state.initial = initial_session::InitialSession::Opened;
+            }
             state.generation = Some(generation);
             Ok(())
         })
@@ -329,6 +363,10 @@ impl<const RX: usize, const MTU: usize> Drop for Registration<'_, '_, RX, MTU> {
     fn drop(&mut self) {
         let wake = critical_section::with(|cs| {
             let mut state = self.route.state.borrow_ref_mut(cs);
+            #[cfg(feature = "standard-l2-initial-session-experiment")]
+            {
+                state.initial = initial_session::InitialSession::Rejected;
+            }
             state.close_admission();
             state.ingress = None;
             state.close_waker.take()

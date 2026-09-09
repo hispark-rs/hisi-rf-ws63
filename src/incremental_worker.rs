@@ -330,11 +330,23 @@ impl IncrementalWorkerState {
                 }
             }
             if let Some(id) = cancel {
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
                 let _ = backend.cancel(id);
             }
 
             let response = match command {
                 Some(WorkerCommand::Start { id, request }) => {
+                    #[cfg(feature = "standard-l2-initial-session-experiment")]
+                    match &request {
+                        IncrementalRequest::Connect(_) => {
+                            crate::netif_l2::NATIVE_RX_ROUTE.initial_connect_started(id);
+                        }
+                        IncrementalRequest::Disconnect(_) => {
+                            crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
+                        }
+                        _ => {}
+                    }
                     if matches!(request, IncrementalRequest::Scan(_)) {
                         // SAFETY: only this worker accesses scan storage until
                         // it publishes a terminal response.
@@ -372,6 +384,26 @@ impl IncrementalWorkerState {
                 }
                 None => None,
             };
+            #[cfg(feature = "standard-l2-initial-session-experiment")]
+            if let Some(WorkerResponse::Polled {
+                id,
+                result: Ok(report),
+            }) = &response
+                && matches!(
+                    report.disposition(),
+                    PollDisposition::Complete(hisi_rf_core::IncrementalCompletion::Connected(_))
+                )
+            {
+                // SAFETY: this worker is the sole link owner. Open precedes
+                // publishing Connected; failure leaves the data path closed.
+                let link = unsafe { &mut *self.l2.get() };
+                let marker: &[u8] = if link.begin_initial_session_experiment(*id).is_ok() {
+                    b"RFDBG_NET0_INITIAL_SESSION_OPEN\r\n"
+                } else {
+                    b"RFDBG_NET0_INITIAL_SESSION_REJECTED\r\n"
+                };
+                crate::log_emit(marker);
+            }
             let active = next_active(previous_active, response.as_ref());
             let deadline = active.and_then(|id| backend.next_deadline_us(id));
             critical_section::with(|cs| {

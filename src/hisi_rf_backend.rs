@@ -228,6 +228,8 @@ impl Ws63WifiBackend<'static> {
             native_supplicant_stage.complete();
         }
         self.wifi = Some(wifi);
+        #[cfg(feature = "standard-l2-initial-session-experiment")]
+        crate::netif_l2::NATIVE_RX_ROUTE.initial_bootstrap_complete();
         Ok(())
     }
 }

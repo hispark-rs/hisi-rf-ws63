@@ -48,6 +48,28 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
     /// separate prerequisite to be implemented by the WS63 lifecycle owner.
     pub fn begin_after_native_quiescence(&mut self) -> Result<(), LinkError> {
         let intent = self.registration.prepare_open().map_err(LinkError::Route)?;
+        self.begin(intent)
+    }
+
+    /// Maintainer bring-up only. This refuses retries/reopening, but does not
+    /// certify native hardware drainage across reset or subsequent reconnect.
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    pub(crate) fn begin_initial_session_experiment(
+        &mut self,
+        id: hisi_rf_core::OperationId,
+    ) -> Result<(), LinkError> {
+        let result = self
+            .registration
+            .prepare_initial_open(id)
+            .map_err(LinkError::Route)
+            .and_then(|intent| self.begin(intent));
+        if result.is_err() {
+            let _ = self.close();
+        }
+        result
+    }
+
+    fn begin(&mut self, intent: super::OpenIntent) -> Result<(), LinkError> {
         let revision = intent.close_revision;
         // Network wakeups run outside the lock. A newer native close during
         // this window must win over this open, including TX queued by a wake.

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Isolate a non-default `standard-l2-initial-session-experiment` for physical
+  RX/TX bring-up. It requires one successful bootstrap, one association attempt
+  and a matching authorized operation; retries, duplicate events, teardown and
+  open/close conflicts permanently close its data path. The fixture performs
+  ten sequence/content-checked local UDP echoes with fixed-size buffers, then
+  checks closure. It does not establish native queue drainage across reset or
+  support reconnection. Existing profiles and closed `standard-l2` are unchanged.
+
 ## [0.1.0-alpha.102] - 2026-09-09
 
 ### Changed

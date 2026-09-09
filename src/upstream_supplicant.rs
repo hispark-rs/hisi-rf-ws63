@@ -2294,12 +2294,21 @@ pub(crate) fn enqueue_associate_result(
         },
         first,
         second,
-        close_native_link_admission,
+        || {
+            #[cfg(feature = "standard-l2-initial-session-experiment")]
+            crate::netif_l2::NATIVE_RX_ROUTE
+                .initial_association_result(!deliver_as_disconnect && normalized_status == 0);
+            #[cfg(not(feature = "standard-l2-initial-session-experiment"))]
+            close_native_link_admission();
+        },
     );
     if queued {
         DIAG_ASSOCIATE_EVENTS.fetch_add(1, Ordering::Relaxed);
         DIAG_ASSOCIATION_EVENT.observe();
         notify_runner();
+    } else {
+        #[cfg(feature = "standard-l2-initial-session-experiment")]
+        close_native_link_admission();
     }
     queued
 }
@@ -2983,6 +2992,8 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         Err(error) => return error.status(),
     }
     DIAG_ASSOCIATE_CALLS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(feature = "standard-l2-initial-session-experiment")]
+    crate::netif_l2::NATIVE_RX_ROUTE.initial_association_started();
     let first_status = DIAG_ASSOCIATE_FIRST_IOCTL.call(|| {
         crate::wal::ioctl(
             driver.ifname(),
@@ -3011,6 +3022,8 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
                     Ok(core::task::Poll::Pending) => return deauth::Error::Busy.status(),
                     Err(error) => return error.status(),
                 }
+                #[cfg(feature = "standard-l2-initial-session-experiment")]
+                crate::netif_l2::NATIVE_RX_ROUTE.initial_association_started();
                 crate::wal::ioctl(
                     driver.ifname(),
                     IOCTL_ASSOCIATE,

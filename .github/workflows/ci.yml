@@ -38,6 +38,14 @@ jobs:
           --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           -- -D warnings
       - run: cargo clippy --locked --lib --no-default-features --features standard-l2 -- -D warnings
+      - name: Verify the one-shot initial-session experiment (not reconnect)
+        run: >-
+          cargo test --locked --lib --no-default-features
+          --features wpa2-personal,standard-l2-initial-session-experiment
+      - name: Lint the one-shot initial-session experiment
+        run: >-
+          cargo clippy --locked --lib --no-default-features
+          --features wpa2-personal,standard-l2-initial-session-experiment -- -D warnings
       - run: cargo check '-Zbuild-std=core,alloc' --locked --target riscv32imfc-unknown-none-elf --lib --no-default-features --features standard-l2
 
   l2-miri:
@@ -256,6 +264,8 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,bootstrap-stage-diag,firmware-example
       - name: Link NET0 profile-owned device and worker with admission closed
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2,bootstrap-stage-diag,firmware-example
+      - name: Link the one-shot NET0 payload experiment (not a reconnect profile)
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-initial-session-experiment,incremental-connect-profile,bootstrap-stage-diag,firmware-example
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-cancel-profile,bootstrap-stage-diag,firmware-example
       - name: Link the redacted WPA3 incremental connect profiler with stock rust-lld

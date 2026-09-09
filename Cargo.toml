@@ -206,6 +206,9 @@ wpa3-personal = ["wifi", "upstream-supplicant-wpa3"]
 net = ["dep:smoltcp", "hisi-rf-core/smoltcp"]
 # NET0 maintainer contract, not yet a production network profile.
 standard-l2 = ["hisi-rf-core/embassy-net-driver", "dep:embassy-net-driver"]
+# Bring-up only: one first association after bootstrap, with no retry/reopen.
+# This is NOT a native queue-drain proof or a supported reconnect profile.
+standard-l2-initial-session-experiment = ["standard-l2", "incremental-embassy-wait"]
 # Common vendor-oracle station control surface. Concrete WPA profiles select
 # exactly one crypto implementation on top of it.
 wifi-personal = []
