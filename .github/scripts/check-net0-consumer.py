@@ -134,8 +134,17 @@ def main():
         backend = workspace / f"hisi-rf-ws63-{version}"
         app = workspace / "app"
         materialize(backend, app)
-        # Add only the new root package to the copied lock before locked builds.
-        run(["cargo", "metadata", "--offline", "--format-version=1"], app)
+        # Resolve only the actual target build, not metadata for every host.
+        # The new app needs its root entry added to the copied lock; all existing
+        # package identities/checksums must remain from the packaged lock.
+        def locked_packages(path):
+            return {(item["name"], item["version"], item.get("source"), item.get("checksum"))
+                    for item in tomllib.loads(path.read_text(encoding="utf-8"))["package"]}
+        pinned = locked_packages(backend / "Cargo.lock")
+        run(["cargo", "build", "--release", "--offline"], app)
+        added = locked_packages(app / "Cargo.lock") - pinned
+        if added != {("net0-consumer", "0.0.0", None, None)}:
+            raise ValueError("external consumer changed pinned package identities")
         build = ["cargo", "build", "--release", "--locked", "--offline"]
         run(build, app)
         elf = app / "target/riscv32imfc-unknown-none-elf/release/net0-consumer"
@@ -172,6 +181,7 @@ def main():
                   "harness_sha256": sha(Path(__file__)),
                   "package_sha256": sha(package), "package_bytes": package.stat().st_size,
                   "source_files": source_files, "consumer_lock_sha256": sha(app / "Cargo.lock"),
+                  "pinned_dependencies_unchanged": True,
                   "clean_offline": True, "incremental_unchanged": True,
                   "missing_metadata_rejected": list(SYMBOLS), "restored_build": True,
                   "space_unicode_path": True, "consumer_build_script": False,
