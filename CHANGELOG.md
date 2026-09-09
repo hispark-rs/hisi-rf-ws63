@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Close opt-in NET0 admission at native disconnect/rejected-association callback
+  publication, without waiting for hostap/control-runner progress. Link-event
+  overflow, malformed payloads and unavailable ports also fail closed. A
+  successful association never substitutes for authorization or a producer
+  fence; legacy named profiles retain their existing route.
 - Refuse new NET0 native TX submissions after admission closes, including
   frames already queued by the network stack. Track admitted calls through
   return/drop and refuse reopening while a Rust TX borrow remains. Native

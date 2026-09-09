@@ -1682,8 +1682,9 @@ mod tests {
                 + report.runtime_arena_bytes.unwrap()
         );
         let address = hisi_rf_core::WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 2]).unwrap();
-        let parts = STORAGE.l2_storage().claim(address).unwrap();
-        drop(parts);
+        {
+            let _parts = STORAGE.l2_storage().claim(address).unwrap();
+        }
         assert!(STORAGE.l2_storage().claim(address).is_err());
         let mut json = std::string::String::new();
         report.write_json(&mut json).unwrap();

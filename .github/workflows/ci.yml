@@ -27,6 +27,11 @@ jobs:
           cargo test --locked --lib --no-default-features
           --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           upstream_supplicant::deauth
+      - name: Verify native link-event admission closure
+        run: >-
+          cargo test --locked --lib --no-default-features
+          --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
+          upstream_supplicant::tests::net0_
       - name: Lint the native NET0 lifecycle integration
         run: >-
           cargo clippy --locked --lib --no-default-features
@@ -50,6 +55,11 @@ jobs:
           cargo miri test --locked --lib --no-default-features
           --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           upstream_supplicant::deauth
+      - name: Interpret native link-event admission closure
+        run: >-
+          cargo miri test --locked --lib --no-default-features
+          --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
+          upstream_supplicant::tests::net0_
 
   feature-gates:
     runs-on: ubuntu-latest
@@ -141,6 +151,9 @@ jobs:
       - run: cargo test --locked --lib --features ${{ matrix.features }}
       - run: cargo check --locked --lib --features ${{ matrix.features }}
       - run: cargo clippy --locked --lib --features ${{ matrix.features }} -- -D warnings
+      - name: Lint NET0 regression tests as well as the library
+        if: matrix.profile == 'wpa2-net0-storage-contract'
+        run: cargo clippy --locked --lib --tests --features ${{ matrix.features }} -- -D warnings
       - run: cargo check -Zbuild-std=core,alloc --locked --target riscv32imfc-unknown-none-elf --lib --features ${{ matrix.features }}
       - name: Emit the versioned profile resource report
         run: cargo run --locked --example resource_report --features ${{ matrix.features }} > resource-report.json

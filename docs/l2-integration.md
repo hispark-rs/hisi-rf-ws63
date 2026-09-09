@@ -137,6 +137,18 @@ not native RX/TX producer ownership or all other WAL commands.
 The outer operation deadline remains bounded, but reuse after native cleanup
 failure is deliberately refused, not silently retried.
 
+Native association/disconnect callbacks also close admission independently of
+the control runner. Disconnect and rejected-association events close before
+being published; unavailable ports, oversized/malformed event payloads and a
+full link-event queue fail closed even when the event cannot be delivered.
+The close revision wakes the L2 worker to invalidate its port and queued TX.
+A successful association event neither authorizes nor opens the route: WPA
+authorization and the native producer fence remain separate prerequisites.
+Host tests exercise the production event-queue helper against the real route
+and L2 storage, including undeliverable events and queued TX. A mutation that
+restores enqueue-only behavior fails this regression. This closes a Rust
+notification gap, not native FRW/DMA drainage or reconnect HIL.
+
 Already issued queue tokens retain their storage until consumed/dropped. A new
 epoch cannot retract a frame already submitted to hardware. Network connection
 objects must also be invalidated at a link transition.

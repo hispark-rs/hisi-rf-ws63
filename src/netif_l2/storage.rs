@@ -86,16 +86,17 @@ mod tests {
     fn claim_is_one_shot_even_after_parts_are_dropped() {
         let storage = NativeStorage::new();
         let address = WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 1]).unwrap();
-        let parts = storage.claim(address).unwrap();
-        assert_eq!(
-            parts.device.hardware_address(),
-            embassy_net_driver::HardwareAddress::Ethernet([2, 0, 0, 0, 0, 1])
-        );
-        assert!(matches!(
-            storage.claim(address),
-            Err(StorageError::AlreadyClaimed)
-        ));
-        drop(parts);
+        {
+            let parts = storage.claim(address).unwrap();
+            assert_eq!(
+                parts.device.hardware_address(),
+                embassy_net_driver::HardwareAddress::Ethernet([2, 0, 0, 0, 0, 1])
+            );
+            assert!(matches!(
+                storage.claim(address),
+                Err(StorageError::AlreadyClaimed)
+            ));
+        }
         assert!(matches!(
             storage.claim(address),
             Err(StorageError::AlreadyClaimed)

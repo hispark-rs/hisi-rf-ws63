@@ -855,6 +855,34 @@ impl LinkEventQueue {
         false
     }
 
+    /// Native link loss must close data admission before event publication.
+    /// A full/malformed event queue must not turn lost control state into an
+    /// apparently usable L2 link. Closing never waits for native work.
+    fn enqueue_with_admission(
+        &self,
+        port_ready: bool,
+        meta: LinkMeta,
+        first: &[u8],
+        second: &[u8],
+        close: impl FnOnce(),
+    ) -> bool {
+        let close =
+            if !port_ready || meta.kind == LINK_EVENT_DISCONNECT || meta.status_or_reason != 0 {
+                close();
+                None
+            } else {
+                Some(close)
+            };
+        if !port_ready {
+            return false;
+        }
+        let queued = self.enqueue(meta, first, second);
+        if !queued && let Some(close) = close {
+            close();
+        }
+        queued
+    }
+
     fn take_oldest(&self) -> Option<LinkEvent<'_>> {
         take_oldest_slot(&self.slots).map(|slot| LinkEvent { slot })
     }
@@ -2228,7 +2256,9 @@ pub(crate) fn enqueue_associate_result(
     request_ies: &[u8],
     response_ies: &[u8],
 ) -> bool {
-    if PORT_STATE.load(Ordering::Acquire) != PORT_READY {
+    let port_ready = PORT_STATE.load(Ordering::Acquire) == PORT_READY;
+    if !port_ready {
+        close_native_link_admission();
         return false;
     }
     let normalized_status = normalize_vendor_association_status(status);
@@ -2244,7 +2274,8 @@ pub(crate) fn enqueue_associate_result(
     } else {
         (request_ies, response_ies)
     };
-    let queued = LINK_EVENT_QUEUE.enqueue(
+    let queued = LINK_EVENT_QUEUE.enqueue_with_admission(
+        port_ready,
         LinkMeta {
             kind: if deliver_as_disconnect {
                 LINK_EVENT_DISCONNECT
@@ -2263,6 +2294,7 @@ pub(crate) fn enqueue_associate_result(
         },
         first,
         second,
+        close_native_link_admission,
     );
     if queued {
         DIAG_ASSOCIATE_EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -2274,10 +2306,8 @@ pub(crate) fn enqueue_associate_result(
 
 #[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
 pub(crate) fn enqueue_disconnect(reason: u16, ies: &[u8]) -> bool {
-    if PORT_STATE.load(Ordering::Acquire) != PORT_READY {
-        return false;
-    }
-    let queued = LINK_EVENT_QUEUE.enqueue(
+    let queued = LINK_EVENT_QUEUE.enqueue_with_admission(
+        PORT_STATE.load(Ordering::Acquire) == PORT_READY,
         LinkMeta {
             kind: LINK_EVENT_DISCONNECT,
             status_or_reason: reason,
@@ -2288,11 +2318,17 @@ pub(crate) fn enqueue_disconnect(reason: u16, ies: &[u8]) -> bool {
         },
         ies,
         &[],
+        close_native_link_admission,
     );
     if queued {
         notify_runner();
     }
     queued
+}
+
+fn close_native_link_admission() {
+    #[cfg(feature = "standard-l2")]
+    crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
 }
 
 unsafe extern "C" fn eapol_notify(_: *mut c_void, _: *mut c_void) {
@@ -3715,6 +3751,138 @@ mod tests {
         assert_eq!(event.meta().status_or_reason, 0);
         assert_eq!(event.first(), &[1, 2]);
         assert_eq!(event.second(), &[3, 4, 5]);
+    }
+
+    #[cfg(feature = "standard-l2")]
+    #[test]
+    fn net0_native_link_events_close_admission_even_when_not_deliverable() {
+        use crate::netif_l2::{CallbackRoute, NativeLink};
+        use core::task::{Context, Waker};
+        use embassy_net_driver::{Driver, LinkState, TxToken};
+        use hisi_rf_core::{WifiL2Capabilities, l2::L2Storage};
+
+        // Host-controlled producers establish the initial epoch. This checks
+        // callback closure, not a native-producer quiescence or reconnect proof.
+        for (ready, kind, status, full, malformed, queued, closed) in [
+            (true, LINK_EVENT_ASSOCIATE, 0, false, false, true, false),
+            (true, LINK_EVENT_ASSOCIATE, 30, false, false, true, true),
+            (true, LINK_EVENT_DISCONNECT, 0, false, false, true, true),
+            (true, LINK_EVENT_DISCONNECT, 3, true, false, false, true),
+            (true, LINK_EVENT_ASSOCIATE, 0, true, false, false, true),
+            (true, LINK_EVENT_ASSOCIATE, 0, false, true, false, true),
+            (false, LINK_EVENT_ASSOCIATE, 0, false, false, false, true),
+            (false, LINK_EVENT_DISCONNECT, 3, false, false, false, true),
+        ] {
+            let queue = LinkEventQueue::new();
+            let mut storage = L2Storage::<2, 2, 64>::new();
+            let mut parts = storage.split(WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 1]).unwrap());
+            let route = CallbackRoute::new();
+            let mut link = NativeLink::bind(parts.port, &route).unwrap();
+            let mut cx = Context::from_waker(Waker::noop());
+            link.begin_after_native_quiescence().unwrap();
+            assert!(!link.poll_native_close(&mut cx).unwrap());
+            parts
+                .device
+                .transmit(&mut cx)
+                .unwrap()
+                .consume(1, |b| b[0] = 1);
+            let mut meta = LinkMeta {
+                kind,
+                status_or_reason: status,
+                frequency_mhz: 2412,
+                bssid: [2, 0, 0, 0, 0, 1],
+                first_len: 0,
+                second_len: 0,
+            };
+            if full {
+                for _ in 0..LINK_EVENT_QUEUE_DEPTH {
+                    assert!(queue.enqueue(meta, &[], &[]));
+                }
+            }
+            meta.first_len = usize::from(malformed);
+            let mut close_calls = 0;
+            assert_eq!(
+                queue.enqueue_with_admission(ready, meta, &[], &[], || {
+                    close_calls += 1;
+                    route.close_admission();
+                }),
+                queued,
+            );
+            assert_eq!(close_calls, usize::from(closed));
+            assert_eq!(route.enter().is_none(), closed);
+            assert_eq!(link.poll_native_close(&mut cx).unwrap(), closed);
+            assert!(
+                parts.device.link_state(&mut cx)
+                    == if closed {
+                        LinkState::Down
+                    } else {
+                        LinkState::Up
+                    }
+            );
+            assert_eq!(link.tx_diagnostics().dropped, u64::from(closed));
+            assert_eq!(link.tx_diagnostics().pending, usize::from(!closed));
+        }
+    }
+
+    #[cfg(feature = "standard-l2")]
+    #[test]
+    fn net0_association_success_does_not_authorize_or_open_the_link() {
+        use crate::netif_l2::{CallbackRoute, NativeLink};
+        use core::task::{Context, Waker};
+        use embassy_net_driver::{Driver, LinkState};
+        use hisi_rf_core::{WifiL2Capabilities, l2::L2Storage};
+
+        let queue = LinkEventQueue::new();
+        let mut storage = L2Storage::<2, 2, 64>::new();
+        let mut parts = storage.split(WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 1]).unwrap());
+        let route = CallbackRoute::new();
+        let _link = NativeLink::bind(parts.port, &route).unwrap();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(queue.enqueue_with_admission(
+            true,
+            LinkMeta {
+                kind: LINK_EVENT_ASSOCIATE,
+                status_or_reason: 0,
+                frequency_mhz: 2412,
+                bssid: [2, 0, 0, 0, 0, 1],
+                first_len: 0,
+                second_len: 0,
+            },
+            &[],
+            &[],
+            || panic!("successful association must not close or open the link"),
+        ));
+        assert!(route.enter().is_none());
+        assert!(parts.device.link_state(&mut cx) == LinkState::Down);
+        assert!(parts.device.transmit(&mut cx).is_none());
+    }
+
+    #[test]
+    fn native_disconnect_closes_before_publishing_the_control_event() {
+        let queue = LinkEventQueue::new();
+        let mut closed = false;
+        assert!(queue.enqueue_with_admission(
+            true,
+            LinkMeta {
+                kind: LINK_EVENT_DISCONNECT,
+                status_or_reason: 3,
+                frequency_mhz: 0,
+                bssid: [0; 6],
+                first_len: 0,
+                second_len: 0,
+            },
+            &[],
+            &[],
+            || {
+                assert!(queue.take_oldest().is_none());
+                closed = true;
+            },
+        ));
+        assert!(closed);
+        assert_eq!(
+            queue.take_oldest().unwrap().meta().kind,
+            LINK_EVENT_DISCONNECT
+        );
     }
 
     #[test]
