@@ -65,6 +65,8 @@ enum StartPhase {
     ConnectConfigure(StationConfig),
     ConnectSubmit,
     Disconnect,
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    FinishDisconnect,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,6 +319,12 @@ pub(crate) trait SupplicantPort {
     fn configure(&mut self, config: &StationConfig) -> Result<(), BackendError>;
     fn connect(&mut self) -> Result<(), BackendError>;
     fn disconnect(&mut self) -> Result<(), BackendError>;
+    /// Terminal experiment only, after an explicit disconnect's native receipt
+    /// and event. Never called for a connect recovery or cancellation.
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    fn finish_disconnect(&mut self) -> Result<(), BackendError> {
+        Ok(())
+    }
     fn poll(&mut self, budget: NonZeroU32) -> Result<PollResult, BackendError>;
     fn input_pending(&self) -> bool {
         false
@@ -374,6 +382,11 @@ impl<T: SupplicantPort + ?Sized> SupplicantPort for &mut T {
 
     fn disconnect(&mut self) -> Result<(), BackendError> {
         (**self).disconnect()
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    fn finish_disconnect(&mut self) -> Result<(), BackendError> {
+        (**self).finish_disconnect()
     }
 
     fn poll(&mut self, budget: NonZeroU32) -> Result<PollResult, BackendError> {
@@ -486,6 +499,15 @@ impl SupplicantPort for Ws63WifiBackend<'static> {
             .as_mut()
             .ok_or_else(not_initialized)?
             .disconnect()
+            .map_err(map_native_error)
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    fn finish_disconnect(&mut self) -> Result<(), BackendError> {
+        self.supplicant
+            .as_mut()
+            .ok_or_else(not_initialized)?
+            .finish_disconnect()
             .map_err(map_native_error)
     }
 
@@ -808,6 +830,24 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
                 self.port.disconnect()?;
                 Some(WaitSet::BACKEND.union(WaitSet::TIMER))
             }
+            #[cfg(feature = "standard-l2-rx-stop-experiment")]
+            StartPhase::FinishDisconnect => {
+                if started_us >= self.active_mut(id)?.deadline_us {
+                    let error = timeout_error(self.active_mut(id)?);
+                    return self.clear_with_error(error);
+                }
+                if let Err(error) = self.port.finish_disconnect() {
+                    return self.clear_with_error(error);
+                }
+                self.active = None;
+                return self.bounded_step_report(
+                    id,
+                    budget,
+                    started_us,
+                    1,
+                    PollDisposition::Complete(IncrementalCompletion::Disconnected),
+                );
+            }
         };
         if let Some(wait) = start_wait {
             return self.bounded_step_report(
@@ -854,6 +894,24 @@ impl<P: SupplicantPort, C: MonotonicClock> IncrementalWifiBackend
             if !matches!(outcome, OperationOutcome::Continue) {
                 break;
             }
+        }
+
+        #[cfg(feature = "standard-l2-rx-stop-experiment")]
+        if matches!(
+            outcome,
+            OperationOutcome::Complete(IncrementalCompletion::Disconnected)
+        ) {
+            // Charge terminal native work on its own next turn. The same
+            // DISCONNECTED event is only progress during Connect; it must not
+            // stop the receiver needed for hostap's subsequent association.
+            self.active_mut(id)?.start_phase = StartPhase::FinishDisconnect;
+            return self.bounded_step_report(
+                id,
+                budget,
+                started_us,
+                consumed,
+                PollDisposition::Pending(WaitSet::empty()),
+            );
         }
 
         let is_scan = matches!(self.active_mut(id)?.kind, OperationKind::Scan);
@@ -1472,6 +1530,10 @@ mod tests {
         events: [Option<Event>; 2],
         next_event: usize,
         disconnect_calls: u8,
+        #[cfg(feature = "standard-l2-rx-stop-experiment")]
+        finish_disconnect_calls: u8,
+        #[cfg(feature = "standard-l2-rx-stop-experiment")]
+        finish_disconnect_error: Option<BackendError>,
         scan_results: [Option<ScanResult>; 3],
         scan_total: Option<usize>,
         scan_poll_calls: u8,
@@ -1499,6 +1561,10 @@ mod tests {
                 events,
                 next_event: 0,
                 disconnect_calls: 0,
+                #[cfg(feature = "standard-l2-rx-stop-experiment")]
+                finish_disconnect_calls: 0,
+                #[cfg(feature = "standard-l2-rx-stop-experiment")]
+                finish_disconnect_error: None,
                 scan_results: [None; 3],
                 scan_total: None,
                 scan_poll_calls: 0,
@@ -1577,6 +1643,12 @@ mod tests {
         fn disconnect(&mut self) -> Result<(), BackendError> {
             self.disconnect_calls += 1;
             Ok(())
+        }
+
+        #[cfg(feature = "standard-l2-rx-stop-experiment")]
+        fn finish_disconnect(&mut self) -> Result<(), BackendError> {
+            self.finish_disconnect_calls += 1;
+            self.finish_disconnect_error.map_or(Ok(()), Err)
         }
 
         fn poll(&mut self, _: NonZeroU32) -> Result<PollResult, BackendError> {
@@ -2198,6 +2270,20 @@ mod tests {
             .poll(id, WakeReason::Backend, budget, &mut [])
             .unwrap();
         assert_eq!(report.consumed_events(), 3);
+        #[cfg(feature = "standard-l2-rx-stop-experiment")]
+        let report = {
+            assert_eq!(
+                report.disposition(),
+                PollDisposition::Pending(WaitSet::empty())
+            );
+            assert_eq!(backend.port.finish_disconnect_calls, 0);
+            let report = backend
+                .poll(id, WakeReason::Backend, budget, &mut [])
+                .unwrap();
+            assert_eq!(report.consumed_events(), 1);
+            assert_eq!(backend.port.finish_disconnect_calls, 1);
+            report
+        };
         assert_eq!(
             report.disposition(),
             PollDisposition::Complete(IncrementalCompletion::Disconnected)
@@ -2205,6 +2291,125 @@ mod tests {
         drop(backend);
         assert_eq!(port.disconnect_calls, 1);
         assert_eq!(port.next_event, 1);
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    #[test]
+    fn terminal_stop_is_not_connect_progress_or_cancel_cleanup() {
+        for cancel in [false, true] {
+            let id = operation_id();
+            let mut port = FakePort::new(
+                poll_result(0, true),
+                [
+                    Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 30)),
+                    None,
+                ],
+            );
+            let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+            backend
+                .start(
+                    id,
+                    IncrementalRequest::Connect(transition_station_config(1_000)),
+                )
+                .unwrap();
+            let budget = WorkBudget::try_new(4, 100).unwrap();
+            advance_start(&mut backend, id, budget);
+            if cancel {
+                backend.cancel(id).unwrap();
+                backend
+                    .poll(id, WakeReason::Backend, budget, &mut [])
+                    .unwrap();
+            }
+            let report = backend
+                .poll(id, WakeReason::Backend, budget, &mut [])
+                .unwrap();
+            assert!(!matches!(
+                report.disposition(),
+                PollDisposition::Complete(IncrementalCompletion::Disconnected)
+            ));
+            assert_eq!(backend.port.finish_disconnect_calls, 0);
+        }
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    #[test]
+    fn terminal_stop_failure_or_cancellation_never_reports_disconnected() {
+        for cancel in [false, true] {
+            let id = operation_id();
+            let mut port = FakePort::new(
+                poll_result(0, true),
+                [
+                    Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 0)),
+                    None,
+                ],
+            );
+            port.finish_disconnect_error = Some(operation_error(0x1021));
+            let mut backend = IncrementalSupplicantBackend::new(&mut port, FakeClock(0));
+            backend
+                .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
+                .unwrap();
+            let budget = WorkBudget::try_new(4, 100).unwrap();
+            advance_start(&mut backend, id, budget);
+            assert_eq!(
+                backend
+                    .poll(id, WakeReason::Backend, budget, &mut [])
+                    .unwrap()
+                    .disposition(),
+                PollDisposition::Pending(WaitSet::empty())
+            );
+            if cancel {
+                backend.cancel(id).unwrap();
+                assert_eq!(
+                    backend
+                        .poll(id, WakeReason::Backend, budget, &mut [])
+                        .unwrap()
+                        .disposition(),
+                    PollDisposition::Cancelled
+                );
+                assert_eq!(backend.port.finish_disconnect_calls, 0);
+            } else {
+                assert_eq!(
+                    backend
+                        .poll(id, WakeReason::Backend, budget, &mut [])
+                        .unwrap_err()
+                        .code(),
+                    0x1021
+                );
+                assert_eq!(backend.port.finish_disconnect_calls, 1);
+            }
+            assert!(backend.next_deadline_us(id).is_none());
+        }
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    #[test]
+    fn terminal_stop_is_not_started_after_the_operation_deadline() {
+        let id = operation_id();
+        let now = Cell::new(0);
+        let mut port = FakePort::new(
+            poll_result(0, true),
+            [
+                Some(event(super::super::NATIVE_EVENT_DISCONNECTED, 0)),
+                None,
+            ],
+        );
+        let mut backend = IncrementalSupplicantBackend::new(&mut port, SharedClock(&now));
+        backend
+            .start(id, IncrementalRequest::Disconnect(WifiConfig::default()))
+            .unwrap();
+        let budget = WorkBudget::try_new(4, 100).unwrap();
+        advance_start(&mut backend, id, budget);
+        backend
+            .poll(id, WakeReason::Backend, budget, &mut [])
+            .unwrap();
+        now.set(backend.active.as_ref().unwrap().deadline_us);
+        assert!(
+            backend
+                .poll(id, WakeReason::Backend, budget, &mut [])
+                .is_err()
+        );
+        assert_eq!(backend.port.finish_disconnect_calls, 0);
+        assert!(backend.next_deadline_us(id).is_none());
     }
 
     #[test]

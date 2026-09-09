@@ -1641,6 +1641,28 @@ impl NativeSupplicant {
         }
     }
 
+    /// Terminal NET0 experiment, invoked only by explicit Disconnect completion
+    /// on the native worker, not by a hostap deauthentication callback.
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    pub(crate) fn finish_disconnect(&mut self) -> Result<(), NativeSupplicantError> {
+        self.require_disconnect_returned()?;
+        #[cfg(target_arch = "riscv32")]
+        {
+            crate::netif_l2::host_tx::close_and_drain()
+                .and_then(|()| {
+                    let status = crate::netif_l2::user_cleanup::checked_status(0);
+                    if status == 0 {
+                        crate::netif_l2::rx_stop::stop_once()
+                    } else {
+                        Err(status)
+                    }
+                })
+                .map_err(NativeSupplicantError::DisconnectFailed)
+        }
+        #[cfg(not(target_arch = "riscv32"))]
+        Err(NativeSupplicantError::DisconnectFailed(-0x1020))
+    }
+
     /// Capture the next vendor scan into hostap's BSS cache.
     ///
     /// The public Wi-Fi controller already scans before selecting a network.
@@ -2513,26 +2535,10 @@ fn disconnect_after_host_tx_drain(ifname: &[u8], reason: &mut u16) -> c_int {
     if let Err(status) = crate::netif_l2::host_tx::close_and_drain() {
         return status;
     }
-    let status = crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast());
-    #[cfg(all(
-        feature = "standard-l2-rx-stop-experiment",
-        target_arch = "riscv32",
-        feature = "wifi"
-    ))]
-    {
-        let status = crate::netif_l2::user_cleanup::checked_status(status);
-        if status != 0 {
-            return status;
-        }
-        // This runs on the native-operation worker, not the async executor.
-        crate::netif_l2::rx_stop::stop_once().err().unwrap_or(0)
-    }
-    #[cfg(not(all(
-        feature = "standard-l2-rx-stop-experiment",
-        target_arch = "riscv32",
-        feature = "wifi"
-    )))]
-    status
+    // Hostap also uses this path for pre-association cleanup and recovery.
+    // Destructive terminal RX stop belongs to explicit operation completion,
+    // not to each protocol-level deauthentication request.
+    crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast())
 }
 
 /// The two synchronous recovery sites use the same native ownership slot as

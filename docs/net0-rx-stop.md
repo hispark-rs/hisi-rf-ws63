@@ -5,6 +5,21 @@ checked station disconnect. It is not a production profile, DMA fence, or
 permission to reconnect. BLE/SLE/SoftAP compositions are rejected at compile
 time because this operation stops the shared Wi-Fi MAC.
 
+The owner is the incremental controller's explicit **Disconnect** operation.
+After its native ioctl receipt and DISCONNECTED event, a separate worker turn
+rechecks ioctl completion, drains host TX, checks user cleanup and submits the
+terminal stop. That turn has its own work charge and checks the operation's
+deadline before starting. Error, cancellation or deadline expiry cannot report
+successful disconnect/stop. This step never runs in the async network executor.
+
+Hostap deauthentication is a protocol request, not this terminal operation:
+the same callback is used for initial association cleanup and recovery. Those
+requests must not destroy RX descriptors. The first stop prototype put the
+experiment in that shared helper and a long matrix reached stop before initial
+authorization. Moving ownership to explicit operation completion removes that
+destructive coupling; it does not relax the one-shot L2 policy, reopen host TX,
+or prove that the preceding association failure is fixed.
+
 ## Native Contract
 
 The SDK `frw_dmac_rom.h` defines an eight-byte control prefix (min/max message
@@ -62,7 +77,10 @@ never previously enabled. No `NativeFence` or reopen capability is produced.
 The existing one-shot L2 route and host TX admission stay closed for this boot.
 
 Host tests cover both return orders, timeout before/during dispatch, duplicate
-receipts, zero-return/no-op, enqueue errors, and nonreuse. Three-host-OS CI also
+receipts, zero-return/no-op, enqueue errors, and nonreuse. The production
+incremental state machine also verifies the separate terminal work turn,
+recovery/Connect versus explicit Disconnect, cancel-before-stop, expired
+deadline and stop failure propagation. Three-host-OS CI also
 links/checks the experiment and a packaged external consumer. HIL must preserve
 the original failed direct-call image/result and separately report traffic,
 checked cleanup, and immediate RX-stop receipts; none implies NET0 completion.
