@@ -52,7 +52,8 @@ EDGES = (
 )
 
 
-def inspect(path):
+def inspect(path, expected_edges=None):
+    expected_edges = expected_edges if expected_edges is not None else [(a, b, 1) for a, b in EDGES]
     with path.open("rb") as stream:
         elf = ELFFile(stream)
         if elf.elfclass != 32 or not elf.little_endian or elf["e_machine"] != "EM_RISCV":
@@ -64,7 +65,7 @@ def inspect(path):
                 raise ValueError(f"missing or ambiguous cleanup function: {name}")
             return values[0]
         edges = []
-        for source, target in EDGES:
+        for source, target, count in expected_edges:
             function, callee = symbol(source), symbol(target)
             if not isinstance(function["st_shndx"], int) or function["st_size"] == 0:
                 raise ValueError("cleanup function must have physical code and a bounded size")
@@ -75,18 +76,19 @@ def inspect(path):
                 raise ValueError("cleanup function outside executable section")
             matches = [site for site, destination in calls(section.data()[start:end], function["st_value"])
                        if destination == callee["st_value"]]
-            if len(matches) != 1:
-                raise ValueError(f"expected one resolved cleanup call: {source} -> {target}, got {len(matches)}")
-            edges.append({"source": source, "target": target, "call_address": matches[0],
+            if len(matches) != count:
+                raise ValueError(f"expected {count} resolved calls: {source} -> {target}, got {len(matches)}")
+            for site in matches:
+                edges.append({"source": source, "target": target, "call_address": site,
                           "target_address": callee["st_value"],
-                          "file_offset": section["sh_offset"] + matches[0] - section["sh_addr"]})
+                          "file_offset": section["sh_offset"] + site - section["sh_addr"]})
     return {"schema": "net0-cleanup-link/v1", "status": "pass", "edges": edges,
             "elf_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "boundary": "Resolved HMAC call routing only; not native quiescence or HIL"}
 
 
-def tamper(path):
-    report = inspect(path)
+def tamper(path, expected_edges=None):
+    report = inspect(path, expected_edges)
     original = path.read_bytes()
     with tempfile.TemporaryDirectory(prefix="cleanup-link-") as temporary:
         candidate = Path(temporary) / "mutated.elf"
@@ -96,7 +98,7 @@ def tamper(path):
             struct.pack_into("<II", data, edge["file_offset"], 0x13, 0x13)
             candidate.write_bytes(data)
             try:
-                inspect(candidate)
+                inspect(candidate, expected_edges)
             except ValueError:
                 continue
             raise ValueError(f"missing-call mutation accepted: {edge['source']}")

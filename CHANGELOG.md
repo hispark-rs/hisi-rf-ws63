@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- In opt-in NET0 builds, track native host queue-4 ownership through the real
+  post, dispatch and pre-dispatch free calls. Close admission before requested
+  deauthentication and require a bounded, error-checked host TX drain before
+  entering WAL. Count masked enqueue rejection only after actual free returns;
+  never treat post success as dispatch completion. Report the additional 576
+  bytes of target metadata and verify resolved calls in downstream binaries.
+  This does not fence DMAC/RX, reopen a session or enable reconnect support.
 - Carry the experimental NET0 cleanup wrappers through Rust native-link
   metadata to downstream Cargo binaries, instead of package-local build-script
   arguments. The pinned nightly enables `link_arg_attribute` only for RV32

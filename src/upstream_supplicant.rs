@@ -2483,11 +2483,7 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
             critical_section::with(|cs| DEAUTH_QUEUE.borrow(cs).borrow_mut().pop())
         {
             let status = DIAG_DEAUTHENTICATE_IOCTL.call(|| {
-                crate::wal::ioctl(
-                    DRIVER_CONTEXT.ifname(),
-                    IOCTL_DISCONNECT,
-                    (&mut request.reason as *mut u16).cast(),
-                )
+                disconnect_after_host_tx_drain(DRIVER_CONTEXT.ifname(), &mut request.reason)
             });
             #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
             let status = crate::netif_l2::user_cleanup::checked_status(status);
@@ -2512,6 +2508,14 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
     }
 }
 
+fn disconnect_after_host_tx_drain(ifname: &[u8], reason: &mut u16) -> c_int {
+    #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
+    if let Err(status) = crate::netif_l2::host_tx::close_and_drain() {
+        return status;
+    }
+    crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast())
+}
+
 /// The two synchronous recovery sites use the same native ownership slot as
 /// queued deauthentication. This never waits for that slot or enters WAL under
 /// a critical section. Existing non-NET0 profiles retain the direct call.
@@ -2528,8 +2532,7 @@ fn disconnect_inline(ifname: &[u8], reason: &mut u16) -> c_int {
             &DEAUTH_QUEUE,
             reason,
             |reason| {
-                let status =
-                    crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast());
+                let status = disconnect_after_host_tx_drain(ifname, reason);
                 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
                 let status = crate::netif_l2::user_cleanup::checked_status(status);
                 status
@@ -2548,6 +2551,8 @@ fn disconnect_inline(ifname: &[u8], reason: &mut u16) -> c_int {
 fn queue_deauthentication(reason: u16) -> c_int {
     #[cfg(feature = "standard-l2")]
     crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
+    #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
+    crate::netif_l2::host_tx::close();
     if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
         #[cfg(feature = "standard-l2")]
         critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).worker_unavailable());

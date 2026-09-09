@@ -150,6 +150,10 @@ def main():
         elf = app / "target/riscv32imfc-unknown-none-elf/release/net0-consumer"
         cleanup = load_checker("check-net0-cleanup")
         storage = load_checker("check-net0-storage")
+        host_tx = load_checker("check-net0-host-tx")
+        tx_report = host_tx.inspect(elf)
+        tx_report["rejected_call_mutations"] = host_tx.tamper(elf)
+        (output / "host-tx.json").write_text(json.dumps(tx_report, indent=2) + "\n")
         report = cleanup.inspect(elf)
         report["rejected_call_mutations"] = cleanup.tamper(elf)
         (output / "cleanup.json").write_text(json.dumps(report, indent=2) + "\n")

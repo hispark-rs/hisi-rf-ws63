@@ -29,6 +29,10 @@ pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
 mod host_delivery;
 pub use host_delivery::HostDeliveryDiagnostics;
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
+pub(crate) mod host_tx;
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+pub use host_tx::HostTxDiagnostics;
+#[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
 pub(crate) mod user_cleanup;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 pub use user_cleanup::UserCleanupDiagnostics;
@@ -51,6 +55,13 @@ pub fn native_host_delivery_diagnostics() -> HostDeliveryDiagnostics {
 #[doc(hidden)]
 pub fn native_user_cleanup_diagnostics() -> UserCleanupDiagnostics {
     user_cleanup::diagnostics()
+}
+
+/// Host queue-4 work only; not DMAC completion or a native RX fence.
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+#[doc(hidden)]
+pub fn native_host_tx_diagnostics() -> HostTxDiagnostics {
+    host_tx::diagnostics()
 }
 
 /// First-session experiment counters, not a native-drain receipt.

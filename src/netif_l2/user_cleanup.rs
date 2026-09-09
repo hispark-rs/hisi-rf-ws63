@@ -226,6 +226,7 @@ mod native {
     #[unsafe(export_name = "__wrap_hmac_user_del_etc")]
     pub(crate) unsafe extern "C" fn delete(vap: *mut c_void, user: *mut c_void) -> u32 {
         super::super::NATIVE_RX_ROUTE.close_admission();
+        super::super::host_tx::close();
         let ticket = critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).begin(user.addr()));
         // SAFETY: this linker wrapper forwards the vendor's unchanged argument
         // pair exactly once. It neither dereferences nor retains either pointer.

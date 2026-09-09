@@ -746,6 +746,22 @@ async fn run_connect_profile(
 
 #[cfg(all(feature = "incremental-connect-profile", feature = "standard-l2"))]
 fn write_user_cleanup_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    let tx = hisi_rf_ws63::netif_l2::native_host_tx_diagnostics();
+    write_snapshot(
+        uart,
+        b"RFDBG_NET0_HOST_TX",
+        &[
+            tx.accepted as u32,
+            tx.processed as u32,
+            tx.dropped as u32,
+            tx.pending,
+            tx.peak,
+            tx.rejected as u32,
+            tx.callback_errors as u32,
+            u32::from(tx.closed),
+            tx.fault as u32,
+        ],
+    );
     let d = hisi_rf_ws63::netif_l2::native_user_cleanup_diagnostics();
     write_snapshot(
         uart,
