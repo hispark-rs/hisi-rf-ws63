@@ -206,6 +206,11 @@ mod native {
     use super::*;
     use core::ffi::c_void;
 
+    // Native link metadata propagates through rlibs to the final consumer.
+    // Cargo build-script link arguments apply only to this package's targets.
+    #[link(kind = "link-arg", name = "--wrap=hmac_user_del_etc")]
+    unsafe extern "C" {}
+    #[link(kind = "link-arg", name = "--wrap=hmac_res_free_mac_user_etc")]
     unsafe extern "C" {
         // hmac_user.h and mac_resource_ext.h declare these signatures. The
         // pinned object's local hmac_user_free_etc forwards the resource-free

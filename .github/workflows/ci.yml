@@ -276,6 +276,13 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-cleanup-fault-injection,incremental-connect-profile,bootstrap-stage-diag
       - name: Verify native cleanup calls remain present in the error fixture
         run: uv run --script .github/scripts/check-net0-cleanup.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --output net0-cleanup-fault-link.json
+      - name: Verify packaged NET0 external consumer and transitive native metadata
+        run: uv run --script .github/scripts/check-net0-consumer.py --output net0-external-consumer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: net0-external-consumer-${{ matrix.os }}
+          path: net0-external-consumer
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: net0-incremental-linked-storage-${{ matrix.os }}

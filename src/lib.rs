@@ -78,6 +78,10 @@
 
 #![no_std]
 #![feature(c_variadic)]
+#![cfg_attr(
+    all(target_arch = "riscv32", feature = "wifi", feature = "standard-l2"),
+    feature(link_arg_attribute)
+)]
 #![allow(non_upper_case_globals)] // contract symbols must match the C names exactly
 
 #[cfg(all(

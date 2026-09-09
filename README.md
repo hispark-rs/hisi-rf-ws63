@@ -84,3 +84,19 @@ cargo package --locked
 
 This crate is an early alpha. Resource profiles and the final application
 facade are still being tightened before a stable release.
+
+### Experimental NET0 Link Contract
+
+`standard-l2` remains a closed-admission experiment until native drainage and
+reconnect are verified. The separate one-shot experiment does not relax that
+gate. Its checked HMAC cleanup wrappers use the pinned nightly's
+[`link_arg_attribute`](https://doc.rust-lang.org/unstable-book/language-features/link-arg-attribute.html)
+to carry linker metadata through an rlib into the final application. Applications
+must not repeat the cleanup `--wrap` flags themselves.
+
+The maintainer-only `uv run --script .github/scripts/check-net0-consumer.py
+--output <new-directory>` packages this repository, builds an isolated dependency
+consumer with plain offline Cargo in a space/Unicode path, validates actual
+cleanup calls and physical storage, and rejects removal of the metadata. The
+consumer has no build script. This gate is not a crates.io-only facade release
+test, byte-identical firmware guarantee, or native-fence/HIL acceptance.

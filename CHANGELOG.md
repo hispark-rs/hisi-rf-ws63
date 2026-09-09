@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Carry the experimental NET0 cleanup wrappers through Rust native-link
+  metadata to downstream Cargo binaries, instead of package-local build-script
+  arguments. The pinned nightly enables `link_arg_attribute` only for RV32
+  Wi-Fi standard-L2 builds. Test packaged external consumers, actual final call
+  routing, resource layout and a missing-metadata negative case on each host.
+  This does not enable a reconnect profile or transfer previous HIL evidence.
 - In the non-default NET0 lane, correlate HMAC user deletion with the actual
   MAC resource-free return. Preserve inner failures even when both native
   user-delete and kick-user discard them. Missing, duplicate and stale nested
