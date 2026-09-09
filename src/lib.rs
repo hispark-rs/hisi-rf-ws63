@@ -91,6 +91,17 @@
 ))]
 compile_error!("standard-l2 station composition requires incremental-embassy-wait");
 
+#[cfg(all(
+    feature = "standard-l2-rx-stop-experiment",
+    any(
+        feature = "ble-init",
+        feature = "sle-init",
+        feature = "upstream-authenticator-wpa2",
+        feature = "upstream-authenticator-wpa3"
+    )
+))]
+compile_error!("standard-l2 RX stop experiment requires exclusive station radio ownership");
+
 #[cfg(test)]
 extern crate std;
 

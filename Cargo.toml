@@ -209,6 +209,8 @@ standard-l2 = ["hisi-rf-core/embassy-net-driver", "dep:embassy-net-driver"]
 # Bring-up only: one first association after bootstrap, with no retry/reopen.
 # This is NOT a native queue-drain proof or a supported reconnect profile.
 standard-l2-initial-session-experiment = ["standard-l2", "incremental-embassy-wait"]
+# One terminal native RX stop after checked disconnect; no resume/reconnect.
+standard-l2-rx-stop-experiment = ["standard-l2-initial-session-experiment"]
 # Maintainer negative HIL only: release real resources, then report a scoped
 # native resource-free failure. Never selected by a public radio profile.
 standard-l2-cleanup-fault-injection = ["standard-l2-initial-session-experiment", "firmware-example"]

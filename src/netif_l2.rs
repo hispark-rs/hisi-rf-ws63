@@ -32,6 +32,21 @@ pub use host_delivery::HostDeliveryDiagnostics;
 pub(crate) mod host_tx;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 pub use host_tx::HostTxDiagnostics;
+#[cfg(any(
+    test,
+    all(
+        target_arch = "riscv32",
+        feature = "wifi",
+        feature = "standard-l2-rx-stop-experiment"
+    )
+))]
+pub(crate) mod rx_stop;
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "wifi",
+    feature = "standard-l2-rx-stop-experiment"
+))]
+pub use rx_stop::RxStopDiagnostics;
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
 pub(crate) mod user_cleanup;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
@@ -62,6 +77,17 @@ pub fn native_user_cleanup_diagnostics() -> UserCleanupDiagnostics {
 #[doc(hidden)]
 pub fn native_host_tx_diagnostics() -> HostTxDiagnostics {
     host_tx::diagnostics()
+}
+
+/// One-shot device-handler receipt, not a reusable producer-fence capability.
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "wifi",
+    feature = "standard-l2-rx-stop-experiment"
+))]
+#[doc(hidden)]
+pub fn native_rx_stop_diagnostics() -> RxStopDiagnostics {
+    rx_stop::diagnostics()
 }
 
 /// First-session experiment counters, not a native-drain receipt.

@@ -218,6 +218,9 @@ impl Ws63WifiBackend<'static> {
         #[cfg(all(feature = "standard-l2", target_arch = "riscv32"))]
         crate::netif_l2::install_host_delivery_observer()
             .map_err(|code| backend_error(BackendErrorClass::Initialize, code))?;
+        #[cfg(all(feature = "standard-l2-rx-stop-experiment", target_arch = "riscv32"))]
+        crate::netif_l2::rx_stop::install()
+            .map_err(|code| backend_error(BackendErrorClass::Initialize, code))?;
         #[cfg(feature = "upstream-supplicant-port")]
         {
             let native_supplicant_stage = crate::blocking_diagnostics::BootstrapStageTimer::start(

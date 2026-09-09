@@ -2513,7 +2513,26 @@ fn disconnect_after_host_tx_drain(ifname: &[u8], reason: &mut u16) -> c_int {
     if let Err(status) = crate::netif_l2::host_tx::close_and_drain() {
         return status;
     }
-    crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast())
+    let status = crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast());
+    #[cfg(all(
+        feature = "standard-l2-rx-stop-experiment",
+        target_arch = "riscv32",
+        feature = "wifi"
+    ))]
+    {
+        let status = crate::netif_l2::user_cleanup::checked_status(status);
+        if status != 0 {
+            return status;
+        }
+        // This runs on the native-operation worker, not the async executor.
+        crate::netif_l2::rx_stop::stop_once().err().unwrap_or(0)
+    }
+    #[cfg(not(all(
+        feature = "standard-l2-rx-stop-experiment",
+        target_arch = "riscv32",
+        feature = "wifi"
+    )))]
+    status
 }
 
 /// The two synchronous recovery sites use the same native ownership slot as

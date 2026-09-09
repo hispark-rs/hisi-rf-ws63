@@ -746,6 +746,28 @@ async fn run_connect_profile(
 
 #[cfg(all(feature = "incremental-connect-profile", feature = "standard-l2"))]
 fn write_user_cleanup_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>) {
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    {
+        let d = hisi_rf_ws63::netif_l2::native_rx_stop_diagnostics();
+        write_snapshot(
+            uart,
+            b"RFDBG_NET0_RX_STOP",
+            &[
+                u32::from(d.installed),
+                u32::from(d.requested),
+                u32::from(d.entered),
+                u32::from(d.returned),
+                u32::from(d.post_returned),
+                u32::from(d.mac_before),
+                u32::from(d.mac_after),
+                u32::from(d.descriptors_empty),
+                d.native_status as u32,
+                d.fault as u32,
+                d.expected_task,
+                d.current_task,
+            ],
+        );
+    }
     let tx = hisi_rf_ws63::netif_l2::native_host_tx_diagnostics();
     write_snapshot(
         uart,

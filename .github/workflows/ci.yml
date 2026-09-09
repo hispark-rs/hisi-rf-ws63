@@ -46,6 +46,9 @@ jobs:
         run: >-
           cargo clippy --locked --lib --no-default-features
           --features wpa2-personal,standard-l2-initial-session-experiment -- -D warnings
+      - name: Test the bounded one-shot native RX stop experiment
+        run: cargo test --locked --lib --no-default-features --features wpa2-personal,standard-l2-rx-stop-experiment
+      - run: cargo clippy --locked --lib --tests --no-default-features --features wpa2-personal,standard-l2-rx-stop-experiment -- -D warnings
       - run: cargo check '-Zbuild-std=core,alloc' --locked --target riscv32imfc-unknown-none-elf --lib --no-default-features --features standard-l2
 
   l2-miri:
@@ -102,6 +105,20 @@ jobs:
             exit 1
           fi
           grep -F 'direct Wi-Fi/BGLE feature mixing is unsupported' "${log}"
+      - name: Reject terminal RX stop in a shared-radio composition
+        run: |
+          for profile in coexistence-wifi-ble coexistence-wifi-sle upstream-authenticator-wpa2; do
+            log="${RUNNER_TEMP}/rx-stop-${profile}.log"
+            if cargo check --locked --lib --no-default-features --features "wpa2-personal,standard-l2-rx-stop-experiment,${profile}" 2>"${log}"; then
+              echo "terminal RX stop unexpectedly accepted a shared-radio composition" >&2
+              exit 1
+            fi
+            if [ "${profile}" = upstream-authenticator-wpa2 ]; then
+              grep -F 'select either the AP authenticator or STA supplicant target archive' "${log}"
+            else
+              grep -F 'standard-l2 RX stop experiment requires exclusive station radio ownership' "${log}"
+            fi
+          done
 
   api-boundary:
     runs-on: ubuntu-latest
@@ -278,6 +295,10 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-cleanup-fault-injection,incremental-connect-profile,bootstrap-stage-diag
       - name: Verify native cleanup calls remain present in the error fixture
         run: uv run --script .github/scripts/check-net0-cleanup.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --output net0-cleanup-fault-link.json
+      - name: Link the native RX stop experiment with ordinary Cargo
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-rx-stop-experiment,incremental-connect-profile,bootstrap-stage-diag,firmware-example
+      - name: Verify actual RX stop calls and reject wrong-address veneers
+        run: uv run --script .github/scripts/check-net0-rx-stop.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-stop-link.json
       - name: Verify packaged NET0 external consumer and transitive native metadata
         run: uv run --script .github/scripts/check-net0-consumer.py --output net0-external-consumer
       - uses: actions/upload-artifact@v4
@@ -294,6 +315,7 @@ jobs:
             net0-cleanup-link.json
             net0-host-tx-link.json
             net0-cleanup-fault-link.json
+            net0-rx-stop-link.json
           if-no-files-found: error
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-cancel-profile,bootstrap-stage-diag,firmware-example

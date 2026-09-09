@@ -181,6 +181,11 @@ def main():
         run(build, app)
         if cleanup.inspect(elf)["edges"] != report["edges"]:
             raise ValueError("restored metadata changed the resolved graph")
+        run(build + ["--features", "standard-l2-rx-stop-experiment"], app)
+        rx_stop = load_checker("check-net0-rx-stop")
+        rx_report = rx_stop.inspect(elf)
+        rx_report["rejected_call_and_address_mutations"] = rx_stop.tamper(elf)
+        (output / "rx-stop.json").write_text(json.dumps(rx_report, indent=2) + "\n")
         result = {"schema": "net0-transitive-consumer/v1", "status": "pass",
                   "harness_sha256": sha(Path(__file__)),
                   "package_sha256": sha(package), "package_bytes": package.stat().st_size,
@@ -190,6 +195,7 @@ def main():
                   "missing_metadata_rejected": list(SYMBOLS), "restored_build": True,
                   "space_unicode_path": True, "consumer_build_script": False,
                   "consumer_wrap_flags": False,
+                  "rx_stop_experiment_link_verified": True,
                   "boundary": "Packaged path dependency and final-call/resource checks, not crates.io-only facade or HIL acceptance"}
         (output / "consumer.json").write_text(json.dumps(result, indent=2) + "\n")
         for name in ("Cargo.toml", "Cargo.lock"):
