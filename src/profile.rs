@@ -94,6 +94,20 @@ const WS63_RADIO_STATE_BASE_BYTES: usize = 0x710
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 #[cfg(feature = "standard-l2")]
 const PROFILE_L2_STORAGE_BYTES: usize = core::mem::size_of::<crate::netif_l2::NativeStorage>();
+#[cfg(target_pointer_width = "32")]
+const PROFILE_NATIVE_WORKER_LINK_BYTES: usize = {
+    #[cfg(all(feature = "standard-l2", feature = "incremental-embassy-wait"))]
+    {
+        // The owned link raises the nested worker's alignment to eight bytes.
+        // RV32 guards below verify the additional eight bytes of padding for
+        // both event capacities; the report itself still uses actual size_of.
+        core::mem::size_of::<crate::netif_l2::NativeWorkerLink>() + 8
+    }
+    #[cfg(not(all(feature = "standard-l2", feature = "incremental-embassy-wait")))]
+    {
+        0
+    }
+};
 #[cfg(all(not(feature = "standard-l2"), target_arch = "riscv32"))]
 const PROFILE_L2_STORAGE_BYTES: usize = 0;
 #[cfg(all(
@@ -930,10 +944,9 @@ impl<P: Profile, const EVENTS: usize> Storage<P, EVENTS> {
         ResourceReport::for_profile::<P, EVENTS>(P::RF_ARENA_BYTES)
     }
 
-    /// The NET0 composition will claim this only after native bootstrap yields
+    /// The NET0 composition claims this only after native bootstrap yields
     /// the actual station MAC. Merely owning it does not open RX admission.
     #[cfg(feature = "standard-l2")]
-    #[allow(dead_code)] // The native lifecycle/profile gate is not yet enabled.
     pub(crate) fn l2_storage(&'static self) -> &'static crate::netif_l2::NativeStorage {
         &self.l2
     }
@@ -1343,22 +1356,21 @@ const _: () = {
                 WS63_CONTROL_STORAGE_FIXED_BYTES
                     + PROFILE_L2_STORAGE_BYTES
                     + PROFILE_DISCONNECT_RECEIPT_BYTES
+                    + PROFILE_NATIVE_WORKER_LINK_BYTES
                     + WS63_RADIO_STATE_BASE_BYTES
                     + 4 * WS63_RADIO_EVENT_SLOT_BYTES,
                 WS63_CONTROL_STORAGE_ALIGNMENT,
             )
     );
-    assert!(
-        core::mem::size_of::<Storage<WifiWpa2Smoltcp, 8>>()
-            == align_up(
-                WS63_CONTROL_STORAGE_FIXED_BYTES
-                    + PROFILE_L2_STORAGE_BYTES
-                    + PROFILE_DISCONNECT_RECEIPT_BYTES
-                    + WS63_RADIO_STATE_BASE_BYTES
-                    + 8 * WS63_RADIO_EVENT_SLOT_BYTES,
-                WS63_CONTROL_STORAGE_ALIGNMENT,
-            )
-    );
+    let _: [(); align_up(
+        WS63_CONTROL_STORAGE_FIXED_BYTES
+            + PROFILE_L2_STORAGE_BYTES
+            + PROFILE_DISCONNECT_RECEIPT_BYTES
+            + PROFILE_NATIVE_WORKER_LINK_BYTES
+            + WS63_RADIO_STATE_BASE_BYTES
+            + 8 * WS63_RADIO_EVENT_SLOT_BYTES,
+        WS63_CONTROL_STORAGE_ALIGNMENT,
+    )] = [(); core::mem::size_of::<Storage<WifiWpa2Smoltcp, 8>>()];
     assert!(
         core::mem::size_of::<RadioState<4>>()
             == WS63_RADIO_STATE_BASE_BYTES + 4 * WS63_RADIO_EVENT_SLOT_BYTES

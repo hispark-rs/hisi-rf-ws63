@@ -13,6 +13,7 @@
 //! RX fails closed; it never falls back to the legacy global packet bridge.
 
 use core::cell::RefCell;
+use core::task::Waker;
 
 use critical_section::Mutex;
 use hisi_rf_core::l2::{Generation, L2Ingress, QueueError};
@@ -21,6 +22,14 @@ mod link;
 pub use link::{LinkError, NativeLink, SubmitError};
 mod storage;
 pub use storage::{NativeStorage, StorageError, StorageReport};
+mod device;
+pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
+
+pub(crate) type NativeDevice =
+    hisi_rf_core::l2::L2Device<'static, NATIVE_RX_SLOTS, NATIVE_TX_SLOTS, NATIVE_MTU>;
+#[cfg(feature = "incremental-embassy-wait")]
+pub(crate) type NativeWorkerLink =
+    NativeLink<'static, 'static, NATIVE_RX_SLOTS, NATIVE_TX_SLOTS, NATIVE_MTU>;
 
 /// Initial WS63 queue shape; the eventual named profile must account for these
 /// bytes in caller-owned storage and its resource report before graduation.
@@ -71,6 +80,7 @@ struct State<'storage, const RX: usize, const MTU: usize> {
     ingress: Option<L2Ingress<'storage, RX, MTU>>,
     generation: Option<Generation>,
     close_revision: Option<u64>,
+    close_waker: Option<Waker>,
     diagnostics: RouteDiagnostics,
 }
 
@@ -104,6 +114,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                 ingress: None,
                 generation: None,
                 close_revision: Some(0),
+                close_waker: None,
                 diagnostics: RouteDiagnostics {
                     entered: 0,
                     queued: 0,
@@ -175,7 +186,14 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
     /// submission ticket, but an already admitted TX may finish. This does not
     /// invalidate network tokens or revoke a payload copy already started.
     pub(crate) fn close_admission(&self) {
-        critical_section::with(|cs| self.state.borrow_ref_mut(cs).close_admission());
+        let wake = critical_section::with(|cs| {
+            let mut state = self.state.borrow_ref_mut(cs);
+            state.close_admission();
+            state.close_waker.take()
+        });
+        if let Some(waker) = wake {
+            waker.wake();
+        }
     }
 }
 
@@ -187,6 +205,20 @@ pub struct Registration<'route, 'storage, const RX: usize, const MTU: usize> {
 }
 
 impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX, MTU> {
+    fn close_revision(&self) -> Option<u64> {
+        critical_section::with(|cs| self.route.state.borrow_ref(cs).close_revision)
+    }
+
+    fn subscribe_close(&self, waker: &Waker) -> Option<u64> {
+        let new = waker.clone();
+        let (old, revision) = critical_section::with(|cs| {
+            let mut state = self.route.state.borrow_ref_mut(cs);
+            (state.close_waker.replace(new), state.close_revision)
+        });
+        drop(old);
+        revision
+    }
+
     /// Stop admission before resetting the L2 port. Already entered callbacks
     /// keep their old generation; reset makes their later publication fail.
     pub fn close(&mut self) {
@@ -261,11 +293,15 @@ impl<'storage, const RX: usize, const MTU: usize> Registration<'_, 'storage, RX,
 
 impl<const RX: usize, const MTU: usize> Drop for Registration<'_, '_, RX, MTU> {
     fn drop(&mut self) {
-        critical_section::with(|cs| {
+        let wake = critical_section::with(|cs| {
             let mut state = self.route.state.borrow_ref_mut(cs);
             state.close_admission();
             state.ingress = None;
+            state.close_waker.take()
         });
+        if let Some(waker) = wake {
+            waker.wake();
+        }
     }
 }
 

@@ -22,6 +22,7 @@ pub enum SubmitError<E> {
 pub struct NativeLink<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize> {
     port: L2Port<'storage, RX, TX, MTU>,
     registration: Registration<'route, 'storage, RX, MTU>,
+    observed_close: Option<u64>,
 }
 
 impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
@@ -34,7 +35,12 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
     ) -> Result<Self, LinkError> {
         let registration = route.claim(port.ingress()).map_err(LinkError::Route)?;
         port.link_down().map_err(LinkError::Queue)?;
-        Ok(Self { port, registration })
+        let observed_close = registration.close_revision();
+        Ok(Self {
+            port,
+            registration,
+            observed_close,
+        })
     }
 
     /// Establish a new epoch only after native RX/TX from the old epoch has
@@ -42,6 +48,7 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
     /// separate prerequisite to be implemented by the WS63 lifecycle owner.
     pub fn begin_after_native_quiescence(&mut self) -> Result<(), LinkError> {
         let intent = self.registration.prepare_open().map_err(LinkError::Route)?;
+        let revision = intent.close_revision;
         // Network wakeups run outside the lock. A newer native close during
         // this window must win over this open, including TX queued by a wake.
         let generation = self.port.begin_session().map_err(LinkError::Queue)?;
@@ -49,13 +56,28 @@ impl<'route, 'storage, const RX: usize, const TX: usize, const MTU: usize>
             self.port.link_down().map_err(LinkError::Queue)?;
             return Err(LinkError::Route(error));
         }
+        self.observed_close = Some(revision);
         Ok(())
+    }
+
+    /// Register the worker before observing native admission closure. This
+    /// turns a native close into network link-down without a polling timer.
+    /// It does not reopen a route or certify producer drainage.
+    pub fn poll_native_close(&mut self, cx: &mut Context<'_>) -> Result<bool, QueueError> {
+        let revision = self.registration.subscribe_close(cx.waker());
+        if revision == self.observed_close {
+            return Ok(false);
+        }
+        self.observed_close = revision;
+        self.port.link_down()?;
+        Ok(true)
     }
 
     /// Close RX admission first, then invalidate network tokens/queued frames.
     /// This does not wait for an outstanding native send or drain vendor DMA.
     pub fn close(&mut self) -> Result<(), QueueError> {
         self.registration.close();
+        self.observed_close = self.registration.close_revision();
         self.port.link_down()
     }
 

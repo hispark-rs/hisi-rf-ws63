@@ -209,6 +209,16 @@ fn main() -> ! {
             halt()
         }
     };
+    #[cfg(feature = "standard-l2")]
+    {
+        use embassy_net_driver::Driver;
+        let device = &mut parts.wifi.device;
+        let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+        assert!(device.station_mac_address().is_some());
+        assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
+        assert!(device.transmit(&mut cx).is_none());
+        uart.write(b"RFDBG_NET0_BOUND_CLOSED\r\n");
+    }
     write_metric(
         uart,
         b"RFDBG_A5B_BOOTSTRAP_OK elapsed_ms=0x",

@@ -121,22 +121,30 @@ impl WorkerScanStorage {
 /// Caller-owned worker state initialized exactly once by the composition root.
 pub(crate) struct IncrementalWorkerState {
     backend: core::cell::UnsafeCell<OwnedIncrementalSupplicantBackend>,
+    #[cfg(feature = "standard-l2")]
+    l2: core::cell::UnsafeCell<crate::netif_l2::NativeWorkerLink>,
     mailbox: Mutex<RefCell<WorkerMailbox>>,
     scan: WorkerScanStorage,
     wake: Semaphore,
     l2_capabilities: Option<WifiL2Capabilities>,
 }
 
-// SAFETY: only the spawned worker dereferences `backend`. All runner-facing
-// communication is moved through `mailbox`, which is serialized by the target
-// critical-section implementation. Initialization completes before spawn.
+// SAFETY: only the spawned worker dereferences `backend` and the optional L2
+// link. Runner communication uses the serialized mailbox; the separate ingress
+// capability synchronizes callback metadata. Initialization completes before
+// spawn, and the static waker only signals the synchronized semaphore.
 unsafe impl Sync for IncrementalWorkerState {}
 
 impl IncrementalWorkerState {
-    pub(crate) fn new(backend: OwnedIncrementalSupplicantBackend) -> Self {
+    pub(crate) fn new(
+        backend: OwnedIncrementalSupplicantBackend,
+        #[cfg(feature = "standard-l2")] l2: crate::netif_l2::NativeWorkerLink,
+    ) -> Self {
         let l2_capabilities = backend.l2_capabilities();
         Self {
             backend: core::cell::UnsafeCell::new(backend),
+            #[cfg(feature = "standard-l2")]
+            l2: core::cell::UnsafeCell::new(l2),
             mailbox: Mutex::new(RefCell::new(WorkerMailbox::new())),
             scan: WorkerScanStorage::new(),
             wake: Semaphore::new(0),
@@ -274,6 +282,8 @@ impl IncrementalWorkerState {
     }
 
     fn run(&'static self) -> ! {
+        #[cfg(feature = "standard-l2")]
+        let l2_waker = self.l2_waker();
         loop {
             if self.wake.down().is_err() {
                 let _ = hisi_rf_rtos_driver::yield_now();
@@ -302,6 +312,23 @@ impl IncrementalWorkerState {
             // SAFETY: this worker is the sole code path that dereferences the
             // backend after initialization; the proxy only touches the mailbox.
             let backend = unsafe { &mut *self.backend.get() };
+            #[cfg(feature = "standard-l2")]
+            {
+                // SAFETY: only this worker accesses the link after spawn;
+                // callbacks hold a separate synchronized ingress capability.
+                let link = unsafe { &mut *self.l2.get() };
+                let mut cx = core::task::Context::from_waker(&l2_waker);
+                if link.poll_native_close(&mut cx).is_err() {
+                    let _ = link.close();
+                }
+                if link
+                    .poll_transmit(&mut cx, crate::netif::transmit)
+                    .is_ready()
+                    && self.wake.up().is_err()
+                {
+                    let _ = link.close();
+                }
+            }
             if let Some(id) = cancel {
                 let _ = backend.cancel(id);
             }
@@ -362,6 +389,27 @@ impl IncrementalWorkerState {
             });
             crate::incremental_wait::signal_backend();
         }
+    }
+
+    #[cfg(feature = "standard-l2")]
+    fn l2_waker(&'static self) -> core::task::Waker {
+        use core::task::{RawWaker, RawWakerVTable, Waker};
+        unsafe fn clone(data: *const ()) -> RawWaker {
+            RawWaker::new(data, &VTABLE)
+        }
+        unsafe fn wake(data: *const ()) {
+            // SAFETY: this vtable only receives the immutable static worker
+            // registered below. Waking never accesses its UnsafeCell fields.
+            let state = unsafe { &*data.cast::<IncrementalWorkerState>() };
+            if state.wake.up().is_err() {
+                crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
+            }
+        }
+        unsafe fn drop(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake, drop);
+        // SAFETY: the static worker outlives every clone; the vtable is
+        // thread-safe and does not own/free the storage.
+        unsafe { Waker::new((self as *const Self).cast(), &VTABLE) }
     }
 }
 

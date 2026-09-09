@@ -22,6 +22,16 @@ Rust types. L2 bytes are already part of control storage and are not added to
 the total again. Existing v13 named-profile reports are unchanged without this
 feature; no new profile is claimed to be HIL calibrated.
 
+The opt-in incremental composition claims this storage after native bootstrap
+provides the station MAC. It returns an opaque `WifiDevice` implementing
+`embassy_net_driver::Driver` (and the optional smoltcp adapter over that same
+device), and moves the only `NativeLink` into the existing native worker.
+Neither handle contains another packet array. Missing identity or a repeated
+claim fails explicitly. The station composition requires
+`incremental-embassy-wait`; existing named profiles are unchanged. This wiring
+does not call `begin_after_native_quiescence`: the device remains Down and
+offers no TX token, even when the control-plane connect operation succeeds.
+
 The NET0 bootstrap fixture embeds its RV32 report in the ELF. CI compares it
 against the actual control symbol, shared-arena section, packet RAM and main
 stack linker symbols. This also fixes the older bootstrap fixture's missing
@@ -55,6 +65,12 @@ as the core contract; they do not prove over-the-air delivery.
 held until the native call has copied/finished reading the frame. Native errors
 count as drops, not delivery. The worker waker is registered before checking the
 TX queue. No timer polling is needed to notice a newly queued TX frame.
+The static worker waker only signals its existing semaphore; no allocation,
+native call or payload access runs from the wake callback. A native close takes
+and wakes its subscriber outside the metadata lock. The worker subscribes
+before reading the close revision, so closure before the first poll or several
+coalesced closures still invalidate the port on its next turn. This notification
+does not certify native drainage or reopen the link.
 Before entering native code, the worker claims a non-cloneable submission
 ticket for the packet's original generation, linearized against admission close.
 A packet queued before close is explicitly dropped if it has not yet gained
@@ -149,7 +165,14 @@ exhaustion. They also call the production inline handoff with reentrant queue
 access, an early consumed wake, queued work, native failure and completion-wake
 failure. These are command sequencing tests, not native-fence or HIL proof.
 
-Remaining integration gates are profile-owned registration, native quiescence/
-authorization events and worker wake wiring, followed by exact-artifact WS63
-HIL. Storage/layout CI is not a peak-usage or working-profile HIL result. No new user-facing network profile
-is advertised before those gates pass.
+The opt-in composition also final-links `incremental_scan_profile` on all
+three host OSes. It checks the actual MAC, Down state and absent TX token and
+emits `RFDBG_NET0_BOUND_CLOSED`. This marker means bound/closed storage only,
+not a functioning network. Host tests cover the opaque Driver's real capacity,
+its shared smoltcp queue, rejected identity/duplicate claims, and close wakeups
+before subscription or coalesced across polls.
+
+Remaining integration gates are native quiescence/authorization events and
+exact-artifact WS63 traffic/reconnect HIL. Storage/layout CI and bound/closed
+control HIL are not peak-usage or working-network evidence. No new user-facing
+network profile is advertised before those gates pass.

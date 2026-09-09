@@ -80,6 +80,13 @@
 #![feature(c_variadic)]
 #![allow(non_upper_case_globals)] // contract symbols must match the C names exactly
 
+#[cfg(all(
+    feature = "standard-l2",
+    any(feature = "wifi-personal", feature = "upstream-supplicant-port"),
+    not(feature = "incremental-embassy-wait")
+))]
+compile_error!("standard-l2 station composition requires incremental-embassy-wait");
+
 #[cfg(test)]
 extern crate std;
 

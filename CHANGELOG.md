@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bind the opt-in NET0 profile's actual caller-owned queue to an opaque
+  `embassy_net_driver::Driver` and the existing native worker. Use the real
+  station MAC and retain the optional smoltcp adapter on the same exclusive
+  device. Native close uses a revision and semaphore-backed wake, including
+  close-before-subscription; TX remains bounded to one frame per worker turn.
+  The route stays closed: authorization and native producer quiescence are
+  still required before any new-path traffic or reconnect claim. Add a
+  three-host-OS final-link fixture and account for the owned worker link in
+  the RV32 resource layout without reducing existing arenas or stacks.
 - Include autonomous hostap teardown and both inline recovery disconnects in
   the opt-in NET0 native ownership slot. Rewake work queued during an inline
   call, retain session failures beyond receipt-history eviction, and close new
@@ -43,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry, verify netif identity and the single-pbuf/padding boundary, and release
   the callback's pbuf reference on every exit. A closed route never falls back
   to the old global queue. Named profiles still use the verified legacy path;
-  native quiescence, worker/profile composition and new-path HIL remain open.
+  native quiescence and new-path HIL remain open.
 - Exercise the real C callback and pbuf boundary in host/Miri tests, including
   malformed/chained buffers, capacity, stale epochs and reference ownership.
 

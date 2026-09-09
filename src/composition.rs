@@ -31,7 +31,14 @@ use crate::hisi_rf_backend::Ws63WifiBackend;
 use crate::incremental_wait::{Ws63IncrementalWaitDiagnostics, Ws63IncrementalWaitPlatform};
 #[cfg(feature = "incremental-embassy-wait")]
 use crate::incremental_worker::{IncrementalWorkerState, WorkerBackedIncrementalBackend};
+#[cfg(not(feature = "standard-l2"))]
 use crate::netif_smoltcp::Ws63Device;
+#[cfg(not(feature = "standard-l2"))]
+type ActiveWifiDevice = Ws63Device;
+#[cfg(feature = "standard-l2")]
+type ActiveWifiDevice = crate::netif_l2::NativeDevice;
+#[cfg(feature = "standard-l2")]
+pub use crate::netif_l2::{WifiDevice, WifiRxToken, WifiTxToken};
 pub use crate::netif_smoltcp::{DhcpDiagnostics, L2ProtocolDiagnostics, RxQueueDiagnostics};
 use crate::profile::{
     ActiveProfile, InstalledRadioArena, Profile, ProfileReservations, StandaloneWifiProfile,
@@ -311,7 +318,7 @@ type ActiveIncrementalBackend = OwnedIncrementalSupplicantBackend;
 
 #[cfg(feature = "incremental-backend-experiment")]
 type CoreIncrementalRadioController<const EVENTS: usize> =
-    hisi_rf_core::RadioController<ActiveIncrementalBackend, Ws63Device, EVENTS>;
+    hisi_rf_core::RadioController<ActiveIncrementalBackend, ActiveWifiDevice, EVENTS>;
 
 /// WS63 controller bound to the caller-owned storage that will hold its runner.
 #[cfg(feature = "legacy-blocking-backend")]
@@ -321,6 +328,7 @@ pub struct RadioController<P: Profile + 'static, const EVENTS: usize> {
 }
 
 /// WS63 L2 device exposed only through the standard smoltcp device contract.
+#[cfg(not(feature = "standard-l2"))]
 pub struct WifiDevice(hisi_rf_core::WifiDevice<Ws63Device>);
 
 /// Secret-free counters spanning the Rust L2 bridge and vendor IRQ boundary.
@@ -395,6 +403,7 @@ pub struct DataPathDiagnostics {
     pub wlmac_irq_lifecycle: [u32; 6],
 }
 
+#[cfg(not(feature = "standard-l2"))]
 pub(crate) fn tx_timeline_diagnostics() -> crate::TxTimelineDiagnostics {
     #[cfg(all(feature = "data-path-diag", not(feature = "rf-eloop-diag")))]
     {
@@ -426,6 +435,7 @@ const DATA_PATH_DIAG_CAPABILITIES: u32 = DATA_PATH_CAP_VENDOR_TX_SUBMISSION
     | DATA_PATH_CAP_DMAC_RX_PREPARE
     | DATA_PATH_CAP_MAC_FILTER_STATE;
 
+#[cfg(not(feature = "standard-l2"))]
 impl WifiDevice {
     /// Snapshot immutable L2 identity owned by this initialized radio instance.
     pub fn l2_capabilities(&self) -> Option<hisi_rf_core::WifiL2Capabilities> {
@@ -672,27 +682,32 @@ impl WifiDevice {
 }
 
 /// Opaque receive token for [`WifiDevice`].
+#[cfg(not(feature = "standard-l2"))]
 pub struct WifiRxToken(
     <hisi_rf_core::WifiDevice<Ws63Device> as smoltcp::phy::Device>::RxToken<'static>,
 );
 
 /// Opaque transmit token for [`WifiDevice`].
+#[cfg(not(feature = "standard-l2"))]
 pub struct WifiTxToken(
     <hisi_rf_core::WifiDevice<Ws63Device> as smoltcp::phy::Device>::TxToken<'static>,
 );
 
+#[cfg(not(feature = "standard-l2"))]
 impl smoltcp::phy::RxToken for WifiRxToken {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, consume: F) -> R {
         smoltcp::phy::RxToken::consume(self.0, consume)
     }
 }
 
+#[cfg(not(feature = "standard-l2"))]
 impl smoltcp::phy::TxToken for WifiTxToken {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, consume: F) -> R {
         smoltcp::phy::TxToken::consume(self.0, len, consume)
     }
 }
 
+#[cfg(not(feature = "standard-l2"))]
 impl smoltcp::phy::Device for WifiDevice {
     type RxToken<'a> = WifiRxToken;
     type TxToken<'a> = WifiTxToken;
@@ -728,11 +743,14 @@ pub struct WifiParts<const EVENTS: usize> {
     feature = "incremental-embassy-wait"
 ))]
 fn wrap_wifi_parts<const EVENTS: usize>(
-    parts: hisi_rf_core::WifiParts<Ws63Device, EVENTS>,
+    parts: hisi_rf_core::WifiParts<ActiveWifiDevice, EVENTS>,
 ) -> WifiParts<EVENTS> {
     WifiParts {
         controller: parts.controller,
+        #[cfg(not(feature = "standard-l2"))]
         device: WifiDevice(parts.device),
+        #[cfg(feature = "standard-l2")]
+        device: WifiDevice(parts.device.into_inner()),
     }
 }
 
@@ -946,7 +964,7 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
 ) -> Result<IncrementalRadioController<P, EVENTS>, InitError> {
     let RadioResources {
         mut backend,
-        device,
+        device: legacy_device,
     } = crate::hisi_rf_backend::resources(
         resources.efuse,
         resources.km,
@@ -978,6 +996,23 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
             return Err(InitError::core(Error::Backend(error)));
         }
     };
+    #[cfg(not(feature = "standard-l2"))]
+    let device = legacy_device;
+    #[cfg(feature = "standard-l2")]
+    let (device, native_link) = {
+        use hisi_rf_core::IncrementalWifiBackend;
+        let _ = legacy_device;
+        let result = claim_standard_l2(_storage.l2_storage(), backend.l2_capabilities());
+        match result {
+            Ok(parts) => parts,
+            Err(error) => {
+                if let Some(reservation) = worker_reservation {
+                    release_profile_reservation(reservation)?;
+                }
+                return Err(error);
+            }
+        }
+    };
     #[cfg(feature = "incremental-embassy-wait")]
     let (backend, worker) = {
         let worker_reservation = worker_reservation.ok_or_else(|| {
@@ -985,7 +1020,11 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
                 hisi_rf_rtos_driver::Error::Runtime,
             ))
         })?;
-        let worker = _storage.store_incremental_worker(IncrementalWorkerState::new(backend));
+        let worker = _storage.store_incremental_worker(IncrementalWorkerState::new(
+            backend,
+            #[cfg(feature = "standard-l2")]
+            native_link,
+        ));
         match worker.start(worker_reservation) {
             Ok(backend) => (backend, &*worker),
             Err(error) => {
@@ -1003,6 +1042,38 @@ fn init_incremental_claimed<P: Profile + ActiveProfile + 'static, const EVENTS: 
         }),
         Err(error) => Err(InitError::core(error)),
     }
+}
+
+#[cfg(feature = "standard-l2")]
+fn claim_standard_l2(
+    storage: &'static crate::netif_l2::NativeStorage,
+    address: Option<hisi_rf_core::WifiL2Capabilities>,
+) -> Result<
+    (
+        crate::netif_l2::NativeDevice,
+        crate::netif_l2::NativeWorkerLink,
+    ),
+    InitError,
+> {
+    let failure = |code| {
+        InitError::core(Error::Backend(
+            BackendError::new(BackendErrorClass::ResourceUnavailable, code)
+                .with_stage(DiagnosticStage::Runtime)
+                .with_profile_revision(crate::profile::PROFILE_REVISION),
+        ))
+    };
+    let address = address.ok_or_else(|| failure(0x5732_b104))?;
+    let parts = storage
+        .claim(address)
+        .map_err(|_| InitError::storage_already_claimed())?;
+    let link = crate::netif_l2::bind_native(parts.port).map_err(|error| match error {
+        crate::netif_l2::LinkError::Route(crate::netif_l2::RouteError::AlreadyRegistered) => {
+            InitError::storage_already_claimed()
+        }
+        crate::netif_l2::LinkError::Route(_) => failure(0x5732_b106),
+        crate::netif_l2::LinkError::Queue(_) => failure(0x5732_b107),
+    })?;
+    Ok((parts.device, link))
 }
 
 /// Maintainer-only Wi-Fi/BLE composition returned after one atomic admission.
@@ -1722,6 +1793,36 @@ mod tests {
 
         let claimed = InitError::storage_already_claimed().diagnostic();
         assert_eq!(claimed.code(), DiagnosticCode::AlreadyInitialized);
+    }
+
+    #[cfg(feature = "standard-l2")]
+    #[test]
+    fn net0_missing_identity_does_not_claim_storage_or_guess_a_mac() {
+        static STORAGE: crate::netif_l2::NativeStorage = crate::netif_l2::NativeStorage::new();
+        let error = match claim_standard_l2(&STORAGE, None) {
+            Ok(_) => panic!("missing native identity was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.diagnostic().backend_code(), Some(0x5732_b104));
+        assert_eq!(error.diagnostic().stage(), DiagnosticStage::Runtime);
+        let address = hisi_rf_core::WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 11]).unwrap();
+        assert!(STORAGE.claim(address).is_ok());
+    }
+
+    #[cfg(feature = "standard-l2")]
+    #[test]
+    fn net0_composition_rejects_an_already_claimed_queue() {
+        static STORAGE: crate::netif_l2::NativeStorage = crate::netif_l2::NativeStorage::new();
+        let address = hisi_rf_core::WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 12]).unwrap();
+        let _parts = STORAGE.claim(address).unwrap();
+        let error = match claim_standard_l2(&STORAGE, Some(address)) {
+            Ok(_) => panic!("a second L2 device was created"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.diagnostic().code(),
+            DiagnosticCode::AlreadyInitialized
+        );
     }
 
     #[test]

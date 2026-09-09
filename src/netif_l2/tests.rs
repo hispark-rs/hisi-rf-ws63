@@ -7,6 +7,64 @@ fn mac() -> WifiL2Capabilities {
     WifiL2Capabilities::try_new([2, 0, 0, 0, 0, 1]).unwrap()
 }
 
+#[test]
+fn native_close_is_level_observed_and_wakes_the_registered_worker() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::task::Wake;
+    struct Counter(AtomicUsize);
+    impl Wake for Counter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    let counter = Arc::new(Counter(AtomicUsize::new(0)));
+    let waker = Waker::from(counter.clone());
+    let mut cx = Context::from_waker(&waker);
+    link.begin_after_native_quiescence().unwrap();
+    assert!(!link.poll_native_close(&mut cx).unwrap());
+    parts
+        .device
+        .transmit(&mut cx)
+        .unwrap()
+        .consume(1, |b| b[0] = 1);
+    route.close_admission();
+    assert_eq!(counter.0.load(Ordering::Relaxed), 1);
+    assert!(link.poll_native_close(&mut cx).unwrap());
+    assert!(parts.device.link_state(&mut cx) == LinkState::Down);
+    assert_eq!(link.tx_diagnostics().dropped, 1);
+    assert!(!link.poll_native_close(&mut cx).unwrap());
+
+    // No waiter is needed for correctness: a close before the next subscribe
+    // remains visible by revision, rather than relying only on an edge.
+    link.begin_after_native_quiescence().unwrap();
+    route.close_admission();
+    route.close_admission();
+    assert!(link.poll_native_close(&mut cx).unwrap());
+    assert!(parts.device.link_state(&mut cx) == LinkState::Down);
+    assert!(!link.poll_native_close(&mut cx).unwrap());
+}
+
+#[test]
+fn close_before_first_worker_poll_is_not_lost() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    route.close_admission();
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(link.poll_native_close(&mut cx).unwrap());
+    assert!(parts.device.link_state(&mut cx) == LinkState::Down);
+    assert!(parts.device.transmit(&mut cx).is_none());
+}
+
 fn assert_conserved(route: &CallbackRoute<'_, 2, 64>) {
     let d = route.diagnostics();
     assert_eq!(d.entered, d.queued + d.dropped + d.in_flight as u64);
