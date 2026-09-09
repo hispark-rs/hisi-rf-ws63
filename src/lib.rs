@@ -278,6 +278,11 @@ pub mod netif;
 /// seam. Optional so the bare porting layer stays lean.
 #[cfg(feature = "net")]
 pub mod netif_smoltcp;
+
+/// Experimental NET0 callback ownership contract; not a production profile.
+#[cfg(feature = "standard-l2")]
+#[doc(hidden)]
+pub mod netif_l2;
 pub mod oal;
 pub mod osal;
 pub mod osal_adapt;

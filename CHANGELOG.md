@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add the non-default `standard-l2` NET0 integration contract using published
+  `hisi-rf-core 0.1.0-alpha.25`: exclusive callback registration, captured RX
+  generations, close/drain checks, explicit callback conservation, and bounded
+  worker-side TX submission over caller-owned buffers. This is not yet wired
+  into the production `driverif_input` or a named Embassy Net profile.
+- Keep Rust callback drainage distinct from native RX/TX quiescence. A reconnect
+  requires both fences; no automatic epoch retagging or global-queue fallback.
+
 ## [0.1.0-alpha.100] - 2026-09-01
 
 ### Fixed
