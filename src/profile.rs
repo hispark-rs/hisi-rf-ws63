@@ -1314,7 +1314,8 @@ impl ResourceReport {
             output,
             concat!(
                 ",\"l2_storage_offset\":{},\"l2_storage\":{{\"rx_slots\":{},\"tx_slots\":{},\"mtu\":{},",
-                "\"payload_bytes\":{},\"metadata_bytes\":{},\"total_bytes\":{}}}"
+                "\"payload_bytes\":{},\"metadata_bytes\":{},\"total_bytes\":{},",
+                "\"native_pbuf_prefix_bytes\":{}}}"
             ),
             self.l2_storage_offset,
             self.l2_storage.rx_slots,
@@ -1323,6 +1324,7 @@ impl ResourceReport {
             self.l2_storage.payload_bytes,
             self.l2_storage.metadata_bytes,
             self.l2_storage.total_bytes,
+            self.l2_storage.native_pbuf_prefix_bytes,
         )?;
         write!(output, "}}")
     }

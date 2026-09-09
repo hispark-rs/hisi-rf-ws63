@@ -193,23 +193,53 @@ const _: () = {
 // headroom by setting `data = pbuf->payload - 0x50`.
 const PBUF_ZERO_COPY_RESERVE: usize = 80;
 
+// Private allocator metadata precedes (and is not part of) the native pbuf.
+// Preserve the heap's 16-byte alignment and every native pbuf/payload offset.
+// Native oal_netbuf_free releases its pbuf through our pbuf_free, not kfree.
+#[cfg(feature = "standard-l2")]
+#[repr(C, align(16))]
+struct PbufPrefix {
+    epoch: crate::netif_l2::AllocationEpoch,
+}
+
+#[cfg(feature = "standard-l2")]
+pub(crate) const PBUF_PREFIX: usize = core::mem::size_of::<PbufPrefix>();
+#[cfg(not(feature = "standard-l2"))]
+const PBUF_PREFIX: usize = 0;
+
+#[cfg(feature = "standard-l2")]
+const _: () = {
+    assert!(PBUF_PREFIX == 16);
+    assert!(core::mem::align_of::<Pbuf>() <= core::mem::align_of::<PbufPrefix>());
+};
+
 /// `pbuf_alloc(layer, length, type)` — allocate a single (unchained) pbuf with
 /// the WS63 zero-copy headroom between its header and payload.
 #[unsafe(no_mangle)]
 pub extern "C" fn pbuf_alloc(_layer: c_int, length: u16, _type: c_int) -> *mut c_void {
     let total = PBUF_HDR + PBUF_ZERO_COPY_RESERVE + length as usize + PBUF_ZERO_COPY_TAILROOM;
-    let raw = crate::alloc::osal_kmalloc(total) as *mut Pbuf;
-    if raw.is_null() {
+    let Ok(malloc_len) = u16::try_from(total) else {
+        return core::ptr::null_mut();
+    };
+    #[cfg(feature = "standard-l2")]
+    let epoch = crate::netif_l2::NATIVE_RX_ROUTE.allocation_epoch();
+    let allocation = crate::alloc::osal_kmalloc(PBUF_PREFIX + total).cast::<u8>();
+    if allocation.is_null() {
         return core::ptr::null_mut();
     }
-    // SAFETY: freshly allocated `total` bytes.
+    // SAFETY: allocation has prefix + total bytes with the heap's 16B alignment.
+    let raw = unsafe { allocation.add(PBUF_PREFIX).cast::<Pbuf>() };
+    // SAFETY: fresh exclusive allocation; the private prefix is never exposed
+    // as native headroom, and malloc_len remains relative to the pbuf pointer.
     unsafe {
+        #[cfg(feature = "standard-l2")]
+        allocation.cast::<PbufPrefix>().write(PbufPrefix { epoch });
         (*raw).next = core::ptr::null_mut();
         (*raw).payload = (raw as *mut u8).add(PBUF_HDR + PBUF_ZERO_COPY_RESERVE) as *mut c_void;
         (*raw).tot_len = length;
         (*raw).len = length;
         (*raw).list = core::ptr::null_mut();
-        (*raw).malloc_len = total as u16;
+        (*raw).malloc_len = malloc_len;
         (*raw).type_internal = PBUF_TYPE_RAM;
         (*raw)._type_pad = 0;
         (*raw).flags = 0;
@@ -246,7 +276,10 @@ pub extern "C" fn pbuf_free(p: *mut c_void) -> u8 {
     if !free {
         return 0;
     }
-    crate::alloc::osal_kfree(p as *mut c_void);
+    // SAFETY: pbuf_alloc returned the pointer immediately after this prefix.
+    // The last reference owns both prefix and native pbuf/payload allocation.
+    let allocation = unsafe { p.cast::<u8>().sub(PBUF_PREFIX) };
+    crate::alloc::osal_kfree(allocation.cast());
     1
 }
 
@@ -290,7 +323,7 @@ pub extern "C" fn pbuf_header(p: *mut c_void, header_size: i16) -> u8 {
         {
             return 1;
         }
-        (*p).payload = new_payload as *mut c_void;
+        (*p).payload = (*p).payload.byte_offset(-(header_size as isize));
         (*p).len = new_len as u16;
         (*p).tot_len = new_tot_len as u16;
     }
@@ -386,9 +419,15 @@ pub(crate) fn hardware_address() -> Option<[u8; 6]> {
 pub extern "C" fn driverif_input(_netif: *mut c_void, p: *mut c_void) -> c_int {
     #[cfg(feature = "standard-l2")]
     {
-        // Capture the connection before inspecting vendor-owned memory. A
-        // concurrent close cannot retag this callback for a later connection.
-        let ticket = crate::netif_l2::NATIVE_RX_ROUTE.enter();
+        let epoch = if p.is_null() {
+            crate::netif_l2::AllocationEpoch::CLOSED
+        } else {
+            // SAFETY: the vendor transfers a live pbuf_alloc reference. Its
+            // immutable prefix survives native queueing and pbuf_header/ref.
+            unsafe { (*p.cast::<u8>().sub(PBUF_PREFIX).cast::<PbufPrefix>()).epoch }
+        };
+        // Do not retag a native host-queued packet for a later connection.
+        let ticket = crate::netif_l2::NATIVE_RX_ROUTE.enter_allocated(epoch);
         let registered = REGISTERED_NETIF.load(Ordering::Acquire);
         let accepted = if registered != 0 && _netif as usize == registered {
             // SAFETY: the vendor transfers a live pbuf/payload to this callback;

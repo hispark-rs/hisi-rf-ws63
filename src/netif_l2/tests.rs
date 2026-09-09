@@ -71,6 +71,71 @@ fn assert_conserved(route: &CallbackRoute<'_, 2, 64>) {
 }
 
 #[test]
+fn allocation_epoch_survives_allocator_preemption_and_route_replacement() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let closed = route.allocation_epoch();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    assert!(route.enter_allocated(closed).is_none());
+    let old = route.allocation_epoch();
+    // Allocation completion may occur only after a preempting close/reopen.
+    link.close().unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    assert!(route.enter_allocated(old).is_none());
+    let before_drop = route.allocation_epoch();
+    drop(link);
+    // A different L2Storage starts its own generation counter from scratch.
+    let mut replacement = L2Storage::<2, 2, 64>::new();
+    let parts = replacement.split(mac());
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    assert!(route.enter_allocated(before_drop).is_none());
+    route
+        .enter_allocated(route.allocation_epoch())
+        .unwrap()
+        .receive(&[7])
+        .unwrap();
+    assert_eq!(link.rx_diagnostics().pending, 1);
+    assert_eq!(route.diagnostics().allocation_drops, 3);
+    assert_conserved(&route);
+}
+
+#[test]
+fn allocation_ticket_remains_stale_if_close_follows_admission() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    let ticket = route.enter_allocated(route.allocation_epoch()).unwrap();
+    link.close().unwrap();
+    assert_eq!(ticket.receive(&[9]), Err(QueueError::StaleGeneration));
+    assert_eq!(link.rx_diagnostics().pending, 0);
+    assert_conserved(&route);
+}
+
+#[test]
+fn allocation_epoch_never_wraps_at_lifecycle_exhaustion() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    critical_section::with(|cs| route.state.borrow_ref_mut(cs).close_revision = Some(u64::MAX));
+    let mut link = NativeLink::bind(parts.port, &route).unwrap();
+    link.begin_after_native_quiescence().unwrap();
+    let old = route.allocation_epoch();
+    link.close().unwrap();
+    assert!(route.enter_allocated(old).is_none());
+    assert!(route.enter_allocated(route.allocation_epoch()).is_none());
+    assert_eq!(
+        link.begin_after_native_quiescence(),
+        Err(LinkError::Route(RouteError::LifecycleExhausted))
+    );
+    assert_conserved(&route);
+}
+
+#[test]
 fn route_is_closed_until_claimed_and_opened() {
     let mut storage = L2Storage::<2, 2, 64>::new();
     let mut parts = storage.split(mac());

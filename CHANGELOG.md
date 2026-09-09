@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the allocation-time close revision with standard-L2 native pbufs so a
+  delayed host-queue callback cannot retag an old packet after close/reopen or
+  route replacement. Closed allocations fail closed. Preserve the native pbuf
+  ABI/headroom and free the private prefix with its last reference; reject
+  lengths that cannot fit native `malloc_len`. Account the 16-byte per-pbuf
+  RF-heap cost separately in the resource report and v3 linked descriptor.
+  This does not fence DMAC work before allocation or authorize reconnection.
+
 ### Added
 
 - Share the NET0 bootstrap/traffic fixtures' physical storage declaration and

@@ -95,11 +95,25 @@ pub struct RouteDiagnostics {
     pub queued: u64,
     pub dropped: u64,
     pub closed_drops: u64,
+    /// Native pbufs allocated while closed or before the current connection.
+    pub allocation_drops: u64,
     pub abandoned: u64,
     pub in_flight: usize,
     /// Rust TX submissions admitted before close and not yet returned.
     /// This does not count frames retained by native queues after return.
     pub transmits_in_flight: usize,
+}
+
+/// Immutable provenance of one native allocation. A close revision is never
+/// reused, including after route re-registration; exhaustion fails closed.
+/// This does not stamp work still queued in hardware before pbuf allocation.
+#[derive(Clone, Copy)]
+pub(crate) struct AllocationEpoch {
+    revision: Option<u64>,
+}
+
+impl AllocationEpoch {
+    pub(crate) const CLOSED: Self = Self { revision: None };
 }
 
 struct State<'storage, const RX: usize, const MTU: usize> {
@@ -154,6 +168,7 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
                     queued: 0,
                     dropped: 0,
                     closed_drops: 0,
+                    allocation_drops: 0,
                     abandoned: 0,
                     in_flight: 0,
                     transmits_in_flight: 0,
@@ -193,9 +208,44 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
     /// No frame is copied and no user code/waker is called under this lock.
     #[must_use]
     pub fn enter(&self) -> Option<CallbackTicket<'_, 'storage, RX, MTU>> {
+        self.enter_with_allocation(None)
+    }
+
+    /// Capture before allocating: an allocator may be preempted by close/open.
+    pub(crate) fn allocation_epoch(&self) -> AllocationEpoch {
+        critical_section::with(|cs| {
+            let state = self.state.borrow_ref(cs);
+            AllocationEpoch {
+                revision: if state.ingress.is_some() && state.generation.is_some() {
+                    state.close_revision
+                } else {
+                    None
+                },
+            }
+        })
+    }
+
+    pub(crate) fn enter_allocated(
+        &self,
+        epoch: AllocationEpoch,
+    ) -> Option<CallbackTicket<'_, 'storage, RX, MTU>> {
+        self.enter_with_allocation(Some(epoch))
+    }
+
+    fn enter_with_allocation(
+        &self,
+        allocation: Option<AllocationEpoch>,
+    ) -> Option<CallbackTicket<'_, 'storage, RX, MTU>> {
         critical_section::with(|cs| {
             let mut state = self.state.borrow_ref_mut(cs);
             state.diagnostics.entered += 1;
+            if let Some(epoch) = allocation
+                && (epoch.revision.is_none() || epoch.revision != state.close_revision)
+            {
+                state.diagnostics.dropped += 1;
+                state.diagnostics.allocation_drops += 1;
+                return None;
+            }
             match (state.ingress, state.generation) {
                 (Some(ingress), Some(generation)) => {
                     state.diagnostics.in_flight += 1;

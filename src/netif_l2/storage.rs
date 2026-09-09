@@ -16,6 +16,9 @@ pub struct StorageReport {
     /// Slot state, epochs, wakers, counters, claim flag and object padding.
     pub metadata_bytes: usize,
     pub total_bytes: usize,
+    /// Additional bytes per live native pbuf, charged to the existing RF heap,
+    /// not to this static L2 object. Native payload/heap headers are separate.
+    pub native_pbuf_prefix_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +70,7 @@ impl NativeStorage {
             payload_bytes,
             metadata_bytes: size_of::<Self>() - payload_bytes,
             total_bytes: size_of::<Self>(),
+            native_pbuf_prefix_bytes: crate::netif::PBUF_PREFIX,
         }
     }
 }
@@ -112,6 +116,7 @@ mod tests {
         assert_eq!(report.payload_bytes, 12_112);
         assert!(report.metadata_bytes > 0);
         assert_eq!(report.total_bytes, size_of::<NativeStorage>());
+        assert_eq!(report.native_pbuf_prefix_bytes, 16);
         assert_eq!(
             report.payload_bytes + report.metadata_bytes,
             report.total_bytes

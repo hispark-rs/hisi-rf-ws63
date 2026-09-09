@@ -24,13 +24,13 @@ pub(super) static RADIO_STORAGE: hisi_rf_ws63::RadioStorage<
 > = hisi_rf_ws63::RadioStorage::from_parts(&NET0_CONTROL, &NET0_RF_ARENA);
 
 // Target-sized fields, not a host's differently sized usize/waker layout.
-// Schema v2 also compares each physical arena, not just their aggregate size.
+// Schema v3 adds per-native-pbuf metadata charged inside the fixed RF arena.
 #[unsafe(no_mangle)]
-static NET0_STORAGE_LAYOUT: [u32; 15] = {
+static NET0_STORAGE_LAYOUT: [u32; 16] = {
     let report = hisi_rf_ws63::resource_report::<SelectedProfile, EVENT_DEPTH>();
     [
         u32::from_le_bytes(*b"NET0"),
-        2,
+        3,
         report.control_storage_bytes as u32,
         report.l2_storage_offset as u32,
         report.l2_storage.total_bytes as u32,
@@ -44,6 +44,7 @@ static NET0_STORAGE_LAYOUT: [u32; 15] = {
         report.linker_packet_ram_bytes as u32,
         report.arena_storage_bytes as u32,
         report.runtime_arena_bytes.unwrap() as u32,
+        report.l2_storage.native_pbuf_prefix_bytes as u32,
     ]
 };
 

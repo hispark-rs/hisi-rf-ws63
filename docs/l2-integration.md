@@ -53,13 +53,35 @@ closed and full cases are explicit drops; the callback releases its pbuf
 reference on every exit. Selecting `standard-l2` together with `net` does not
 duplicate delivery or enable fallback to the old smoltcp queue.
 
-At callback entry, `enter` captures the active ingress and generation. The
-resulting ticket cannot be cloned or retagged. `receive` copies outside critical
+Native `pbuf_alloc` captures the current non-reused close revision before
+allocation can be preempted. A private 16-byte, 16-byte-aligned prefix holds
+that stamp; native pbuf size/offsets, 80-byte headroom, payload and `malloc_len`
+remain unchanged. `pbuf_header` cannot expose the prefix. `pbuf_free` releases
+the complete allocation at the last reference. This follows the pinned native
+ownership contract: `oal_pbuf_netbuf_alloc` stores the pbuf pointer in its netbuf
+and `oal_netbuf_free` calls `pbuf_free` (SDK final-ELF oracle at 0x268922 and
+0x2688e4), rather than freeing the pbuf as an `osal_kmalloc` base pointer.
+
+`driverif_input` checks this immutable stamp against the current registration
+before admitting a callback ticket. Old and closed allocations increment
+`allocation_drops`; they cannot become new-session frames merely by arriving
+late. The ticket then retains the active ingress and generation and cannot be
+cloned or retagged. `receive` copies outside critical
 sections and publishes into the core queue. All exits, including abandoned
 tickets, participate in `entered = queued + dropped + in_flight`. Core counters
 separately prove accepted queue frames equal delivered, dropped and pending.
 These are lifetime counters with the same no-u64-exhaustion measurement bound
 as the core contract; they do not prove over-the-air delivery.
+
+The per-live-pbuf prefix cost is `native_pbuf_prefix_bytes` in the resource
+report and v3 ELF descriptor. It consumes the existing RF heap, not a second
+static queue and not extra arena capacity; native payload and allocator headers
+remain additional costs. No stack or arena is reduced/increased by this change.
+The provenance regression includes real allocation/delivery/free, header moves,
+allocator preemption, re-registration and revision exhaustion. It closes only
+the interval **after this allocation**: native work before allocation and a
+native copy into a freshly allocated pbuf still require the separate producer
+fence. The one-association experiment and closed default remain unchanged.
 
 `poll_transmit` submits at most one frame per worker turn. Real queue capacity is
 held until the native call has copied/finished reading the frame. Native errors

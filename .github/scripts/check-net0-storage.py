@@ -16,11 +16,11 @@ from elftools.elf.elffile import ELFFile
 
 
 def validate(words, control_size, shared_size, packet_size, rf_size, runtime_size):
-    if len(words) != 15 or words[:2] != [int.from_bytes(b"NET0", "little"), 2]:
+    if len(words) != 16 or words[:2] != [int.from_bytes(b"NET0", "little"), 3]:
         raise ValueError("missing or unknown NET0 target layout schema")
     keys = ("control_bytes", "l2_offset", "l2_bytes", "payload_bytes", "metadata_bytes",
             "rx_slots", "tx_slots", "mtu", "shared_arena_bytes", "main_stack_bytes",
-            "packet_ram_bytes", "rf_arena_bytes", "runtime_arena_bytes")
+            "packet_ram_bytes", "rf_arena_bytes", "runtime_arena_bytes", "native_pbuf_prefix_bytes")
     report = dict(zip(keys, words[2:]))
     if report["control_bytes"] != control_size:
         raise ValueError("target report differs from actual NET0_CONTROL symbol size")
@@ -42,6 +42,8 @@ def validate(words, control_size, shared_size, packet_size, rf_size, runtime_siz
         raise ValueError("radio packet RAM was changed or misreported")
     if report["main_stack_bytes"] != 0x8000:
         raise ValueError("existing 32 KiB main stack contract was changed")
+    if report["native_pbuf_prefix_bytes"] != 16:
+        raise ValueError("native pbuf metadata cost changed; review RF heap budget")
     return report
 
 
@@ -70,13 +72,13 @@ def inspect(path):
         rf = symbol("NET0_RF_ARENA")
         runtime = symbol("NET0_RTOS_ARENA")
         layout = symbol("NET0_STORAGE_LAYOUT")
-        if layout["st_size"] != 60 or not isinstance(layout["st_shndx"], int):
+        if layout["st_size"] != 64 or not isinstance(layout["st_shndx"], int):
             raise ValueError("invalid NET0 layout byte length")
         section = elf.get_section(layout["st_shndx"])
         offset = layout["st_value"] - section["sh_addr"]
-        if section["sh_type"] == "SHT_NOBITS" or offset < 0 or offset + 60 > section["sh_size"]:
+        if section["sh_type"] == "SHT_NOBITS" or offset < 0 or offset + 64 > section["sh_size"]:
             raise ValueError("layout must be initialized bytes within its ELF section")
-        words = list(struct.unpack("<15I", section.data()[offset:offset + 60]))
+        words = list(struct.unpack("<16I", section.data()[offset:offset + 64]))
         shared = elf.get_section_by_name(".hisi_shared_arenas")
         packet = elf.get_section_by_name(".wifi_pkt_ram")
         if shared is None or packet is None:
@@ -119,7 +121,7 @@ def inspect(path):
         report["runtime_arena_address"] = runtime["st_value"]
         report["main_stack_address"] = stack_start
         report["packet_ram_address"] = packet["sh_addr"]
-    report.update(schema="net0-linked-storage/v2", status="pass",
+    report.update(schema="net0-linked-storage/v3", status="pass",
                   elf_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                   boundary="Physical storage/link validation only; no native fence or HIL claim")
     return report
@@ -127,8 +129,8 @@ def inspect(path):
 
 class ContractTests(unittest.TestCase):
     def test_rejects_size_sum_and_capacity_drift(self):
-        words = [int.from_bytes(b"NET0", "little"), 2, 22000, 2304, 12736,
-                 12112, 624, 4, 4, 1514, 299072, 32768, 49152, 101952, 197120]
+        words = [int.from_bytes(b"NET0", "little"), 3, 22000, 2304, 12736,
+                 12112, 624, 4, 4, 1514, 299072, 32768, 49152, 101952, 197120, 16]
         validate(words, 22000, 299072, 49152, 101952, 197120)
         for index in range(len(words)):
             wrong = words.copy()
@@ -139,8 +141,8 @@ class ContractTests(unittest.TestCase):
                 validate(wrong, 22000, 299072, 49152, 101952, 197120)
 
     def test_rejects_child_budget_swap_even_when_total_matches(self):
-        words = [int.from_bytes(b"NET0", "little"), 2, 22000, 2304, 12736,
-                 12112, 624, 4, 4, 1514, 299072, 32768, 49152, 101952, 197120]
+        words = [int.from_bytes(b"NET0", "little"), 3, 22000, 2304, 12736,
+                 12112, 624, 4, 4, 1514, 299072, 32768, 49152, 101952, 197120, 16]
         with self.assertRaisesRegex(ValueError, "child budget"):
             validate(words, 22000, 299072, 49152, 197120, 101952)
 
@@ -169,6 +171,7 @@ def check_elf_tampering(path):
             "missing_layout_name": (field("NET0_STORAGE_LAYOUT", 0), "<I", 0),
             "layout_outside_section": (field("NET0_STORAGE_LAYOUT", 4), "<I", 0),
             "wrong_schema": (report_offset + 4, "<I", 0),
+            "hidden_pbuf_metadata": (report_offset + 60, "<I", 0),
             "runtime_aliases_rf": (field("NET0_RTOS_ARENA", 4), "<I", rf_address),
             "absolute_arena": (field("NET0_RF_ARENA", 14), "<H", 0xfff1),
             "stack_size": (field("__stack_top__", 4), "<I", 0),
