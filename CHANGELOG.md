@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.101] - 2026-09-09
+
 ### Added
 
 - Add the non-default `standard-l2` NET0 integration contract using published
