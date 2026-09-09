@@ -34,12 +34,17 @@ use hisi_rf_core::{
 use hisi_rf_core::{Passphrase, Security, StationConfig};
 #[cfg(feature = "incremental-late-completion-profile")]
 use hisi_rf_ws63::IncrementalWorkerDiagnostics;
-use hisi_rf_ws63::{
-    IncrementalRadioParts, IncrementalRadioRunner, Ws63IncrementalWaitDiagnostics,
-    declare_radio_storage,
-};
+#[cfg(not(feature = "standard-l2"))]
+use hisi_rf_ws63::declare_radio_storage;
+use hisi_rf_ws63::{IncrementalRadioParts, IncrementalRadioRunner, Ws63IncrementalWaitDiagnostics};
 use hisi_riscv_rt::entry;
 use static_cell::StaticCell;
+
+#[cfg(feature = "standard-l2")]
+#[path = "support/net0_storage.rs"]
+mod net0_storage;
+#[cfg(feature = "standard-l2")]
+use net0_storage::{NET0_RTOS_ARENA as RTOS_ARENA, RADIO_STORAGE};
 
 #[cfg(feature = "standard-l2-initial-session-experiment")]
 #[path = "support/net0_initial_network.rs"]
@@ -91,8 +96,10 @@ const TEST_PASSPHRASE: &[u8] = match option_env!("WS63_WIFI_PASSPHRASE") {
     None => b"",
 };
 
+#[cfg(not(feature = "standard-l2"))]
 declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
 static RTOS_STORAGE: hisi_rtos::SchedulerStorage<15> = hisi_rtos::SchedulerStorage::new();
+#[cfg(not(feature = "standard-l2"))]
 #[cfg_attr(target_arch = "riscv32", unsafe(link_section = ".hisi.shared-arena"))]
 static RTOS_ARENA: hisi_rtos::SchedulerArena<{ hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES }> =
     hisi_rtos::SchedulerArena::new();
@@ -118,6 +125,8 @@ hisi_rtos::bind_interrupts!(struct RtosIrqs {
 
 #[entry]
 fn main() -> ! {
+    #[cfg(feature = "standard-l2")]
+    net0_storage::retain_layout();
     let p = Peripherals::take().expect("peripherals already taken");
     let uart = UART.init(Uart::new_uart0(
         p.UART0,

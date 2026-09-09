@@ -16,12 +16,17 @@ use hisi_hal::uart::{Config as UartConfig, Uart, UartClock};
 use hisi_hal::wdt::Watchdog;
 use hisi_panic_handler as _;
 use hisi_rf_ws63::BootstrapStage;
-#[cfg(feature = "standard-l2")]
-use hisi_rf_ws63::SelectedProfile;
 use hisi_riscv_rt::entry;
+
+#[cfg(feature = "standard-l2")]
+#[path = "support/net0_storage.rs"]
+mod net0_storage;
+#[cfg(feature = "standard-l2")]
+use net0_storage::{NET0_RTOS_ARENA as RTOS_ARENA, RADIO_STORAGE};
 
 const RADIO_EVENT_DEPTH: usize = 8;
 static RTOS_STORAGE: hisi_rtos::SchedulerStorage<15> = hisi_rtos::SchedulerStorage::new();
+#[cfg(not(feature = "standard-l2"))]
 #[unsafe(link_section = ".hisi.shared-arena")]
 static RTOS_ARENA: hisi_rtos::SchedulerArena<{ hisi_rf_ws63::SELECTED_RUNTIME_ARENA_BYTES }> =
     hisi_rtos::SchedulerArena::new();
@@ -33,49 +38,10 @@ hisi_rtos::bind_interrupts!(struct RtosIrqs {
 #[cfg(not(feature = "standard-l2"))]
 hisi_rf_ws63::declare_radio_storage!(static RADIO_STORAGE, events = RADIO_EVENT_DEPTH);
 
-// Explicit symbols let CI compare the target report with the physical object,
-// not with a host's differently sized usize/waker layout. This test declaration
-// uses the same stores/section/from_parts contract as declare_radio_storage!.
-#[cfg(feature = "standard-l2")]
-#[unsafe(no_mangle)]
-static NET0_CONTROL: hisi_rf_ws63::Storage<SelectedProfile, RADIO_EVENT_DEPTH> =
-    hisi_rf_ws63::Storage::new();
-#[cfg(feature = "standard-l2")]
-#[unsafe(link_section = ".hisi.shared-arena")]
-static NET0_ARENA: hisi_rf_ws63::RadioArenaStorage<{ hisi_rf_ws63::SELECTED_RF_ARENA_BYTES }> =
-    hisi_rf_ws63::RadioArenaStorage::new();
-#[cfg(feature = "standard-l2")]
-static RADIO_STORAGE: hisi_rf_ws63::RadioStorage<
-    SelectedProfile,
-    RADIO_EVENT_DEPTH,
-    { hisi_rf_ws63::SELECTED_RF_ARENA_BYTES },
-> = hisi_rf_ws63::RadioStorage::from_parts(&NET0_CONTROL, &NET0_ARENA);
-
-#[cfg(feature = "standard-l2")]
-#[unsafe(no_mangle)]
-static NET0_STORAGE_LAYOUT: [u32; 13] = {
-    let report = hisi_rf_ws63::resource_report::<SelectedProfile, RADIO_EVENT_DEPTH>();
-    [
-        u32::from_le_bytes(*b"NET0"),
-        1,
-        report.control_storage_bytes as u32,
-        report.l2_storage_offset as u32,
-        report.l2_storage.total_bytes as u32,
-        report.l2_storage.payload_bytes as u32,
-        report.l2_storage.metadata_bytes as u32,
-        report.l2_storage.rx_slots as u32,
-        report.l2_storage.tx_slots as u32,
-        report.l2_storage.mtu as u32,
-        report.arena_storage_bytes as u32 + report.runtime_arena_bytes.unwrap() as u32,
-        report.main_stack_bytes_required as u32,
-        report.linker_packet_ram_bytes as u32,
-    ]
-};
-
 #[entry]
 fn main() -> ! {
     #[cfg(feature = "standard-l2")]
-    core::hint::black_box(&NET0_STORAGE_LAYOUT);
+    net0_storage::retain_layout();
     let p = Peripherals::take().expect("peripherals already taken");
     let uart = Uart::new_uart0(
         p.UART0,
@@ -111,9 +77,11 @@ fn main() -> ! {
             // the vendor's bootstrap scheduler-lock interval. Keep the normal
             // runtime default at 100 ms; only this diagnostic fixture gets a
             // wider observation window.
-            #[cfg(feature = "bootstrap-stage-diag")]
-            max_scheduler_lock_duration: core::num::NonZeroU32::new(5_000).unwrap(),
-            ..hisi_rtos::ws63::Config::default()
+            max_scheduler_lock_duration: if cfg!(feature = "bootstrap-stage-diag") {
+                core::num::NonZeroU32::new(5_000).unwrap()
+            } else {
+                hisi_rtos::ws63::Config::default().max_scheduler_lock_duration
+            },
         },
         hisi_rtos::ws63::Resources {
             timer: p.TIMER,

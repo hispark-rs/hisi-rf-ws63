@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Share the NET0 bootstrap/traffic fixtures' physical storage declaration and
+  versioned target descriptor. Validate both final incremental ELF variants,
+  including separate RF/runtime arena sizes, containment and non-overlap; reject
+  tampered descriptors, symbol sizes, aliases and stack bounds. These checks
+  do not transfer bootstrap HIL evidence to the traffic firmware.
 - Isolate a non-default `standard-l2-initial-session-experiment` for physical
   RX/TX bring-up. It requires one successful bootstrap, one association attempt
   and a matching authorized operation; retries, duplicate events, teardown and
