@@ -145,6 +145,14 @@ impl<'storage, const RX: usize, const MTU: usize> CallbackRoute<'storage, RX, MT
     pub fn diagnostics(&self) -> RouteDiagnostics {
         critical_section::with(|cs| self.state.borrow_ref(cs).diagnostics)
     }
+
+    /// A native teardown may start outside the L2 worker. Stop new callback
+    /// admission before submitting it; the worker must still close the port
+    /// and drain tickets/native producers. This does not invalidate TX tokens
+    /// or revoke a payload copy that has already started.
+    pub(crate) fn close_admission(&self) {
+        critical_section::with(|cs| self.state.borrow_ref_mut(cs).generation = None);
+    }
 }
 
 /// Sole registration owner. Dropping it closes the route but does not reclaim
@@ -158,7 +166,7 @@ impl<const RX: usize, const MTU: usize> Registration<'_, '_, RX, MTU> {
     /// Stop admission before resetting the L2 port. Already entered callbacks
     /// keep their old generation; reset makes their later publication fail.
     pub fn close(&mut self) {
-        critical_section::with(|cs| self.route.state.borrow_ref_mut(cs).generation = None);
+        self.route.close_admission();
     }
 
     /// Publish a newly established link after native RX/TX quiescence.

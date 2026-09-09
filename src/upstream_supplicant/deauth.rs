@@ -3,7 +3,8 @@
 //! A receipt proves only that the exact accepted ioctl calls returned. It is
 //! not a fence for native RX queues, DMA, user deletion, or over-the-air TX.
 
-use core::task::Poll;
+use core::{cell::RefCell, task::Poll};
+use critical_section::Mutex;
 
 pub(super) const CAPACITY: usize = 4;
 const HISTORY: usize = 8;
@@ -45,6 +46,7 @@ pub(super) enum Error {
     InvalidCompletion,
     WakeFailed,
     WorkerUnavailable,
+    Busy,
     Native(i32),
 }
 
@@ -58,6 +60,7 @@ impl Error {
             Self::InvalidCompletion => -0x6305,
             Self::WakeFailed => -0x6306,
             Self::WorkerUnavailable => -0x6308,
+            Self::Busy => -0x6309,
             Self::Native(status) => status,
         }
     }
@@ -73,6 +76,28 @@ pub(super) struct Queue {
     history: [Option<(Ticket, i32)>; HISTORY],
     history_next: usize,
     fault: Option<Error>,
+    native_failure: Option<i32>,
+}
+
+/// Claim and retire the same slot used by the worker, without calling native
+/// code or waking another task under the metadata lock. A callback can enqueue
+/// during `native`; its first wake may run too early to acquire this slot.
+pub(super) fn run_inline(
+    queue: &Mutex<RefCell<Queue>>,
+    reason: &mut u16,
+    native: impl FnOnce(&mut u16) -> i32,
+    wake: impl FnOnce() -> bool,
+) -> Result<i32, Error> {
+    let request = critical_section::with(|cs| queue.borrow_ref_mut(cs).begin_inline(*reason))?;
+    let status = native(reason);
+    let completed =
+        critical_section::with(|cs| queue.borrow_ref_mut(cs).complete(request.ticket, status));
+    if !wake() {
+        critical_section::with(|cs| queue.borrow_ref_mut(cs).wake_failed());
+    }
+    completed?;
+    critical_section::with(|cs| queue.borrow_ref(cs).health())?;
+    Ok(status)
 }
 
 impl Queue {
@@ -87,6 +112,7 @@ impl Queue {
             history: [None; HISTORY],
             history_next: 0,
             fault: None,
+            native_failure: None,
         }
     }
 
@@ -101,17 +127,56 @@ impl Queue {
         self.fault.map_or(Ok(()), Err)
     }
 
+    /// Session-wide progress also covers autonomous hostap requests, which
+    /// have no explicit caller receipt. Failures cannot disappear when bounded
+    /// terminal history is reused. This is still only an ioctl-return boundary.
+    pub(super) fn poll_idle(&self) -> Result<Poll<()>, Error> {
+        self.health()?;
+        if let Some(status) = self.native_failure {
+            return Err(Error::Native(status));
+        }
+        if self.rejected != 0 {
+            return Err(Error::Rejected);
+        }
+        Ok(if self.running.is_some() || self.len != 0 {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        })
+    }
+
+    fn reject(&mut self, error: Error) -> Error {
+        if let Some(rejected) = self.rejected.checked_add(1) {
+            self.rejected = rejected;
+            error
+        } else {
+            self.fault = Some(Error::Exhausted);
+            Error::Exhausted
+        }
+    }
+
+    /// A synchronous recovery call must not overtake queued deauthentication
+    /// or overlap the worker. Call under the queue's metadata lock, then release
+    /// it before entering WAL. The returned ticket owns the single native slot.
+    pub(super) fn begin_inline(&mut self, reason: u16) -> Result<Request, Error> {
+        if self.poll_idle()?.is_pending() {
+            return Err(self.reject(Error::Busy));
+        }
+        let ticket = self.push(reason)?;
+        self.pop()
+            .filter(|request| request.ticket == ticket)
+            .ok_or_else(|| {
+                self.fault = Some(Error::InvalidCompletion);
+                Error::InvalidCompletion
+            })
+    }
+
     pub(super) fn push(&mut self, reason: u16) -> Result<Ticket, Error> {
         if let Some(fault) = self.fault {
             return Err(fault);
         }
         if self.len == CAPACITY {
-            let Some(rejected) = self.rejected.checked_add(1) else {
-                self.fault = Some(Error::Exhausted);
-                return Err(Error::Exhausted);
-            };
-            self.rejected = rejected;
-            return Err(Error::Full);
+            return Err(self.reject(Error::Full));
         }
         let Some(sequence) = self.issued.checked_add(1) else {
             self.fault = Some(Error::Exhausted);
@@ -146,6 +211,9 @@ impl Queue {
         self.history[self.history_next] = Some((ticket, status));
         self.history_next = (self.history_next + 1) % HISTORY;
         self.running = None;
+        if status != 0 && self.native_failure.is_none() {
+            self.native_failure = Some(status);
+        }
         Ok(())
     }
 
@@ -226,6 +294,109 @@ mod tests {
         let request = queue.pop().unwrap();
         queue.complete(request.ticket, status).unwrap();
         request
+    }
+
+    #[test]
+    fn production_inline_handoff_rewakes_work_enqueued_during_native_call() {
+        let queue = Mutex::new(RefCell::new(Queue::new()));
+        let calls = core::cell::Cell::new(0);
+        let result = run_inline(
+            &queue,
+            &mut 2,
+            |reason| {
+                assert_eq!(*reason, 2);
+                calls.set(1);
+                critical_section::with(|cs| {
+                    let mut queue = queue.borrow_ref_mut(cs);
+                    assert!(queue.running.is_some());
+                    queue.push(3).unwrap();
+                    // Simulate an early worker wake while native still owns
+                    // the slot. It must not consume the queued request.
+                    assert!(queue.pop().is_none());
+                });
+                0
+            },
+            || {
+                assert_eq!(calls.get(), 1);
+                calls.set(2);
+                critical_section::with(|cs| {
+                    let mut queue = queue.borrow_ref_mut(cs);
+                    assert!(queue.running.is_none());
+                    let request = queue.pop().unwrap();
+                    assert_eq!(request.reason, 3);
+                    queue.complete(request.ticket, 0).unwrap();
+                });
+                true
+            },
+        );
+        assert_eq!(result, Ok(0));
+        assert_eq!(calls.get(), 2);
+        critical_section::with(|cs| {
+            assert_eq!(queue.borrow_ref(cs).poll_idle(), Ok(Poll::Ready(())));
+        });
+    }
+
+    #[test]
+    fn production_inline_rejection_never_calls_native_or_wake() {
+        for running in [false, true] {
+            let mut state = Queue::new();
+            state.push(1).unwrap();
+            if running {
+                state.pop().unwrap();
+            }
+            let queue = Mutex::new(RefCell::new(state));
+            assert_eq!(
+                run_inline(
+                    &queue,
+                    &mut 2,
+                    |_| panic!("rejected call reached native"),
+                    || panic!("rejected call emitted a completion wake"),
+                ),
+                Err(Error::Busy)
+            );
+        }
+    }
+
+    #[test]
+    fn production_inline_retains_native_error_after_completion_wake() {
+        let queue = Mutex::new(RefCell::new(Queue::new()));
+        assert_eq!(run_inline(&queue, &mut 2, |_| -17, || true), Ok(-17));
+        critical_section::with(|cs| {
+            assert_eq!(queue.borrow_ref(cs).poll_idle(), Err(Error::Native(-17)));
+        });
+    }
+
+    #[test]
+    fn production_inline_wake_error_cannot_report_native_success() {
+        let queue = Mutex::new(RefCell::new(Queue::new()));
+        assert_eq!(
+            run_inline(&queue, &mut 2, |_| 0, || false),
+            Err(Error::WakeFailed)
+        );
+        critical_section::with(|cs| {
+            assert_eq!(queue.borrow_ref(cs).poll_idle(), Err(Error::WakeFailed));
+        });
+    }
+
+    #[test]
+    fn production_inline_duplicate_completion_fails_closed() {
+        let queue = Mutex::new(RefCell::new(Queue::new()));
+        assert_eq!(
+            run_inline(
+                &queue,
+                &mut 2,
+                |_| {
+                    critical_section::with(|cs| {
+                        let mut queue = queue.borrow_ref_mut(cs);
+                        let ticket = queue.running.unwrap();
+                        queue.complete(ticket, 0).unwrap();
+                    });
+                    0
+                },
+                || true,
+            ),
+            Err(Error::InvalidCompletion)
+        );
     }
 
     #[test]
@@ -409,5 +580,100 @@ mod tests {
             Err(Error::WorkerUnavailable)
         ));
         assert_eq!(queue.push(1), Err(Error::WorkerUnavailable));
+    }
+
+    #[test]
+    fn inline_and_worker_share_exactly_one_native_owner() {
+        let mut queue = Queue::new();
+        let before = queue.checkpoint();
+        let inline = queue.begin_inline(2).unwrap();
+        assert_eq!(queue.poll_idle(), Ok(Poll::Pending));
+        queue.push(3).unwrap();
+        // The queued request's first wake may run the worker before inline
+        // completion. A later completion wake must retry this same request.
+        assert!(queue.pop().is_none());
+        let receipt = queue.receipt_since(before).unwrap();
+        queue.complete(inline.ticket, 0).unwrap();
+        assert_eq!(queue.poll_idle(), Ok(Poll::Pending));
+        let worker = queue.pop().unwrap();
+        assert_eq!(worker.reason, 3);
+        assert_ne!(worker.ticket, inline.ticket);
+        queue.complete(worker.ticket, 0).unwrap();
+        assert_eq!(queue.poll_idle(), Ok(Poll::Ready(())));
+        assert_eq!(queue.poll(receipt), Ok(Poll::Ready(Returned::Ioctls)));
+    }
+
+    #[test]
+    fn inline_cannot_overtake_queued_or_running_teardown() {
+        for running in [false, true] {
+            let mut queue = Queue::new();
+            let ticket = queue.push(1).unwrap();
+            let owned = running.then(|| queue.pop().unwrap());
+            let before = queue.checkpoint();
+            assert_eq!(queue.begin_inline(2), Err(Error::Busy));
+            assert_eq!(queue.issued, before.issued);
+            assert_eq!(queue.poll_idle(), Err(Error::Rejected));
+            let request = owned.unwrap_or_else(|| queue.pop().unwrap());
+            assert_eq!(request.ticket, ticket);
+            queue.complete(ticket, 0).unwrap();
+            assert_eq!(queue.poll_idle(), Err(Error::Rejected));
+        }
+    }
+
+    #[test]
+    fn completed_explicit_receipt_does_not_hide_autonomous_work() {
+        let mut queue = Queue::new();
+        let before = queue.checkpoint();
+        queue.push(1).unwrap();
+        let receipt = queue.receipt_since(before).unwrap();
+        finish(&mut queue, 0);
+        queue.push(2).unwrap();
+        assert_eq!(queue.poll(receipt), Ok(Poll::Ready(Returned::Ioctls)));
+        assert_eq!(queue.poll_idle(), Ok(Poll::Pending));
+        finish(&mut queue, 0);
+        assert_eq!(queue.poll_idle(), Ok(Poll::Ready(())));
+    }
+
+    #[test]
+    fn autonomous_native_failure_survives_history_eviction() {
+        let mut queue = Queue::new();
+        queue.push(1).unwrap();
+        finish(&mut queue, -17);
+        for _ in 0..HISTORY {
+            queue.push(2).unwrap();
+            finish(&mut queue, 0);
+        }
+        assert_eq!(queue.poll_idle(), Err(Error::Native(-17)));
+        assert_eq!(queue.begin_inline(3), Err(Error::Native(-17)));
+    }
+
+    #[test]
+    fn inline_failure_is_visible_without_an_explicit_receipt() {
+        let mut queue = Queue::new();
+        let request = queue.begin_inline(2).unwrap();
+        queue.complete(request.ticket, -23).unwrap();
+        assert_eq!(queue.poll_idle(), Err(Error::Native(-23)));
+    }
+
+    #[test]
+    fn inline_and_queued_tickets_never_reuse_exhausted_identity() {
+        let mut queue = Queue::new();
+        queue.issued = u64::MAX - 1;
+        let request = queue.begin_inline(1).unwrap();
+        assert_eq!(request.ticket, Ticket(u64::MAX));
+        queue.complete(request.ticket, 0).unwrap();
+        assert_eq!(queue.begin_inline(2), Err(Error::Exhausted));
+        assert_eq!(queue.push(3), Err(Error::Exhausted));
+    }
+
+    #[test]
+    fn completion_wake_failure_cannot_report_idle_success() {
+        let mut queue = Queue::new();
+        let request = queue.begin_inline(1).unwrap();
+        queue.push(2).unwrap();
+        assert!(queue.pop().is_none());
+        queue.complete(request.ticket, 0).unwrap();
+        queue.wake_failed();
+        assert_eq!(queue.poll_idle(), Err(Error::WakeFailed));
     }
 }

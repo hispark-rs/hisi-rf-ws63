@@ -1567,9 +1567,9 @@ impl NativeSupplicant {
             .map_err(NativeSupplicantError::DisconnectFailed)?;
         let result = critical_section::with(|cs| {
             let queue = DEAUTH_QUEUE.borrow_ref(cs);
-            queue.health()?;
-            receipt.map_or(Ok(true), |receipt| {
-                queue.poll(receipt).map(|result| result.is_ready())
+            let idle = queue.poll_idle()?.is_ready();
+            receipt.map_or(Ok(idle), |receipt| {
+                queue.poll(receipt).map(|result| result.is_ready() && idle)
             })
         });
         match result {
@@ -1631,6 +1631,10 @@ impl NativeSupplicant {
             return Err(NativeSupplicantError::InvalidResult);
         }
         while SCAN_EVENT_QUEUE.has_pending() {
+            // The blocking compatibility entry must not spin on the NET0
+            // poller's intentional no-work response while teardown is pending.
+            #[cfg(feature = "standard-l2")]
+            self.require_disconnect_returned()?;
             self.poll(NonZeroU32::new(64).unwrap())?;
         }
         Ok(())
@@ -1696,7 +1700,19 @@ impl NativeSupplicant {
     ) -> Result<PollResult, NativeSupplicantError> {
         // A worker error must propagate even if hostap has no output event.
         #[cfg(feature = "standard-l2")]
-        let _ = self.disconnect_ioctls_returned()?;
+        if !self.disconnect_ioctls_returned()? {
+            // WAL teardown does not depend on servicing the C hostap context.
+            // Leave its input/output queues untouched until the native slot is
+            // released. Worker completion wakes the runner; its deadline still
+            // bounds this operation if a native call never returns.
+            return Ok(PollResult {
+                status: 0,
+                work_completed: 0,
+                output_pending: 0,
+                reserved: 0,
+                next_deadline_ms: u64::MAX,
+            });
+        }
         let dropped = MGMT_RX_QUEUE.dropped.load(Ordering::Acquire);
         if dropped != self.mgmt_dropped_seen {
             let delta = dropped.wrapping_sub(self.mgmt_dropped_seen);
@@ -1797,11 +1813,7 @@ impl NativeSupplicant {
                     // ioctl runs in normal thread context.
                     let mut reason = WLAN_REASON_PREV_AUTH_NOT_VALID;
                     DIAG_TEMP_REJECT_CLEARS.fetch_add(1, Ordering::Relaxed);
-                    let clear_status = crate::wal::ioctl(
-                        DRIVER_CONTEXT.ifname(),
-                        IOCTL_DISCONNECT,
-                        (&mut reason as *mut u16).cast(),
-                    );
+                    let clear_status = disconnect_inline(DRIVER_CONTEXT.ifname(), &mut reason);
                     DIAG_TEMP_REJECT_CLEAR_STATUS.store(clear_status as u32, Ordering::Release);
                     if clear_status != 0 {
                         DIAG_TEMP_REJECT_CLEAR_FAILURES.fetch_add(1, Ordering::Relaxed);
@@ -2435,7 +2447,36 @@ extern "C" fn deauth_worker(_: *mut c_void) -> *mut c_void {
     }
 }
 
+/// The two synchronous recovery sites use the same native ownership slot as
+/// queued deauthentication. This never waits for that slot or enters WAL under
+/// a critical section. Existing non-NET0 profiles retain the direct call.
+#[inline(always)]
+fn disconnect_inline(ifname: &[u8], reason: &mut u16) -> c_int {
+    #[cfg(feature = "standard-l2")]
+    {
+        crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
+        if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
+            critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).worker_unavailable());
+            return deauth::Error::WorkerUnavailable.status();
+        }
+        let result = deauth::run_inline(
+            &DEAUTH_QUEUE,
+            reason,
+            |reason| crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast()),
+            || DEAUTH_WAKE.up().is_ok(),
+        );
+        notify_runner();
+        result.unwrap_or_else(deauth::Error::status)
+    }
+    #[cfg(not(feature = "standard-l2"))]
+    {
+        crate::wal::ioctl(ifname, IOCTL_DISCONNECT, (reason as *mut u16).cast())
+    }
+}
+
 fn queue_deauthentication(reason: u16) -> c_int {
+    #[cfg(feature = "standard-l2")]
+    crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
     if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
         #[cfg(feature = "standard-l2")]
         critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).worker_unavailable());
@@ -2899,6 +2940,12 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         ies_len: request.association_ies_len as u32,
         crypto: &mut crypto,
     };
+    #[cfg(feature = "standard-l2")]
+    match critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).poll_idle()) {
+        Ok(core::task::Poll::Ready(())) => {}
+        Ok(core::task::Poll::Pending) => return deauth::Error::Busy.status(),
+        Err(error) => return error.status(),
+    }
     DIAG_ASSOCIATE_CALLS.fetch_add(1, Ordering::Relaxed);
     let first_status = DIAG_ASSOCIATE_FIRST_IOCTL.call(|| {
         crate::wal::ioctl(
@@ -2916,15 +2963,18 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         // association is recovered by an explicit disconnect and one retry.
         // This is bounded and preserves the final ioctl status for diagnosis.
         let mut reason = WLAN_REASON_PREV_AUTH_NOT_VALID;
-        disconnect_status = DIAG_ASSOCIATE_CLEAR_IOCTL.call(|| {
-            crate::wal::ioctl(
-                driver.ifname(),
-                IOCTL_DISCONNECT,
-                (&mut reason as *mut u16).cast(),
-            )
-        });
+        disconnect_status =
+            DIAG_ASSOCIATE_CLEAR_IOCTL.call(|| disconnect_inline(driver.ifname(), &mut reason));
         if disconnect_status == 0 {
             status = DIAG_ASSOCIATE_RETRY_IOCTL.call(|| {
+                // Native recovery can enqueue another hostap deauthentication
+                // before it returns. Do not retry over known pending teardown.
+                #[cfg(feature = "standard-l2")]
+                match critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).poll_idle()) {
+                    Ok(core::task::Poll::Ready(())) => {}
+                    Ok(core::task::Poll::Pending) => return deauth::Error::Busy.status(),
+                    Err(error) => return error.status(),
+                }
                 crate::wal::ioctl(
                     driver.ifname(),
                     IOCTL_ASSOCIATE,

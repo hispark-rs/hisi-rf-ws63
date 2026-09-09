@@ -27,6 +27,11 @@ jobs:
           cargo test --locked --lib --no-default-features
           --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           upstream_supplicant::deauth
+      - name: Lint the native NET0 lifecycle integration
+        run: >-
+          cargo clippy --locked --lib --no-default-features
+          --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
+          -- -D warnings
       - run: cargo clippy --locked --lib --no-default-features --features standard-l2 -- -D warnings
       - run: cargo check '-Zbuild-std=core,alloc' --locked --target riscv32imfc-unknown-none-elf --lib --no-default-features --features standard-l2
 

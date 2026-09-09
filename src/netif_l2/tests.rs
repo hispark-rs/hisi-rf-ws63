@@ -62,6 +62,25 @@ fn delayed_callback_cannot_be_retagged_for_a_reconnection() {
 }
 
 #[test]
+fn native_teardown_closes_admission_without_taking_the_worker_port() {
+    let mut storage = L2Storage::<2, 2, 64>::new();
+    let mut parts = storage.split(mac());
+    let route = CallbackRoute::new();
+    let mut owner = route.claim(parts.port.ingress()).unwrap();
+    let generation = parts.port.begin_session().unwrap();
+    owner.open_after_native_quiescence(generation).unwrap();
+    let delayed = route.enter().unwrap();
+    route.close_admission();
+    assert!(route.enter().is_none());
+    assert_eq!(delayed.receive(&[9]), Err(QueueError::StaleGeneration));
+    assert_eq!(parts.port.rx_diagnostics().pending, 0);
+    assert_conserved(&route);
+    // The worker still owes port invalidation and native drainage; a route
+    // close is deliberately not reported as an established native fence.
+    parts.port.link_down().unwrap();
+}
+
+#[test]
 fn drop_closes_registration_and_blocks_reclaim_until_tickets_drain() {
     let mut storage = L2Storage::<2, 2, 64>::new();
     let mut parts = storage.split(mac());

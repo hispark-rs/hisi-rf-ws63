@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Include autonomous hostap teardown and both inline recovery disconnects in
+  the opt-in NET0 native ownership slot. Rewake work queued during an inline
+  call, retain session failures beyond receipt-history eviction, and close new
+  Rust callback admission before teardown. Keep native RX/DMA quiescence and
+  reconnect/HIL acceptance explicitly open; legacy profiles are unchanged.
 - Correlate opt-in NET0 disconnect requests with the serialized native worker's
   exact ioctl return values. Retain pending/failed receipts across operation
   timeout, reject premature reuse, and wake the runner on completion. Test

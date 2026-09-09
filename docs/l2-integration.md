@@ -78,18 +78,33 @@ returns. The queue retains at most four waiting requests, one running request,
 and eight terminal results. No allocation or native work runs under its lock.
 
 Hostap output is not delivered as operation completion while that receipt is
-pending. Native completion wakes the runner; native errors propagate even with
-no hostap output. Configure/connect/scan and another explicit disconnect cannot
-replace a pending or failed receipt, including after an outer cancellation or
-deadline. Queue rejection, failed wake, mismatched completion, counter exhaustion
-and overwritten result history fail closed. The existing named smoltcp profiles
-retain their previous path until this opt-in lifecycle is validated on silicon.
+pending. A session-wide idle check also includes autonomous hostap requests
+outside the explicit receipt. While any accepted teardown is queued/running,
+polling leaves C input/output untouched; native completion wakes the runner.
+Native errors propagate even with no hostap output and remain visible after
+terminal-history eviction. Configure/connect/scan and another explicit
+disconnect cannot replace pending or failed work, including after an outer
+cancellation or deadline. Queue rejection, failed wake, mismatched completion,
+counter exhaustion and overwritten receipt history fail closed. The existing
+named smoltcp profiles retain their previous path until this opt-in lifecycle
+is validated on silicon.
+
+The two inline recovery disconnects claim the same ticketed native slot as the
+worker. They reject overlapping/queued teardown without entering WAL, then
+complete and wake outside the metadata lock. The completion wake is necessary:
+a request enqueued during native execution may have consumed its first wake
+before the slot became available. Association and its retry refuse known
+pending teardown. Every disconnect entry closes new Rust callback admission
+before native submission. This early close does not revoke a copy already in
+progress or a TX token; the worker still owes `NativeLink::close`, native
+quiescence, and Rust-ticket drainage before opening another epoch.
 
 `NoRequest` (hostap submitted no ioctl) is distinct from `Ioctls` (all captured
 calls returned zero). **Neither outcome is native quiescence**. A returned ioctl
 may take the no-user branch or have posted an earlier disconnect event. The
-receipt does not cancel a blocked native C call, drain hardware, acknowledge
-user deletion, or cover autonomous hostap requests outside its captured range.
+receipt does not cancel a blocked native C call, drain hardware, or acknowledge
+user deletion. The separate session-wide check covers autonomous ioctl returns,
+not native RX/TX producer ownership or all other WAL commands.
 The outer operation deadline remains bounded, but reuse after native cleanup
 failure is deliberately refused, not silently retried.
 
@@ -109,7 +124,9 @@ release, padding removal, native-buffer independence, and wrong-netif rejection.
 Disconnect receipt tests call the production queue helpers, including all 16
 enqueue/worker-completion interleavings for a four-request batch, unrelated/old
 completions, queue rejection, failure retention, history eviction and u64
-exhaustion. These are command sequencing tests, not native-fence or HIL proof.
+exhaustion. They also call the production inline handoff with reentrant queue
+access, an early consumed wake, queued work, native failure and completion-wake
+failure. These are command sequencing tests, not native-fence or HIL proof.
 
 Remaining integration gates are profile-owned registration, native quiescence/
 authorization events and worker wake wiring, followed by exact-artifact WS63
