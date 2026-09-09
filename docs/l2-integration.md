@@ -18,6 +18,14 @@ deletion. Every native call runs outside the tracker critical section, and
 delete entry closes L2 admission before native progress. A cleanup error
 poisons this boot's cleanup status instead of being cleared by a later success.
 
+The explicit `standard-l2-cleanup-fault-injection` maintainer feature is a
+negative fixture only: after one real scoped resource-free returns success,
+its return is changed to 100. It must reach the controller as an error while
+the device stays Down with no TX token. It does not deliberately corrupt the
+native allocator or claim that an actual hardware free failure was induced.
+No public profile selects this feature; its ELF/evidence must never be mixed
+with the healthy image or described as a normal connectivity success.
+
 ABI oracle: the pinned SDK `hmac_user.h` and `mac_resource_ext.h`, plus the
 normalized `hmac_user.c.obj`. The maintained final-ELF check decodes resolved
 AUIPC/JALR calls on all three host platforms; symbol presence alone is not

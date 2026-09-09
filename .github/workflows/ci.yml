@@ -272,6 +272,10 @@ jobs:
         run: uv run --script .github/scripts/check-net0-storage.py target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --self-test --output net0-payload-storage.json
       - name: Verify actual native cleanup calls and missing-call negative fixtures
         run: uv run --script .github/scripts/check-net0-cleanup.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --test --tamper-test --output net0-cleanup-link.json
+      - name: Link the scoped cleanup-error negative HIL fixture
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-cleanup-fault-injection,incremental-connect-profile,bootstrap-stage-diag
+      - name: Verify native cleanup calls remain present in the error fixture
+        run: uv run --script .github/scripts/check-net0-cleanup.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --output net0-cleanup-fault-link.json
       - uses: actions/upload-artifact@v4
         with:
           name: net0-incremental-linked-storage-${{ matrix.os }}
@@ -279,6 +283,7 @@ jobs:
             net0-incremental-storage.json
             net0-payload-storage.json
             net0-cleanup-link.json
+            net0-cleanup-fault-link.json
           if-no-files-found: error
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-cancel-profile,bootstrap-stage-diag,firmware-example

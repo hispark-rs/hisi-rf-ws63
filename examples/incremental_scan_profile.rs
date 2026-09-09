@@ -703,6 +703,22 @@ async fn run_connect_profile(
         }
         Ok(Err(error)) => {
             write_controller_error(uart, b"RFDBG_A5B_DISCONNECT_ERR", error);
+            #[cfg(feature = "standard-l2-cleanup-fault-injection")]
+            {
+                use embassy_net_driver::Driver;
+                let d = hisi_rf_ws63::netif_l2::native_user_cleanup_diagnostics();
+                assert_eq!(d.completed, 1);
+                assert_eq!(d.free_completed, 1);
+                assert_eq!(d.active, 0);
+                assert_eq!(d.last_outer_status, 0);
+                assert_eq!(d.last_free_status, Some(100));
+                assert_eq!(d.fault, 100);
+                assert_eq!(error.diagnostic().backend_code(), Some(100));
+                let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+                assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
+                assert!(device.transmit(&mut cx).is_none());
+                uart.write(b"RFDBG_NET0_CLEANUP_FAULT_REJECTED\r\n");
+            }
             halt()
         }
         Err(_) => {

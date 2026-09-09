@@ -238,6 +238,15 @@ mod native {
             critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).begin_free(user.addr()));
         // SAFETY: same native index and ABI, exactly one native free call.
         let status = unsafe { real_free(index) };
+        // Negative HIL retains real resource release, then injects only the
+        // returned status for a tracked deletion. Allocation rollback and
+        // unrelated native frees retain their original result.
+        #[cfg(feature = "standard-l2-cleanup-fault-injection")]
+        let status = if ticket.is_some() && status == 0 {
+            100
+        } else {
+            status
+        };
         if let Some(ticket) = ticket {
             critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).finish_free(ticket, status));
         }
