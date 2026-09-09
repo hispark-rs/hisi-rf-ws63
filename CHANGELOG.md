@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Route `driverif_input` through the exclusive caller-owned ingress when the
+  experimental `standard-l2` feature is selected. Capture the epoch on callback
+  entry, verify netif identity and the single-pbuf/padding boundary, and release
+  the callback's pbuf reference on every exit. A closed route never falls back
+  to the old global queue. Named profiles still use the verified legacy path;
+  native quiescence, worker/profile composition and new-path HIL remain open.
+- Exercise the real C callback and pbuf boundary in host/Miri tests, including
+  malformed/chained buffers, capacity, stale epochs and reference ownership.
+
 ## [0.1.0-alpha.101] - 2026-09-09
 
 ### Added

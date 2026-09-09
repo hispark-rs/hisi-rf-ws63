@@ -8,7 +8,9 @@
 //! `in_flight == 0` proves only that Rust callback tickets have drained. It does
 //! NOT prove that a vendor RX queue, DMA, or an outstanding TX has quiesced. The
 //! WS63 native lifecycle must establish that separate fence before reopening.
-//! This contract is not yet installed in `driverif_input`.
+//! With `standard-l2`, `driverif_input` uses the native route below exclusively.
+//! Until composition binds caller-owned storage and opens a verified session,
+//! RX fails closed; it never falls back to the legacy global packet bridge.
 
 use core::cell::RefCell;
 
@@ -17,6 +19,25 @@ use hisi_rf_core::l2::{Generation, L2Ingress, QueueError};
 
 mod link;
 pub use link::{LinkError, NativeLink, SubmitError};
+
+/// Initial WS63 queue shape; the eventual named profile must account for these
+/// bytes in caller-owned storage and its resource report before graduation.
+pub const NATIVE_RX_SLOTS: usize = 4;
+pub const NATIVE_MTU: usize = 1514;
+
+// The context-free C ABI needs one global route, not global packet storage.
+// Its ingress only borrows the composition root's caller-owned static storage.
+pub(crate) static NATIVE_RX_ROUTE: CallbackRoute<'static, NATIVE_RX_SLOTS, NATIVE_MTU> =
+    CallbackRoute::new();
+
+/// Bind the context-free vendor callback to one caller-owned L2 instance.
+/// The returned link remains down until the native lifecycle establishes its
+/// fence. There is no implicit open, reconnect, or legacy-queue fallback.
+pub fn bind_native<const TX: usize>(
+    port: hisi_rf_core::l2::L2Port<'static, NATIVE_RX_SLOTS, TX, NATIVE_MTU>,
+) -> Result<NativeLink<'static, 'static, NATIVE_RX_SLOTS, TX, NATIVE_MTU>, LinkError> {
+    NativeLink::bind(port, &NATIVE_RX_ROUTE)
+}
 
 /// Registration/lifecycle failures that must not fall back to the global bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

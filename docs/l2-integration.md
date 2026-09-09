@@ -1,8 +1,9 @@
 # NET0 Native L2 Integration
 
-Status: experimental contract under `standard-l2`. Production `driverif_input`,
-the existing smoltcp bridge, profiles and firmware behavior are unchanged. A
-passing host contract is not evidence that WS63 implements Embassy Net yet.
+Status: experimental callback path under `standard-l2`. When selected,
+`driverif_input` uses its exclusive route, initially closed. Existing named
+profiles do not select this feature and retain their verified smoltcp bridge.
+A passing host contract is not evidence that WS63 implements Embassy Net yet.
 
 ## Ownership
 
@@ -11,6 +12,14 @@ The caller owns `hisi_rf_core::l2::L2Storage`. Its exclusive split gives one
 owns that port and the non-cloneable `Registration` of a `CallbackRoute`.
 The route holds only an ingress capability and small metadata; no packet bytes,
 allocator, socket, or IP state belongs to a global callback object.
+
+`bind_native` registers caller-owned static storage against the sole C callback
+route (initially four RX slots of 1514 bytes). No packet array is global. An
+incoming pbuf must belong to the registered netif and contain one complete
+frame after the two-byte Ethernet padding. Null, chained, truncated, oversized,
+closed and full cases are explicit drops; the callback releases its pbuf
+reference on every exit. Selecting `standard-l2` together with `net` does not
+duplicate delivery or enable fallback to the old smoltcp queue.
 
 At callback entry, `enter` captures the active ingress and generation. The
 resulting ticket cannot be cloned or retagged. `receive` copies outside critical
@@ -51,8 +60,10 @@ callback/reconnect, abandon/drop, queue overflow and oversize, concurrent
 producers, close/reset conservation, one-frame worker budget, native TX failure,
 TX wake, and capacity held through native return. CI runs the host contract on
 Linux, macOS ARM64 and Windows, plus RV32 checks and Linux Miri.
+The same suites now exercise the real `driverif_input` entry, pbuf reference
+release, padding removal, native-buffer independence, and wrong-netif rejection.
 
-Remaining integration gates are actual netif callback registration, native
-quiescence/authorization events, worker wake wiring, caller-owned storage and
-ELF resource reports, followed by exact-artifact WS63 HIL. No new user-facing
-network profile is advertised before those gates pass.
+Remaining integration gates are profile-owned registration, native quiescence/
+authorization events, worker wake wiring, caller-owned storage and ELF resource
+reports, followed by exact-artifact WS63 HIL. No new user-facing network profile
+is advertised before those gates pass.

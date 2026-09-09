@@ -4,14 +4,15 @@
 //! The WS63 WiFi driver was built against lwip 2.1.3: on TX it asks for packet
 //! buffers via [`pbuf_alloc`] and hands frames down; on RX it pushes received
 //! frames up via [`driverif_input`]; interfaces are managed through the
-//! `netifapi_*` calls. The north-star plan replaces C lwip with **smoltcp**, so
-//! these are the integration points where Rust takes over.
+//! `netifapi_*` calls. These are the L2 integration points for the existing
+//! smoltcp bridge and the experimental caller-owned standard network driver.
 //!
 //! ## STATUS
 //!
 //! - `pbuf_*` use the exact WS63 app layout verified by
 //!   `tools/check-pbuf-layout.sh` against the SDK headers.
-//! - `driverif_input` queues bounded frames when `net` is enabled.
+//! - `driverif_input` selects the caller-owned route with `standard-l2`, or the
+//!   legacy bounded smoltcp bridge with `net` alone.
 //! - [`transmit`] calls the vendor-installed `netif.drv_send` callback.
 //! - `netifapi_*` / `tcpip_callback` are accepted no-ops (no TCP/IP thread yet).
 //!
@@ -36,10 +37,10 @@ const PBUF_ZERO_COPY_TAILROOM: usize = 4;
 // The delivered lwIP configuration sets ETH_PAD_SIZE=2. The SDK RX adapter
 // exposes those two alignment bytes before calling `driverif_input`; smoltcp's
 // Ethernet device contract starts at the destination MAC and must not see them.
-#[cfg(feature = "net")]
+#[cfg(any(feature = "net", feature = "standard-l2"))]
 const ETH_PAD_SIZE: usize = 2;
 
-/// Frames handed up by [`driverif_input`] and dropped (until smoltcp is wired).
+/// Frames explicitly rejected by the selected RX boundary.
 static RX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RX_RECEIVED: AtomicU32 = AtomicU32::new(0);
 static TX_FAILED: AtomicU32 = AtomicU32::new(0);
@@ -377,13 +378,33 @@ pub(crate) fn hardware_address() -> Option<[u8; 6]> {
     })
 }
 
-/// `driverif_input(netif, p)` — RX entry from the MAC driver. With feature `net`
-/// the frame bytes are pushed to the smoltcp bridge (`crate::netif_smoltcp`);
-/// otherwise (or if the pbuf has no payload) the frame is counted and dropped.
+/// `driverif_input(netif, p)` — RX entry from the MAC driver. `standard-l2`
+/// selects the exclusive caller-owned route. Otherwise feature `net` selects
+/// the legacy smoltcp bridge. A closed standard route never falls back.
 /// The pbuf is freed either way (lwip owns it after input).
 #[unsafe(no_mangle)]
 pub extern "C" fn driverif_input(_netif: *mut c_void, p: *mut c_void) -> c_int {
-    #[cfg(feature = "net")]
+    #[cfg(feature = "standard-l2")]
+    {
+        // Capture the connection before inspecting vendor-owned memory. A
+        // concurrent close cannot retag this callback for a later connection.
+        let ticket = crate::netif_l2::NATIVE_RX_ROUTE.enter();
+        let registered = REGISTERED_NETIF.load(Ordering::Acquire);
+        let accepted = if registered != 0 && _netif as usize == registered {
+            // SAFETY: the vendor transfers a live pbuf/payload to this callback;
+            // our pbuf reference remains owned until the final pbuf_free below.
+            unsafe { receive_standard_pbuf(ticket, p.cast()) }
+        } else {
+            drop(ticket);
+            false
+        };
+        if accepted {
+            RX_RECEIVED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            RX_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    #[cfg(all(feature = "net", not(feature = "standard-l2")))]
     {
         let pb = p as *const Pbuf;
         if !pb.is_null() {
@@ -407,13 +428,52 @@ pub extern "C" fn driverif_input(_netif: *mut c_void, p: *mut c_void) -> c_int {
             }
         }
     }
-    #[cfg(not(feature = "net"))]
+    #[cfg(not(any(feature = "net", feature = "standard-l2")))]
     {
         RX_DROPPED.fetch_add(1, Ordering::Relaxed);
     }
     pbuf_free(p);
     0
 }
+
+/// The delivered WS63 RX ABI uses a single pbuf with two bytes of Ethernet
+/// alignment padding. Reject chains instead of silently truncating a frame.
+///
+/// # Safety
+/// `p` is null or a live, readable pbuf whose non-null payload covers `len`
+/// bytes. Its owner must keep both alive and immutable until this call returns.
+#[cfg(feature = "standard-l2")]
+unsafe fn receive_standard_pbuf<const RX: usize, const MTU: usize>(
+    ticket: Option<crate::netif_l2::CallbackTicket<'_, '_, RX, MTU>>,
+    p: *const Pbuf,
+) -> bool {
+    let Some(ticket) = ticket else {
+        return false;
+    };
+    if p.is_null() {
+        return false;
+    }
+    // SAFETY: the callback owns a live pbuf reference for this entire operation.
+    let p = unsafe { &*p };
+    let len = usize::from(p.len);
+    if !p.next.is_null()
+        || p.tot_len != p.len
+        || p.payload.is_null()
+        || len <= ETH_PAD_SIZE
+        || len - ETH_PAD_SIZE > MTU
+    {
+        return false;
+    }
+    // SAFETY: the checked subrange lies within the caller-owned live payload.
+    let frame = unsafe {
+        core::slice::from_raw_parts(p.payload.cast::<u8>().add(ETH_PAD_SIZE), len - ETH_PAD_SIZE)
+    };
+    ticket.receive(frame).is_ok()
+}
+
+#[cfg(all(test, feature = "standard-l2"))]
+#[path = "netif_l2/pbuf_tests.rs"]
+mod standard_l2_tests;
 
 // ── Interface management / tcpip thread ─────────────────────────────────────
 // Scan only needs one opaque STA netif identity. These functions preserve that

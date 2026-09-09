@@ -21,7 +21,7 @@ jobs:
           components: clippy,rust-src,rustfmt
       - run: cargo fmt --all -- --check
       - run: >-
-          cargo test --locked --no-default-features --features standard-l2 netif_l2::
+          cargo test --locked --no-default-features --features standard-l2 netif
       - run: cargo clippy --locked --lib --no-default-features --features standard-l2 -- -D warnings
       - run: cargo check '-Zbuild-std=core,alloc' --locked --target riscv32imfc-unknown-none-elf --lib --no-default-features --features standard-l2
 
@@ -34,7 +34,7 @@ jobs:
           toolchain: nightly-2026-07-09
           components: rust-src,miri
       - run: >-
-          cargo miri test --locked --no-default-features --features standard-l2 --lib netif_l2::
+          cargo miri test --locked --no-default-features --features standard-l2 --lib netif
 
   feature-gates:
     runs-on: ubuntu-latest
