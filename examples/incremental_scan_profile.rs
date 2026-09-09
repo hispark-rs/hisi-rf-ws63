@@ -713,7 +713,15 @@ async fn run_connect_profile(
                 assert_eq!(d.last_outer_status, 0);
                 assert_eq!(d.last_free_status, Some(100));
                 assert_eq!(d.fault, 100);
-                assert_eq!(error.diagnostic().backend_code(), Some(100));
+                let diagnostic = error.diagnostic();
+                assert_eq!(diagnostic.backend_code(), Some(0x5732_d064));
+                assert_eq!(
+                    diagnostic.stage(),
+                    hisi_rf_core::DiagnosticStage::Disconnect
+                );
+                let raw = diagnostic.trace().get(0).expect("native cleanup status");
+                assert_eq!(raw.kind(), hisi_rf_core::DiagnosticTraceKind::HostapStatus);
+                assert_eq!(raw.value(), 100);
                 let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
                 assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
                 assert!(device.transmit(&mut cx).is_none());

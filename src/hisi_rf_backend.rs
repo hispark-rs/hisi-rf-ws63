@@ -1055,6 +1055,24 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_failure_keeps_encoded_diagnostic_and_lossless_native_status() {
+        for status in [100, -100, i32::MIN, i32::MAX] {
+            let diagnostic =
+                map_native_error(NativeSupplicantError::DisconnectFailed(status)).diagnostic();
+            assert_eq!(diagnostic.stage(), DiagnosticStage::Disconnect);
+            assert_eq!(diagnostic.code(), DiagnosticCode::ConnectionFailed);
+            assert_eq!(
+                diagnostic.backend_code(),
+                Some(0x5732_d000 | (status as u32 & 0xfff))
+            );
+            assert_eq!(diagnostic.trace().len(), 1);
+            let trace = diagnostic.trace().get(0).unwrap();
+            assert_eq!(trace.kind(), DiagnosticTraceKind::HostapStatus);
+            assert_eq!(trace.value(), status as u32);
+        }
+    }
+
+    #[test]
     fn scan_capture_boundary_failure_is_distinct_from_result_feed_failure() {
         let capture =
             map_native_error(NativeSupplicantError::BeginScanCaptureFailed(-1)).diagnostic();
