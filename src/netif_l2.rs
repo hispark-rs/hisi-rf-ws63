@@ -42,6 +42,13 @@ pub fn native_host_delivery_diagnostics() -> HostDeliveryDiagnostics {
     NATIVE_RX_ROUTE.host_delivery_diagnostics()
 }
 
+/// First-session experiment counters, not a native-drain receipt.
+#[cfg(feature = "standard-l2-initial-session-experiment")]
+#[doc(hidden)]
+pub fn native_route_diagnostics() -> RouteDiagnostics {
+    NATIVE_RX_ROUTE.diagnostics()
+}
+
 pub(crate) type NativeDevice =
     hisi_rf_core::l2::L2Device<'static, NATIVE_RX_SLOTS, NATIVE_TX_SLOTS, NATIVE_MTU>;
 #[cfg(feature = "incremental-embassy-wait")]
