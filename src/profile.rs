@@ -94,7 +94,7 @@ const WS63_RADIO_STATE_BASE_BYTES: usize = 0x710
 const WS63_RADIO_EVENT_SLOT_BYTES: usize = 52;
 #[cfg(feature = "standard-l2")]
 const PROFILE_L2_STORAGE_BYTES: usize = core::mem::size_of::<crate::netif_l2::NativeStorage>();
-#[cfg(not(feature = "standard-l2"))]
+#[cfg(all(not(feature = "standard-l2"), target_arch = "riscv32"))]
 const PROFILE_L2_STORAGE_BYTES: usize = 0;
 
 mod sealed {
@@ -1146,6 +1146,7 @@ impl ResourceReport {
         let plan = P::RESOURCE_PLAN.with_event_capacity(EVENTS);
         let radio_state_bytes = WS63_RADIO_STATE_BASE_BYTES + EVENTS * WS63_RADIO_EVENT_SLOT_BYTES;
         let control_storage_bytes = core::mem::size_of::<Storage<P, EVENTS>>();
+        #[cfg(feature = "standard-l2")]
         assert!(control_storage_bytes >= PROFILE_L2_STORAGE_BYTES);
         let arena_storage_bytes = align_up(arena_bytes + 1, 64);
         Self {
