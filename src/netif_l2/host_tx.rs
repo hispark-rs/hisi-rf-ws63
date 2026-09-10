@@ -45,6 +45,7 @@ pub struct HostTxDiagnostics {
 struct Tracker {
     slots: [Option<Active>; CAPACITY],
     diagnostic: HostTxDiagnostics,
+    terminal: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -58,6 +59,7 @@ impl Tracker {
     const fn new() -> Self {
         Self {
             slots: [None; CAPACITY],
+            terminal: false,
             diagnostic: HostTxDiagnostics {
                 accepted: 0,
                 processed: 0,
@@ -208,6 +210,28 @@ impl Tracker {
         self.diagnostic.closed = true;
     }
 
+    #[cfg(any(test, feature = "standard-l2-rx-stop-experiment"))]
+    fn seal(&mut self) {
+        self.terminal = true;
+        self.close();
+    }
+
+    fn resume_handshake(&mut self, native_status: i32) -> Result<(), i32> {
+        // The caller samples disconnect/user ownership under the same CS as
+        // this transition. This is only queue-4 admission, never L2 reopening.
+        if native_status != 0 {
+            return Err(native_status);
+        }
+        if self.diagnostic.fault != 0 {
+            return Err(self.diagnostic.fault);
+        }
+        if self.terminal || self.diagnostic.pending != 0 {
+            return Err(CONTRACT_ERROR);
+        }
+        self.diagnostic.closed = false;
+        Ok(())
+    }
+
     fn drained(&self) -> Result<bool, i32> {
         if self.diagnostic.fault != 0 {
             return Err(self.diagnostic.fault);
@@ -226,7 +250,7 @@ mod native {
     // A named physical object lets final-ELF CI report the native metadata cost.
     #[unsafe(export_name = "__hisi_net0_host_tx_tracker")]
     static TRACKER: Mutex<RefCell<Tracker>> = Mutex::new(RefCell::new(Tracker::new()));
-    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Tracker>>>() == 576);
+    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Tracker>>>() == 584);
 
     #[link(kind = "link-arg", name = "--wrap=frw_host_post_data")]
     unsafe extern "C" {}
@@ -243,11 +267,28 @@ mod native {
     }
 
     pub(crate) fn close() {
-        critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).close());
+        critical_section::with(close_locked);
+    }
+
+    pub(crate) fn close_locked(cs: critical_section::CriticalSection<'_>) {
+        TRACKER.borrow_ref_mut(cs).close();
     }
 
     pub(crate) fn diagnostics() -> HostTxDiagnostics {
         critical_section::with(|cs| TRACKER.borrow_ref(cs).diagnostic)
+    }
+
+    pub(crate) fn resume_handshake(
+        cs: critical_section::CriticalSection<'_>,
+        native_status: i32,
+    ) -> Result<(), i32> {
+        TRACKER.borrow_ref_mut(cs).resume_handshake(native_status)
+    }
+
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    pub(crate) fn seal_and_drain() -> Result<(), i32> {
+        critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).seal());
+        close_and_drain()
     }
 
     pub(crate) fn close_and_drain() -> Result<(), i32> {
@@ -340,8 +381,14 @@ mod native {
     }
 }
 
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "wifi",
+    feature = "standard-l2-rx-stop-experiment"
+))]
+pub(crate) use native::seal_and_drain;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
-pub(crate) use native::{close, close_and_drain, diagnostics};
+pub(crate) use native::{close, close_and_drain, close_locked, diagnostics, resume_handshake};
 
 #[cfg(test)]
 mod tests {
@@ -476,6 +523,72 @@ mod tests {
         t.post_returned(ticket, 0);
         assert_eq!(t.drained(), Err(100));
         assert_eq!(t.begin(2), Err(Rejection::Release));
+        conserved(&t);
+    }
+
+    #[test]
+    fn protocol_cleanup_can_resume_handshake_only_after_all_old_owners_retire() {
+        for post_first in [false, true] {
+            let mut t = Tracker::new();
+            let old = t.begin(1).unwrap();
+            t.close();
+            assert_eq!(t.begin(2), Err(Rejection::Release));
+            assert_eq!(t.resume_handshake(0), Err(CONTRACT_ERROR));
+            t.dispatch(1).unwrap();
+            if post_first {
+                t.post_returned(old, 0);
+            }
+            t.complete(old, false, 0);
+            if !post_first {
+                assert_eq!(t.resume_handshake(0), Err(CONTRACT_ERROR));
+                t.post_returned(old, 0);
+            }
+            assert_eq!(t.resume_handshake(-0x6309), Err(-0x6309));
+            assert!(t.diagnostic.closed);
+            t.resume_handshake(0).unwrap();
+            let new = t.begin(1).unwrap();
+            assert_ne!(new, old);
+            assert_eq!(t.dispatch(1), Some(new));
+            t.complete(new, false, 0);
+            t.post_returned(new, 0);
+            assert_eq!(t.diagnostic.processed, 2);
+            conserved(&t);
+        }
+    }
+
+    #[test]
+    fn terminal_stop_fault_and_new_close_cannot_be_overridden_by_handshake_resume() {
+        let mut t = Tracker::new();
+        t.close();
+        t.resume_handshake(0).unwrap();
+        // An IRQ/native user deletion after the atomic resume still closes
+        // admission before the next native post; no stale reopen is pending.
+        t.close();
+        assert_eq!(t.begin(1), Err(Rejection::Release));
+        t.seal();
+        assert_eq!(t.resume_handshake(0), Err(CONTRACT_ERROR));
+        assert_eq!(t.begin(1), Err(Rejection::Release));
+        let mut t = Tracker::new();
+        t.fail(DRAIN_TIMEOUT);
+        assert_eq!(t.resume_handshake(0), Err(DRAIN_TIMEOUT));
+        assert_eq!(t.begin(1), Err(Rejection::Release));
+        conserved(&t);
+    }
+
+    #[test]
+    fn a_completed_old_ticket_cannot_retire_work_after_protocol_resume() {
+        let mut t = Tracker::new();
+        let old = t.begin(1).unwrap();
+        t.dispatch(1).unwrap();
+        t.complete(old, false, 0);
+        t.post_returned(old, 0);
+        t.close();
+        t.resume_handshake(0).unwrap();
+        let new = t.begin(1).unwrap();
+        assert_ne!(new, old);
+        t.complete(old, false, 0);
+        assert_eq!(t.diagnostic.pending, 1);
+        assert_eq!(t.resume_handshake(0), Err(CONTRACT_ERROR));
         conserved(&t);
     }
 }

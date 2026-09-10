@@ -1648,7 +1648,7 @@ impl NativeSupplicant {
         self.require_disconnect_returned()?;
         #[cfg(target_arch = "riscv32")]
         {
-            crate::netif_l2::host_tx::close_and_drain()
+            crate::netif_l2::host_tx::seal_and_drain()
                 .and_then(|()| {
                     let status = crate::netif_l2::user_cleanup::checked_status(0);
                     if status == 0 {
@@ -2576,9 +2576,9 @@ fn disconnect_inline(ifname: &[u8], reason: &mut u16) -> c_int {
 fn queue_deauthentication(reason: u16) -> c_int {
     #[cfg(feature = "standard-l2")]
     crate::netif_l2::NATIVE_RX_ROUTE.close_admission();
-    #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
-    crate::netif_l2::host_tx::close();
     if DEAUTH_WORKER_STATE.load(Ordering::Acquire) != DEAUTH_WORKER_READY {
+        #[cfg(all(feature = "standard-l2", target_arch = "riscv32", feature = "wifi"))]
+        crate::netif_l2::host_tx::close();
         #[cfg(feature = "standard-l2")]
         critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).worker_unavailable());
         return -1;
@@ -2591,7 +2591,11 @@ fn queue_deauthentication(reason: u16) -> c_int {
             .push(DeauthRequest { reason })
     });
     #[cfg(feature = "standard-l2")]
-    let queued = critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref_mut(cs).push(reason).is_ok());
+    let queued = critical_section::with(|cs| {
+        #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+        crate::netif_l2::host_tx::close_locked(cs);
+        DEAUTH_QUEUE.borrow_ref_mut(cs).push(reason).is_ok()
+    });
     if !queued {
         DIAG_DEAUTH_DROPPED.fetch_add(1, Ordering::Relaxed);
         return -1;
@@ -2982,6 +2986,25 @@ const fn vendor_sae_pwe(value: u8) -> Option<i32> {
     }
 }
 
+#[cfg(feature = "standard-l2")]
+fn prepare_association_host_tx() -> Result<(), i32> {
+    // One atomic ownership decision across the disconnect, user and host-TX
+    // trackers. Only bounded RAM bookkeeping runs here, never WAL/MMIO/wait.
+    critical_section::with(|cs| {
+        match DEAUTH_QUEUE.borrow_ref(cs).poll_idle() {
+            Ok(core::task::Poll::Ready(())) => {}
+            Ok(core::task::Poll::Pending) => return Err(deauth::Error::Busy.status()),
+            Err(error) => return Err(error.status()),
+        }
+        #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+        crate::netif_l2::host_tx::resume_handshake(
+            cs,
+            crate::netif_l2::user_cleanup::handshake_status(cs),
+        )?;
+        Ok(())
+    })
+}
+
 unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateRequest) -> c_int {
     let Some(driver) = driver_context(driver) else {
         return -1;
@@ -3042,10 +3065,8 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
         crypto: &mut crypto,
     };
     #[cfg(feature = "standard-l2")]
-    match critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).poll_idle()) {
-        Ok(core::task::Poll::Ready(())) => {}
-        Ok(core::task::Poll::Pending) => return deauth::Error::Busy.status(),
-        Err(error) => return error.status(),
+    if let Err(status) = prepare_association_host_tx() {
+        return status;
     }
     DIAG_ASSOCIATE_CALLS.fetch_add(1, Ordering::Relaxed);
     #[cfg(feature = "standard-l2-initial-session-experiment")]
@@ -3073,10 +3094,8 @@ unsafe extern "C" fn associate(driver: *mut c_void, request: *const AssociateReq
                 // Native recovery can enqueue another hostap deauthentication
                 // before it returns. Do not retry over known pending teardown.
                 #[cfg(feature = "standard-l2")]
-                match critical_section::with(|cs| DEAUTH_QUEUE.borrow_ref(cs).poll_idle()) {
-                    Ok(core::task::Poll::Ready(())) => {}
-                    Ok(core::task::Poll::Pending) => return deauth::Error::Busy.status(),
-                    Err(error) => return error.status(),
+                if let Err(status) = prepare_association_host_tx() {
+                    return status;
                 }
                 #[cfg(feature = "standard-l2-initial-session-experiment")]
                 crate::netif_l2::NATIVE_RX_ROUTE.initial_association_started();

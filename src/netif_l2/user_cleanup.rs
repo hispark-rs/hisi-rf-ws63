@@ -85,6 +85,16 @@ impl Tracker {
         }
     }
 
+    fn handshake_status(&self) -> u32 {
+        if self.diagnostic.fault != 0 {
+            self.diagnostic.fault
+        } else if self.diagnostic.active != 0 {
+            CONTRACT_ERROR
+        } else {
+            0
+        }
+    }
+
     fn begin(&mut self, user: usize) -> Option<Ticket> {
         let duplicate = self.slots.iter().flatten().any(|slot| slot.user == user);
         if user == 0 || duplicate {
@@ -202,6 +212,11 @@ pub(crate) fn checked_status(status: i32) -> i32 {
 }
 
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+pub(crate) fn handshake_status(cs: critical_section::CriticalSection<'_>) -> i32 {
+    TRACKER.borrow_ref(cs).handshake_status() as i32
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 mod native {
     use super::*;
     use core::ffi::c_void;
@@ -226,8 +241,10 @@ mod native {
     #[unsafe(export_name = "__wrap_hmac_user_del_etc")]
     pub(crate) unsafe extern "C" fn delete(vap: *mut c_void, user: *mut c_void) -> u32 {
         super::super::NATIVE_RX_ROUTE.close_admission();
-        super::super::host_tx::close();
-        let ticket = critical_section::with(|cs| TRACKER.borrow_ref_mut(cs).begin(user.addr()));
+        let ticket = critical_section::with(|cs| {
+            super::super::host_tx::close_locked(cs);
+            TRACKER.borrow_ref_mut(cs).begin(user.addr())
+        });
         // SAFETY: this linker wrapper forwards the vendor's unchanged argument
         // pair exactly once. It neither dereferences nor retains either pointer.
         let status = unsafe { real_delete(vap, user) };
@@ -282,6 +299,27 @@ mod tests {
         assert_eq!(tracker.diagnostic.active, 0);
         assert_eq!(tracker.diagnostic.entered, tracker.diagnostic.completed);
         assert_eq!(tracker.diagnostic.last_free_status, Some(0));
+    }
+
+    #[test]
+    fn handshake_admission_requires_all_native_user_cleanup_to_finish() {
+        let mut tracker = Tracker::new();
+        assert_eq!(tracker.handshake_status(), 0);
+        let first = tracker.begin(1);
+        let second = tracker.begin(2);
+        assert_eq!(tracker.handshake_status(), CONTRACT_ERROR);
+        release(&mut tracker, 1, 0);
+        assert_eq!(tracker.handshake_status(), CONTRACT_ERROR);
+        tracker.finish(first, 0);
+        assert_eq!(tracker.handshake_status(), CONTRACT_ERROR);
+        release(&mut tracker, 2, 0);
+        tracker.finish(second, 0);
+        assert_eq!(tracker.handshake_status(), 0);
+        let failed = tracker.begin(3);
+        release(&mut tracker, 3, 100);
+        tracker.finish(failed, 0);
+        assert_eq!(tracker.diagnostic.active, 0);
+        assert_eq!(tracker.handshake_status(), 100);
     }
 
     #[test]

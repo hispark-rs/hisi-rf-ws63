@@ -38,7 +38,7 @@ def inspect(path):
         if len(matches) != 1:
             raise ValueError("missing or ambiguous host TX tracker")
         symbol = matches[0]
-        if (symbol["st_info"]["type"] != "STT_OBJECT" or symbol["st_size"] != 576
+        if (symbol["st_info"]["type"] != "STT_OBJECT" or symbol["st_size"] != 584
                 or not isinstance(symbol["st_shndx"], int)):
             raise ValueError("native TX metadata cost changed; review the resource budget")
         section = elf.get_section(symbol["st_shndx"])

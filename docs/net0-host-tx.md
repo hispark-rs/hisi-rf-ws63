@@ -29,7 +29,8 @@ native callback carrying an already reused address is outside that assumption.
 
 Each accepted post receives a non-reused ticket. Thirty-two fixed slots track
 opaque pointers and post/callback state, not packet payload. The physical RV32
-metadata object is 576 bytes, reported separately from caller-owned L2 storage.
+metadata object is 584 bytes, reported separately from caller-owned L2 storage.
+This includes terminal-shutdown state; packet capacity and RF stacks are unchanged.
 
 An entry retires only after post returns and either dispatch returns or a
 pre-dispatch free succeeds. Freed addresses can be reused before old stack
@@ -47,8 +48,26 @@ freed; duplicate queue-owned inputs are not freed a second time.
 Requested disconnect closes host TX admission before enqueueing the disconnect
 work. The worker waits at most 1000 ms for the tracked host work, outside critical
 sections, before calling WAL. Missing clock, runtime sleep failure, timeout or
-tracker fault fails closed without submitting that WAL disconnect. Admission
-does not reopen during this experimental boot.
+tracker fault fails closed without submitting that WAL disconnect.
+
+Hostap also requests deauthentication during association cleanup and recovery.
+Those protocol transitions are not permanent device shutdown. Immediately before
+each native association (including the bounded inline retry), the adapter checks
+the disconnect queue is idle, every user cleanup has returned successfully, and
+all old host TX owners have retired. It restores **queue-4 handshake admission**
+in the same short metadata critical section. Native I/O and waits remain outside.
+This does not reopen the Ethernet route or clear any RX generation/fence guard.
+
+Queueing a disconnect and starting user deletion atomically close TX with
+publication of their respective ownership. A later close still rejects new posts;
+there is no deferred resume ticket that can overwrite that close. Native failure,
+unreturned ownership, timeout or stale completion prevents admission. Completed
+old tickets cannot complete a newly allocated packet at the same address.
+
+The explicit terminal RX-stop operation first **seals** host TX. A seal is
+irreversible for this boot, even when a later caller requests association. This
+separates ordinary protocol closure from destructive shutdown without weakening
+the existing one-shot L2 experiment.
 
 Autonomous native user deletion closes admission too, but does not synchronously
 wait in the native callback. There is no claim that this fences already-running
@@ -59,7 +78,8 @@ C call after the host drain succeeds.
 ## Verification
 
 - Host tests/Miri cover post/dispatch order, native masked rejection, queue
-  capacity, stale completion, pointer reuse, failed free and sticky closure.
+  capacity, stale completion, pointer reuse, failed free, checked handshake
+  admission, active user cleanup and irreversible terminal shutdown.
 - `check-net0-host-tx.py` checks eleven native call sites and the physical
   metadata object. Removing each call independently must fail verification.
 - Three host OS CI lanes and the packaged external-consumer fixture run the

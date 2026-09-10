@@ -17,8 +17,10 @@ the same callback is used for initial association cleanup and recovery. Those
 requests must not destroy RX descriptors. The first stop prototype put the
 experiment in that shared helper and a long matrix reached stop before initial
 authorization. Moving ownership to explicit operation completion removes that
-destructive coupling; it does not relax the one-shot L2 policy, reopen host TX,
-or prove that the preceding association failure is fixed.
+destructive coupling; it does not relax the one-shot L2 policy or prove that the
+preceding association failure is fixed. Protocol recovery can separately restore
+checked queue-4 handshake admission, as specified in [host TX](net0-host-tx.md).
+The terminal operation seals that admission before executing the stop.
 
 ## Native Contract
 
@@ -74,7 +76,7 @@ message 595, callbacks already running, DMA/descriptor visibility, DMAC user
 free status, autonomous native re-enable, and bounded descriptor reinitialization
 remain separate gates. Reading throughput flag 18 twice is not proof it was
 never previously enabled. No `NativeFence` or reopen capability is produced.
-The existing one-shot L2 route and host TX admission stay closed for this boot.
+After terminal stop, the one-shot L2 route and host TX stay closed for this boot.
 
 Host tests cover both return orders, timeout before/during dispatch, duplicate
 receipts, zero-return/no-op, enqueue errors, and nonreuse. The production
