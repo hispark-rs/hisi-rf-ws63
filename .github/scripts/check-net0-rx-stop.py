@@ -79,15 +79,15 @@ def inspect(path):
         if len(matches) != 1 or matches[0]["st_info"]["type"] != "STT_OBJECT":
             raise ValueError("missing/ambiguous RX stop transaction")
         symbol = matches[0]
-        if not isinstance(symbol["st_shndx"], int) or symbol["st_size"] != 68:
-            raise ValueError("RX stop/rebuild metadata differs from its reviewed 68-byte budget")
+        if not isinstance(symbol["st_shndx"], int) or symbol["st_size"] != 80:
+            raise ValueError("RX stop/rebuild metadata differs from its reviewed 80-byte budget")
         section = elf.get_section(symbol["st_shndx"])
         offset = symbol["st_value"] - section["sh_addr"]
         if section["sh_flags"] & 3 != 3 or offset < 0 or offset + symbol["st_size"] > section["sh_size"]:
             raise ValueError("transaction must occupy physical writable memory")
         report["metadata"] = {"bytes": symbol["st_size"], "address": symbol["st_value"],
                               "section": section.name, "packet_payload_bytes": 0}
-    report.update(schema="net0-rx-stop-link/v2",
+    report.update(schema="net0-rx-stop-link/v3",
                   boundary="Resolved stop/rebuild/cleanup ROM calls only. Runtime allocation counts and context need HIL; no DMA/host RX queue fence claim")
     return report
 

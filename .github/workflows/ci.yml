@@ -75,6 +75,10 @@ jobs:
         run: >-
           cargo miri test --locked --lib --no-default-features
           --features wpa2-personal,standard-l2-rx-stop-experiment netif_l2::rx_mode
+      - name: Interpret native RX receipt deadlines and rebuild decisions
+        run: >-
+          cargo miri test --locked --lib --no-default-features
+          --features wpa2-personal,standard-l2-rx-stop-experiment netif_l2::rx_stop
 
   feature-gates:
     runs-on: ubuntu-latest

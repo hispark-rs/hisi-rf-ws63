@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Enforce the terminal NET0 RX deadline inside its receipt transaction, not
+  only while the requester is polling. Reject overdue callback entry, skip
+  overdue reconstruction, retain late observations as failures and check time
+  before accepting a completed receipt. Backward/missing clock samples fail
+  closed. This does not cancel a running native routine or authorize reconnect.
 - In opt-in NET0 builds, track native host queue-4 ownership through the real
   post, dispatch and pre-dispatch free calls. Close admission before requested
   deauthentication and require a bounded, error-checked host TX drain before
@@ -42,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for normal/high/small queues; partial allocation is failure even when the
   native initializer returns zero. Always attempt checked cleanup, retain its
   separate status, and leave application admission sealed. Bind the added ROM
-  calls and 68-byte receipt in the final-ELF gate. This is not a DMA fence or
+  calls and 80-byte deadline-bearing receipt in the final-ELF gate. This is not a DMA fence or
   reconnect capability.
 - Share the NET0 bootstrap/traffic fixtures' physical storage declaration and
   versioned target descriptor. Validate both final incremental ELF variants,

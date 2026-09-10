@@ -88,6 +88,15 @@ an already-running native call may finish, but cannot turn timeout into success.
 The ROM routine itself masks IRQs while freeing descriptors; this experiment
 does not claim a bound for arbitrary native C/ROM execution.
 
+The transaction owns the monotonic start timestamp. Callback entry, the last
+check before native teardown, rebuild admission, callback completion and waiter
+result consumption all check the same deadline. A native call can delay both
+timer delivery and the waiter; completion must not be inspected before time.
+An exactly-expired, backward or missing clock sample fails closed. Late native
+observations remain recorded, but cannot become a successful receipt. The clock
+must itself advance while the waiter is not scheduled; these checks do not make
+an uninterruptible native call cancellable or prove a wall-clock execution bound.
+
 ## Standard ROM Calls
 
 New direct `R_RISCV_CALL` references to the ROM linker script's `SHN_ABS`
@@ -98,7 +107,7 @@ No numeric ROM addresses enter production Rust or assembly. Existing native
 callback veneers (MAC disable/device lookup) retain their original behavior.
 
 `check-net0-rx-stop.py` verifies eighteen resolved call sites, seven exact veneer
-targets, and the 68-byte transaction metadata object; twenty-five call/address
+targets, and the 80-byte transaction metadata object; twenty-five call/address
 mutations must fail. Runtime callback-table ownership still needs HIL. The
 consumer needs no external compiler, post-link script, or custom linker.
 

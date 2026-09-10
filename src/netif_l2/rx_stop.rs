@@ -12,6 +12,7 @@ const TIMEOUT: i32 = -0x1021;
 const MAC_ENABLED: i32 = -0x1022;
 const DESCRIPTORS_REMAIN: i32 = -0x1023;
 const QUEUED_RX: i32 = -0x1024;
+const DEADLINE_MS: u64 = 1_000;
 const COMMAND: [u32; 2] = [0x3058_524e, 1]; // NRX0, one non-reusable boot ticket
 
 fn same_worker(expected: u32, current: Option<u32>) -> bool {
@@ -47,12 +48,14 @@ pub struct RxStopDiagnostics {
 struct Transaction {
     phase: Phase,
     diagnostic: RxStopDiagnostics,
+    started_ms: u64,
 }
 
 impl Transaction {
     const fn new() -> Self {
         Self {
             phase: Phase::Idle,
+            started_ms: 0,
             diagnostic: RxStopDiagnostics {
                 installed: false,
                 requested: false,
@@ -96,6 +99,51 @@ impl Transaction {
         self.phase = Phase::Requested;
         self.diagnostic.requested = true;
         Ok(())
+    }
+
+    fn request_at(&mut self, started_ms: u64) -> Result<(), i32> {
+        self.request()?;
+        self.started_ms = started_ms;
+        Ok(())
+    }
+
+    fn check_deadline(&mut self, now: Option<u64>) -> Result<(), i32> {
+        if self.diagnostic.fault != 0 {
+            return Err(self.diagnostic.fault);
+        }
+        if !self.diagnostic.requested {
+            return Err(self.fail(CONTRACT));
+        }
+        let Some(now) = now else {
+            return Err(self.fail(CONTRACT));
+        };
+        if !matches!(now.checked_sub(self.started_ms), Some(elapsed) if elapsed < DEADLINE_MS) {
+            return Err(self.fail(TIMEOUT));
+        }
+        Ok(())
+    }
+
+    fn enter_at(&mut self, now: Option<u64>) -> Result<(), i32> {
+        self.check_deadline(now)?;
+        self.enter()
+    }
+
+    fn may_rebuild_at(&mut self, now: Option<u64>) -> bool {
+        self.check_deadline(now).is_ok() && self.may_rebuild()
+    }
+
+    fn finish_at(&mut self, now: Option<u64>, before: u8, after: u8, empty: u8, status: i32) {
+        // Preserve observations even when an uninterruptible native call has
+        // returned late. Its successful status cannot override the deadline.
+        let _ = self.check_deadline(now);
+        self.finish(before, after, empty, status);
+    }
+
+    fn result_at(&mut self, now: Option<u64>) -> Result<bool, i32> {
+        // Check time before checking completion: the waiter may not have run
+        // at all while native code held IRQs or monopolized the device worker.
+        self.check_deadline(now)?;
+        self.result()
     }
 
     fn enter(&mut self) -> Result<(), i32> {
@@ -170,7 +218,7 @@ mod native {
 
     #[unsafe(export_name = "__hisi_net0_rx_stop_transaction")]
     static STATE: Mutex<RefCell<Transaction>> = Mutex::new(RefCell::new(Transaction::new()));
-    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 68);
+    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 80);
 
     // Stock lld's CALL against these SHN_ABS assignments does not produce a
     // usable PC-relative call. Ordinary HI20/LO12_I veneers preserve the linker
@@ -385,7 +433,7 @@ mod native {
             return Err(QUEUED_RX);
         }
         let started = crate::uapi::try_monotonic_ms().ok_or(CONTRACT)?;
-        critical_section::with(|cs| STATE.borrow_ref_mut(cs).request())?;
+        critical_section::with(|cs| STATE.borrow_ref_mut(cs).request_at(started))?;
         let mut payload = COMMAND;
         let mut msg = FrwMsg {
             data: payload.as_mut_ptr().cast(),
@@ -402,12 +450,9 @@ mod native {
         let status = unsafe { frw_send_msg_to_device(0, MESSAGE, &mut msg, 0) };
         critical_section::with(|cs| STATE.borrow_ref_mut(cs).post_returned(status));
         loop {
-            if critical_section::with(|cs| STATE.borrow_ref(cs).result())? {
+            let now = crate::uapi::try_monotonic_ms();
+            if critical_section::with(|cs| STATE.borrow_ref_mut(cs).result_at(now))? {
                 return Ok(());
-            }
-            let now = crate::uapi::try_monotonic_ms().ok_or(CONTRACT)?;
-            if now < started || now - started >= 1_000 {
-                return Err(TIMEOUT);
             }
             hisi_rf_rtos_driver::sleep_ms(NonZeroU32::new(1).unwrap()).map_err(|_| CONTRACT)?;
         }
@@ -426,7 +471,8 @@ mod native {
         if !matches {
             return unsafe { hal_dev_fsm_destroy_rx_dscr(vap, msg) };
         }
-        if let Err(status) = critical_section::with(|cs| STATE.borrow_ref_mut(cs).enter()) {
+        let now = crate::uapi::try_monotonic_ms();
+        if let Err(status) = critical_section::with(|cs| STATE.borrow_ref_mut(cs).enter_at(now)) {
             return status;
         }
         // Do not run a destructive stop from an unexpected host/ISR context.
@@ -448,6 +494,13 @@ mod native {
         if super::super::rx_mode::rejected() || unsafe { hmac_is_thruput_enable(18) } != 0 {
             return critical_section::with(|cs| STATE.borrow_ref_mut(cs).fail(QUEUED_RX));
         }
+        // Identity/mode checks above may themselves have been preempted.
+        let now = crate::uapi::try_monotonic_ms();
+        if let Err(status) =
+            critical_section::with(|cs| STATE.borrow_ref_mut(cs).check_deadline(now))
+        {
+            return status;
+        }
         // SAFETY: exact SDK void()/u8() ABI; called by the device worker with
         // closed application admission and completed HMAC user cleanup. The
         // original destroy deliberately skips work while MAC is enabled.
@@ -465,12 +518,13 @@ mod native {
             return critical_section::with(|cs| STATE.borrow_ref_mut(cs).fail(CONTRACT));
         }
         let empty = unsafe { hal_is_hw_rx_queue_empty(device) };
+        let now = crate::uapi::try_monotonic_ms();
         // This is a closed-admission allocation round-trip, not restart. Native
         // init may leave partially populated queues despite returning zero.
         let rebuild = if status == 0
             && after == 0
             && empty == 1
-            && critical_section::with(|cs| STATE.borrow_ref(cs).may_rebuild())
+            && critical_section::with(|cs| STATE.borrow_ref_mut(cs).may_rebuild_at(now))
         {
             Some(rebuild_probe(&mut NativeDescriptors {
                 device: device.cast(),
@@ -480,6 +534,7 @@ mod native {
         } else {
             None
         };
+        let now = crate::uapi::try_monotonic_ms();
         critical_section::with(|cs| {
             let mut state = STATE.borrow_ref_mut(cs);
             if let Some(report) = rebuild {
@@ -488,7 +543,7 @@ mod native {
                     state.fail(report.fault);
                 }
             }
-            state.finish(before, after, empty, status);
+            state.finish_at(now, before, after, empty, status);
             state.diagnostic.fault
         })
     }
@@ -599,5 +654,71 @@ mod tests {
         assert!(!same_worker(0x107, None));
         assert!(!same_worker(u32::MAX, Some(u32::MAX)));
         assert!(!same_worker(0, Some(0)));
+    }
+
+    #[test]
+    fn callback_overdue_before_waiter_runs_never_starts_native_work() {
+        for now in [Some(1_010), Some(1_011), Some(9), None] {
+            let mut t = installed();
+            t.request_at(10).unwrap();
+            t.post_returned(0);
+            assert!(t.enter_at(now).is_err());
+            assert!(!t.diagnostic.entered);
+            assert!(!t.may_rebuild_at(Some(11)));
+            assert!(t.result_at(Some(11)).is_err());
+        }
+    }
+
+    #[test]
+    fn native_return_after_deadline_cannot_win_before_waiter_checks_time() {
+        let mut t = installed();
+        t.request_at(10).unwrap();
+        t.post_returned(0);
+        t.enter_at(Some(11)).unwrap();
+        assert!(t.may_rebuild_at(Some(12)));
+        // No waiter poll or timeout notification occurred during the call.
+        t.finish_at(Some(1_010), 1, 0, 1, 0);
+        assert!(t.diagnostic.returned);
+        assert_eq!(t.diagnostic.native_status, 0);
+        assert_eq!(t.result_at(Some(1_011)), Err(TIMEOUT));
+    }
+
+    #[test]
+    fn completed_receipt_does_not_bypass_end_to_end_deadline() {
+        let mut t = installed();
+        t.request_at(10).unwrap();
+        t.enter_at(Some(11)).unwrap();
+        t.finish_at(Some(12), 1, 0, 1, 0);
+        t.post_returned(0);
+        assert_eq!(t.result_at(Some(1_009)), Ok(true));
+        assert_eq!(t.result_at(Some(1_010)), Err(TIMEOUT));
+        assert_eq!(t.result_at(Some(12)), Err(TIMEOUT));
+    }
+
+    #[test]
+    fn rebuild_is_not_started_after_teardown_exhausts_deadline() {
+        let mut t = installed();
+        t.request_at(10).unwrap();
+        t.enter_at(Some(11)).unwrap();
+        assert!(!t.may_rebuild_at(Some(1_010)));
+        t.finish_at(Some(1_011), 1, 0, 1, 0);
+        t.post_returned(0);
+        assert_eq!(t.result_at(Some(1_012)), Err(TIMEOUT));
+    }
+
+    #[test]
+    fn deadline_subtraction_rejects_clock_loss_and_wrap_without_overflow() {
+        for now in [None, Some(0), Some(u64::MAX - 2)] {
+            let mut t = installed();
+            t.request_at(u64::MAX - 1).unwrap();
+            assert!(t.enter_at(now).is_err());
+        }
+        let mut t = installed();
+        t.request_at(u64::MAX - 1).unwrap();
+        t.enter_at(Some(u64::MAX)).unwrap();
+        t.finish_at(Some(u64::MAX), 1, 0, 1, 0);
+        t.post_returned(0);
+        assert_eq!(t.result_at(Some(u64::MAX)), Ok(true));
+        assert_eq!(t.result_at(Some(0)), Err(TIMEOUT));
     }
 }
