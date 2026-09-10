@@ -130,3 +130,17 @@ This adds 32 bytes to the checked 112-byte stop-transaction object. No UART is
 written by the measured handler, and the existing 1,000 ms deadline is unchanged.
 A late waiter still fails even if the native handler returned zero earlier.
 The marker is diagnostic evidence, not a successful DMA/host-queue fence.
+
+The incremental fixture also emits `RFDBG_NET0_STOP_RUNTIME_PHASE before/after`
+around disconnect (outside the measured native handler). Its adjacent
+`RFDBG_NET0_STOP_RUNTIME` words are systick milliseconds, timer IRQs, SWIs,
+context switches, sleeps, sleeper wakes, current task, current lock depth,
+ready-ownership violations, budget exhaustions, created/completed switch
+intents, and read-only `mstatus`. `RFDBG_NET0_STOP_TASK` selects main, priority-0
+tasks, and the 8-KiB worker; its words are slot, priority, policy (0 cooperative,
+1 budgeted, 2 preemptive), CPU/IRQ milliseconds, dispatches, budget exhaustions,
+maximum run/ready/lock milliseconds, IRQ entries, ready-queued, pending-target.
+Snapshots use stack storage and existing runtime APIs; task and scheduler
+snapshots are individually synchronized, not one combined atomic snapshot.
+Historical maxima are not transaction-local. These UART observations precede
+any postmortem probe attach; they do not certify timing or queue liveness.

@@ -107,9 +107,15 @@ No numeric ROM addresses enter production Rust or assembly. Existing native
 callback veneers (MAC disable/device lookup) retain their original behavior.
 
 `check-net0-rx-stop.py` verifies eighteen resolved call sites, seven exact veneer
-targets, and the 80-byte transaction metadata object; twenty-five call/address
+targets, and the 112-byte transaction metadata object; twenty-five call/address
 mutations must fail. Runtime callback-table ownership still needs HIL. The
 consumer needs no external compiler, post-link script, or custom linker.
+
+The object includes eight 32-bit wall-time checkpoints. The
+[`RFDBG_NET0_RX_STOP_MS` contract](../README.md#experimental-net0-link-contract)
+distinguishes handler work from message/waiter scheduling without UART output
+inside the measured handler. The deadline stays 1,000 ms; a fast native return
+followed by late waiter observation remains a failed transaction.
 
 ## Remaining Gates
 

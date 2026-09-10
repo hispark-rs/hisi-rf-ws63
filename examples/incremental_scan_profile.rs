@@ -686,8 +686,12 @@ async fn run_connect_profile(
     #[cfg(feature = "standard-l2-initial-session-experiment")]
     net0_initial_network::run(device, uart).await;
 
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    write_stop_runtime_diagnostics(uart, b"before");
     let disconnect_started = monotonic_ms();
     let disconnected = with_timeout(Duration::from_secs(20), controller.disconnect()).await;
+    #[cfg(feature = "standard-l2-rx-stop-experiment")]
+    write_stop_runtime_diagnostics(uart, b"after");
     #[cfg(feature = "standard-l2")]
     write_user_cleanup_diagnostics(uart);
     match disconnected {
@@ -741,6 +745,73 @@ async fn run_connect_profile(
         assert!(device.link_state(&mut cx) == embassy_net_driver::LinkState::Down);
         assert!(device.transmit(&mut cx).is_none());
         uart.write(b"RFDBG_NET0_INITIAL_SESSION_CLOSED\r\n");
+    }
+}
+
+#[cfg(all(
+    feature = "incremental-connect-profile",
+    feature = "standard-l2-rx-stop-experiment"
+))]
+fn write_stop_runtime_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, phase: &[u8]) {
+    let mut tasks = [hisi_rtos::TaskDiagnostic::default(); 17];
+    let count = hisi_rtos::task_diagnostics(&mut tasks);
+    let scheduler = hisi_rtos::diagnostics();
+    let mstatus: u32;
+    // SAFETY: read-only machine status; no change to interrupt delivery.
+    unsafe {
+        core::arch::asm!("csrr {status}, mstatus", status = out(reg) mstatus, options(nomem, nostack));
+    }
+    let narrow = |value: u64| value.min(u64::from(u32::MAX)) as u32;
+    uart.write(b"RFDBG_NET0_STOP_RUNTIME_PHASE ");
+    uart.write(phase);
+    uart.write(b"\r\n");
+    write_snapshot(
+        uart,
+        b"RFDBG_NET0_STOP_RUNTIME",
+        &[
+            narrow(monotonic_ms()),
+            scheduler.timer_interrupts,
+            scheduler.software_interrupts,
+            scheduler.context_switches,
+            scheduler.sleeps,
+            scheduler.sleeper_wakes,
+            scheduler.current_task as u32,
+            u32::from(scheduler.current_lock_depth),
+            u32::from(scheduler.ready_ownership_violations),
+            scheduler.budget_exhaustions,
+            scheduler.switch_intents_created,
+            scheduler.switch_intents_completed,
+            mstatus,
+        ],
+    );
+    for task in &tasks[..count] {
+        if task.task != 0 && task.priority != 0 && task.stack_size != 8 * 1024 {
+            continue;
+        }
+        let policy = match task.run_policy {
+            hisi_rtos::RunPolicy::Cooperative => 0,
+            hisi_rtos::RunPolicy::Budgeted(_) => 1,
+            hisi_rtos::RunPolicy::Preemptive { .. } => 2,
+        };
+        write_snapshot(
+            uart,
+            b"RFDBG_NET0_STOP_TASK",
+            &[
+                task.task as u32,
+                u32::from(task.priority),
+                policy,
+                narrow(task.cpu_time_ms),
+                narrow(task.irq_time_ms),
+                task.dispatches,
+                task.budget_exhaustions,
+                narrow(task.max_continuous_run_ms),
+                narrow(task.max_ready_latency_ms),
+                narrow(task.max_scheduler_lock_ms),
+                task.irq_entries,
+                u32::from(task.ready_queued),
+                u32::from(task.pending_switch_target),
+            ],
+        );
     }
 }
 
