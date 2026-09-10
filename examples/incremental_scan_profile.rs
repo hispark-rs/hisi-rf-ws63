@@ -1052,6 +1052,17 @@ fn write_native_host_delivery(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>,
         } else {
             b" exhausted=0\r\n"
         });
+        uart.write(b"RFDBG_NET0_RX_FREE phase=");
+        uart.write(phase);
+        for (label, value) in [
+            (b" calls=0x".as_slice(), d.free_calls),
+            (b" retired=0x".as_slice(), d.retired_on_free_attempt),
+        ] {
+            uart.write(label);
+            uart.write(&hex8((value >> 32) as u32));
+            uart.write(&hex8(value as u32));
+        }
+        uart.write(b"\r\n");
     }
     let d = hisi_rf_ws63::netif_l2::native_host_delivery_diagnostics();
     uart.write(b"RFDBG_NET0_HOST_DELIVERY phase=");

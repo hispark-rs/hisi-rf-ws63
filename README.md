@@ -103,8 +103,16 @@ test, byte-identical firmware guarantee, or native-fence/HIL acceptance.
 
 `standard-l2-rx-origin-experiment` is an observation-only maintainer lane. It
 correlates the existing patched RX descriptor allocator with the earlier native
-host callback using 368 bytes of fixed metadata. Unknown/replaced identities,
+host callback using 384 bytes of fixed census metadata and a 4-byte original
+free-callback pointer. The native free function is local to its archive member;
+the experiment captures callback 249 at the public registration boundary and
+forwards it once, outside Rust critical sections. A retired observation means
+only a free **attempt**, not successful release or DMA quiescence. Unknown/replaced identities,
 closed/stale origins and capacity exhaustion remain visible; no observation
 authorizes packet admission or reconnect. The final-ELF checker verifies the
-existing ROM patch destinations and the real forwarded descriptor call, not
-merely the presence of a wrapper symbol. Native buffer ownership is unchanged.
+existing ROM patch destinations, the real forwarded descriptor call and the
+initializer's original free pointer/registration calls, not merely the presence
+of a wrapper symbol. Runtime validation rejects a missing original callback or
+a callback 250 that could bypass the observer. Native buffer ownership is unchanged.
+The [native-free observation contract](docs/net0-native-free-observation.md)
+records the ABI/oracle sources and the boundary of this census.

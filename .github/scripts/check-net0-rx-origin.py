@@ -22,7 +22,12 @@ spec.loader.exec_module(native_calls)
 WRAPPER = '__wrap_hh503_rx_set_ctrl_dscr'
 VENEER = '__hisi_net0_rom_rx_set_ctrl'
 ROM = 'hh503_rx_set_ctrl_dscr'
-EDGES = [('hh503_rx_alloc_netbuf_and_dscr_patch', WRAPPER, 1), (WRAPPER, VENEER, 1)]
+FREE_OBSERVER = '__hisi_net0_observe_free'
+REGISTER_WRAPPER = '__wrap_frw_rom_cb_register'
+REGISTER_VENEER = '__hisi_net0_rom_register_callback'
+EDGES = [('hh503_rx_alloc_netbuf_and_dscr_patch', WRAPPER, 1), (WRAPPER, VENEER, 1),
+         ('dmac_main_rom_cb_base_init_before_frw_init', REGISTER_WRAPPER, 2),
+         (REGISTER_WRAPPER, REGISTER_VENEER, 2)]
 PATCHES = {'hh503_rx_alloc_netbuf_and_dscr': 0x12c53c,
            'hal_rx_add_dscr': 0x12c63c, 'hal_rx_pre_add_dscr': 0x12c5de}
 
@@ -61,6 +66,49 @@ def inspect(path):
         mutations = [section['sh_offset'] + offset + 2]
         report['veneer'] = {'target': ROM, 'address': address, 'bytes': 12}
 
+        # sys supplies a ten-byte ROM thunk for this public function. The
+        # wrapper veneer must reach that thunk, which must still reach ROM.
+        register, section, offset = physical('frw_rom_cb_register', 10)
+        first, second, third = struct.unpack_from('<IIH', section.data(), offset)
+        address = ((first & 0xfffff000) + native_calls.signed(second >> 20, 12)) & 0xffffffff
+        if (first & 0xfff != 0x2b7 or second & 0xfffff != 0x28293
+                or third != 0x8282 or address != 0x128d4a):
+            raise ValueError('ROM callback registration thunk changed')
+        mutations.append(section['sh_offset'] + offset + 2)
+        item, section, offset = physical(REGISTER_VENEER, 12)
+        first, second, third = struct.unpack_from('<III', section.data(), offset)
+        address = ((first & 0xfffff000) + native_calls.signed(second >> 20, 12)) & 0xffffffff
+        if (first & 0xfff != 0x2b7 or second & 0xfffff != 0x28293
+                or third != 0x28067 or address != register['st_value']):
+            raise ValueError('callback registration veneer does not forward to ROM')
+        mutations.append(section['sh_offset'] + offset + 2)
+        report['registration_veneer'] = {'target': 'frw_rom_cb_register', 'address': address,
+            'bytes': 12, 'sys_thunk_bytes': 10, 'rom_address': 0x128d4a}
+
+        # The normalized vendor initializer loads this callback address using
+        # 48-bit LLUI a1, then li a0,249. Verify the actual pointer relocation;
+        # merely retaining an unused wrapper symbol is not registration. The
+        # free function is STB_LOCAL; its pointer must remain native and the
+        # registration call must route through our capturing wrapper.
+        initializer, section, offset = physical('dmac_main_rom_cb_base_init_before_frw_init')
+        code = section.data()[offset:offset + initializer['st_size']]
+        free = symbol('oal_mem_netbuf_free_from_ram')
+        if free['st_info']['bind'] != 'STB_LOCAL':
+            raise ValueError('unexpected native free symbol visibility')
+        free_address = free['st_value']
+        registration = b'\x9f\x05' + struct.pack('<II', free_address, 0x0f900513)
+        if code.count(registration) != 1:
+            raise ValueError('native callback 249 does not supply the original free function')
+        site = code.index(registration)
+        mutations.append(section['sh_offset'] + offset + site + 2)
+        physical(FREE_OBSERVER)
+        physical('__hisi_net0_original_free', 4)
+        report['free_registration'] = {'callback': 249, 'original': 'oal_mem_netbuf_free_from_ram',
+            'observer': FREE_OBSERVER, 'registration_wrapper': REGISTER_WRAPPER,
+            'address': initializer['st_value'] + site,
+            'original_pointer_bytes': 4,
+            'boundary': 'Captured callback pointer; free attempt only; runtime also requires callback 250 to be null'}
+
         # The existing sys-generated 37-entry table, not a new ROM patch.
         patch = elf.get_section_by_name('.patch')
         if patch is None:
@@ -94,15 +142,15 @@ def inspect(path):
                                       'replacement_address': replacement['st_value'], 'index': index})
             mutations.extend([patch['sh_offset'] + compare_offset + 12 + 4 * index, patch['sh_offset'] + offset])
 
-        item, section, offset = physical('__hisi_net0_rx_origins', 368)
+        item, section, offset = physical('__hisi_net0_rx_origins', 384)
         if section['sh_flags'] & 3 != 3 or item['st_info']['type'] != 'STT_OBJECT':
             raise ValueError('origin metadata must occupy physical writable storage')
         report['metadata'] = {'bytes': item['st_size'], 'slots': 16,
                               'address': item['st_value'], 'section': section.name,
-                              'packet_payload_bytes': 0}
+                              'packet_payload_bytes': 0, 'original_pointer_bytes': 4}
         report['mutation_offsets'] = mutations
-    report.update(schema='net0-rx-origin-link/v1',
-                  boundary='Resolved pre-publication descriptor hook and ROM patch destinations only; coverage, pointer identity and generation propagation require HIL; no reconnect permission')
+    report.update(schema='net0-rx-origin-link/v2',
+                  boundary='Resolved descriptor hook, free-attempt observer registration and ROM patch destinations only; coverage and generation propagation require HIL; no free/DMA/reconnect receipt')
     return report
 
 

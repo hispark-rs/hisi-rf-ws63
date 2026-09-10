@@ -18,7 +18,11 @@ pub(crate) fn install_host_delivery_observer() -> Result<(), u32> {
     // Bootstrap has initialized FRW, and no station operation has been issued.
     // The audited ROM get/set functions are bounded RAM-table load/store only:
     // no hardware polling, allocation, delivery, or user callback occurs here.
-    critical_section::with(|_| {
+    critical_section::with(|cs| {
+        #[cfg(feature = "standard-l2-rx-origin-experiment")]
+        super::rx_origin::native::validate_free_route(cs)?;
+        #[cfg(not(feature = "standard-l2-rx-origin-experiment"))]
+        let _ = cs;
         // SAFETY: slot 261 and the receiver ABI belong to the pinned sys
         // contract. Compare the actual linked receiver, not an image address.
         let current = unsafe { frw_get_rom_cb(RX_NETBUF_CALLBACK_ID) };

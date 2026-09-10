@@ -234,6 +234,26 @@ def main():
         run(origin_build, app)
         if origin.inspect(elf)["edges"] != origin_report["edges"]:
             raise ValueError("restored descriptor metadata changed native call routing")
+        attribute = '    #[link(kind = "link-arg", name = "--wrap=frw_rom_cb_register")]\n'
+        if altered.count(attribute) != 1:
+            raise ValueError("expected exactly one callback-registration native-link attribute")
+        try:
+            hook.write_text(altered.replace(attribute, ""), encoding="utf-8", newline="\n")
+            # As for the descriptor hook, LTO/GC can discard the wrapper and
+            # its __real reference when registration never points to it.
+            # Linking alone is not proof that native free is observed.
+            run(origin_build, app)
+            try:
+                origin.inspect(elf)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("free registration hook disappeared but the final-ELF contract accepted it")
+        finally:
+            hook.write_bytes(original)
+        run(origin_build, app)
+        if origin.inspect(elf)["edges"] != origin_report["edges"]:
+            raise ValueError("restored registration metadata changed native call routing")
         result = {"schema": "net0-transitive-consumer/v1", "status": "pass",
                   "harness_sha256": sha(Path(__file__)),
                   "package_sha256": sha(package), "package_bytes": package.stat().st_size,
@@ -248,6 +268,7 @@ def main():
                   "missing_rx_mode_metadata_rejected": True,
                   "rx_origin_link_verified": True,
                   "missing_rx_origin_metadata_rejected": True,
+                  "missing_free_registration_metadata_rejected": True,
                   "boundary": "Packaged path dependency and final-call/resource checks, not crates.io-only facade or HIL acceptance"}
         (output / "consumer.json").write_text(json.dumps(result, indent=2) + "\n")
         for name in ("Cargo.toml", "Cargo.lock"):
