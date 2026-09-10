@@ -100,3 +100,11 @@ consumer with plain offline Cargo in a space/Unicode path, validates actual
 cleanup calls and physical storage, and rejects removal of the metadata. The
 consumer has no build script. This gate is not a crates.io-only facade release
 test, byte-identical firmware guarantee, or native-fence/HIL acceptance.
+
+`standard-l2-rx-origin-experiment` is an observation-only maintainer lane. It
+correlates the existing patched RX descriptor allocator with the earlier native
+host callback using 368 bytes of fixed metadata. Unknown/replaced identities,
+closed/stale origins and capacity exhaustion remain visible; no observation
+authorizes packet admission or reconnect. The final-ELF checker verifies the
+existing ROM patch destinations and the real forwarded descriptor call, not
+merely the presence of a wrapper symbol. Native buffer ownership is unchanged.

@@ -28,6 +28,19 @@ mod device;
 pub use device::{WifiDevice, WifiRxToken, WifiTxToken};
 mod host_delivery;
 pub use host_delivery::HostDeliveryDiagnostics;
+#[cfg(feature = "standard-l2-rx-origin-experiment")]
+mod rx_origin;
+#[cfg(feature = "standard-l2-rx-origin-experiment")]
+pub use rx_origin::RxOriginDiagnostics;
+#[cfg(all(
+    target_arch = "riscv32",
+    feature = "wifi",
+    feature = "standard-l2-rx-origin-experiment"
+))]
+#[doc(hidden)]
+pub fn native_rx_origin_diagnostics() -> RxOriginDiagnostics {
+    rx_origin::native::diagnostics()
+}
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
 pub(crate) mod host_tx;
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]

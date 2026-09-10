@@ -1025,6 +1025,34 @@ fn write_metric(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, prefix: &[u8]
 
 #[cfg(feature = "standard-l2")]
 fn write_native_host_delivery(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'_>>, phase: &[u8]) {
+    #[cfg(feature = "standard-l2-rx-origin-experiment")]
+    {
+        let d = hisi_rf_ws63::netif_l2::native_rx_origin_diagnostics();
+        uart.write(b"RFDBG_NET0_RX_ORIGIN phase=");
+        uart.write(phase);
+        for (label, value) in [
+            (b" bindings=0x".as_slice(), d.bindings),
+            (b" failed=0x".as_slice(), d.failed_bindings),
+            (b" replaced=0x".as_slice(), d.replaced),
+            (b" capacity=0x".as_slice(), d.capacity_failures),
+            (b" matched=0x".as_slice(), d.matched),
+            (b" unmatched=0x".as_slice(), d.unmatched),
+            (b" closed=0x".as_slice(), d.closed_origin),
+            (b" current=0x".as_slice(), d.current_origin),
+            (b" stale=0x".as_slice(), d.stale_origin),
+            (b" occupied=0x".as_slice(), d.occupied as u64),
+            (b" peak=0x".as_slice(), d.peak as u64),
+        ] {
+            uart.write(label);
+            uart.write(&hex8((value >> 32) as u32));
+            uart.write(&hex8(value as u32));
+        }
+        uart.write(if d.exhausted {
+            b" exhausted=1\r\n"
+        } else {
+            b" exhausted=0\r\n"
+        });
+    }
     let d = hisi_rf_ws63::netif_l2::native_host_delivery_diagnostics();
     uart.write(b"RFDBG_NET0_HOST_DELIVERY phase=");
     uart.write(phase);

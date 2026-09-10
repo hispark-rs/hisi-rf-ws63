@@ -211,6 +211,8 @@ standard-l2 = ["hisi-rf-core/embassy-net-driver", "dep:embassy-net-driver"]
 standard-l2-initial-session-experiment = ["standard-l2", "incremental-embassy-wait"]
 # Terminal native RX stop/rebuild/cleanup after checked disconnect; no reopen.
 standard-l2-rx-stop-experiment = ["standard-l2-initial-session-experiment"]
+# Read-only descriptor-origin census; does not authorize reconnect/admission.
+standard-l2-rx-origin-experiment = ["standard-l2-initial-session-experiment"]
 # Maintainer negative HIL only: release real resources, then report a scoped
 # native resource-free failure. Never selected by a public radio profile.
 standard-l2-cleanup-fault-injection = ["standard-l2-initial-session-experiment", "firmware-example"]

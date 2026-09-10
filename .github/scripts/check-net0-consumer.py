@@ -205,6 +205,26 @@ def main():
         run(build + ["--features", "standard-l2-rx-stop-experiment"], app)
         if rx_mode.inspect(elf)["edges"] != mode_report["edges"]:
             raise ValueError("restored RX-mode metadata changed the producer call routing")
+        origin_build = build + ["--features", "standard-l2-rx-origin-experiment"]
+        run(origin_build, app)
+        origin = load_checker("check-net0-rx-origin")
+        origin_report = origin.inspect(elf)
+        origin_report["rejected_mutations"] = origin.tamper(elf)
+        (output / "rx-origin.json").write_text(json.dumps(origin_report, indent=2) + "\n")
+        hook = backend / "src/netif_l2/rx_origin.rs"
+        original = hook.read_bytes()
+        attribute = '    #[link(kind = "link-arg", name = "--wrap=hh503_rx_set_ctrl_dscr")]\n'
+        altered = original.decode("utf-8").replace("\r\n", "\n")
+        if altered.count(attribute) != 1:
+            raise ValueError("expected exactly one descriptor native-link attribute")
+        try:
+            hook.write_text(altered.replace(attribute, ""), encoding="utf-8", newline="\n")
+            run(origin_build, app, expected_failure=True, missing_symbols=("hh503_rx_set_ctrl_dscr",))
+        finally:
+            hook.write_bytes(original)
+        run(origin_build, app)
+        if origin.inspect(elf)["edges"] != origin_report["edges"]:
+            raise ValueError("restored descriptor metadata changed native call routing")
         result = {"schema": "net0-transitive-consumer/v1", "status": "pass",
                   "harness_sha256": sha(Path(__file__)),
                   "package_sha256": sha(package), "package_bytes": package.stat().st_size,
@@ -217,6 +237,8 @@ def main():
                   "rx_stop_experiment_link_verified": True,
                   "direct_rx_link_verified": True,
                   "missing_rx_mode_metadata_rejected": True,
+                  "rx_origin_link_verified": True,
+                  "missing_rx_origin_metadata_rejected": True,
                   "boundary": "Packaged path dependency and final-call/resource checks, not crates.io-only facade or HIL acceptance"}
         (output / "consumer.json").write_text(json.dumps(result, indent=2) + "\n")
         for name in ("Cargo.toml", "Cargo.lock"):

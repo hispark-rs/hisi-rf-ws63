@@ -54,6 +54,8 @@ fn installation_action(current: usize, expected: usize, observer: usize) -> Resu
 
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 unsafe extern "C" fn host_delivery_callback(netbuf: *mut core::ffi::c_void, length: u32) -> u32 {
+    #[cfg(feature = "standard-l2-rx-origin-experiment")]
+    super::rx_origin::native::observe_delivery(netbuf);
     super::NATIVE_RX_ROUTE.observe_host_delivery(|| {
         // SAFETY: callback 261 transfers the vendor-owned netbuf and full u32
         // length. Forward exactly once, including closed L2/error cases. The

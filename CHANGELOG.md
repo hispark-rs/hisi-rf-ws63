@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add the opt-in `standard-l2-rx-origin-experiment`: observe the pinned
+  pre-publication descriptor/netbuf binding and correlate its immutable close
+  revision with callback 261. The bounded 16-slot census occupies 368 bytes,
+  reports replacement, missing coverage and overflow, and never changes native
+  allocation/free or packet admission. Verify the final ROM patch routing,
+  forwarding veneer and transitive linker metadata. This does not propagate
+  provenance into host copies or enable reconnect.
 - Extend the terminal NET0 RX experiment with a checked native descriptor
   rebuild/cleanup round-trip. Require unchanged configuration and exact counts
   for normal/high/small queues; partial allocation is failure even when the

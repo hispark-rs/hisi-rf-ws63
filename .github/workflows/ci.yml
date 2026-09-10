@@ -49,6 +49,9 @@ jobs:
       - name: Test the bounded one-shot native RX stop experiment
         run: cargo test --locked --lib --no-default-features --features wpa2-personal,standard-l2-rx-stop-experiment
       - run: cargo clippy --locked --lib --tests --no-default-features --features wpa2-personal,standard-l2-rx-stop-experiment -- -D warnings
+      - name: Test bounded descriptor-origin observations (not admission)
+        run: cargo test --locked --lib --no-default-features --features wpa2-personal,standard-l2-rx-origin-experiment
+      - run: cargo clippy --locked --lib --tests --no-default-features --features wpa2-personal,standard-l2-rx-origin-experiment -- -D warnings
       - run: cargo check '-Zbuild-std=core,alloc' --locked --target riscv32imfc-unknown-none-elf --lib --no-default-features --features standard-l2
 
   l2-miri:
@@ -79,6 +82,10 @@ jobs:
         run: >-
           cargo miri test --locked --lib --no-default-features
           --features wpa2-personal,standard-l2-rx-stop-experiment netif_l2::rx_stop
+      - name: Interpret descriptor identity reuse and epoch observations
+        run: >-
+          cargo miri test --locked --lib --no-default-features
+          --features wpa2-personal,standard-l2-rx-origin-experiment netif_l2::rx_origin
 
   feature-gates:
     runs-on: ubuntu-latest
@@ -309,6 +316,10 @@ jobs:
         run: uv run --script .github/scripts/check-net0-rx-stop.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-stop-link.json
       - name: Verify direct RX rejection and native payload ownership
         run: uv run --script .github/scripts/check-net0-rx-mode.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-mode-link.json
+      - name: Link the descriptor-origin observation experiment
+        run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-rx-origin-experiment,incremental-connect-profile,bootstrap-stage-diag,firmware-example
+      - name: Verify the descriptor hook, ROM patches and negative mutations
+        run: uv run --script .github/scripts/check-net0-rx-origin.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-origin-link.json
       - name: Verify packaged NET0 external consumer and transitive native metadata
         run: uv run --script .github/scripts/check-net0-consumer.py --output net0-external-consumer
       - uses: actions/upload-artifact@v4
@@ -327,6 +338,7 @@ jobs:
             net0-cleanup-fault-link.json
             net0-rx-stop-link.json
             net0-rx-mode-link.json
+            net0-rx-origin-link.json
           if-no-files-found: error
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-cancel-profile,bootstrap-stage-diag,firmware-example
