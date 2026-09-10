@@ -15,6 +15,32 @@ const QUEUED_RX: i32 = -0x1024;
 const DEADLINE_MS: u64 = 1_000;
 const COMMAND: [u32; 2] = [0x3058_524e, 1]; // NRX0, one non-reusable boot ticket
 
+#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
+#[derive(Clone, Copy)]
+enum Checkpoint {
+    Entered,
+    Disabled,
+    Destroyed,
+    Initialized,
+    Cleaned,
+    Finished,
+    Posted,
+    Observed,
+}
+
+/// Milliseconds since request, in handler-entry/disable/destroy/initialize/
+/// cleanup/finish/post-return/waiter-result order. `u32::MAX` means unobserved
+/// or unrepresentable, never zero elapsed. These are wall-time observations,
+/// not CPU-time measurements or a replacement for the transaction deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RxStopTimings(pub [u32; 8]);
+
+impl Default for RxStopTimings {
+    fn default() -> Self {
+        Self([u32::MAX; 8])
+    }
+}
+
 fn same_worker(expected: u32, current: Option<u32>) -> bool {
     expected != 0 && expected != u32::MAX && current == Some(expected)
 }
@@ -43,6 +69,7 @@ pub struct RxStopDiagnostics {
     pub expected_task: u32,
     pub current_task: u32,
     pub rebuild: RxRebuildDiagnostics,
+    pub timings: RxStopTimings,
 }
 
 struct Transaction {
@@ -81,6 +108,7 @@ impl Transaction {
                     cleanup_status: 0,
                     fault: 0,
                 },
+                timings: RxStopTimings([u32::MAX; 8]),
             },
         }
     }
@@ -123,7 +151,18 @@ impl Transaction {
         Ok(())
     }
 
+    fn observe(&mut self, checkpoint: Checkpoint, now: Option<u64>) {
+        let value = &mut self.diagnostic.timings.0[checkpoint as usize];
+        if self.diagnostic.requested && *value == u32::MAX {
+            *value = now
+                .and_then(|now| now.checked_sub(self.started_ms))
+                .and_then(|elapsed| u32::try_from(elapsed).ok())
+                .unwrap_or(u32::MAX);
+        }
+    }
+
     fn enter_at(&mut self, now: Option<u64>) -> Result<(), i32> {
+        self.observe(Checkpoint::Entered, now);
         self.check_deadline(now)?;
         self.enter()
     }
@@ -135,6 +174,7 @@ impl Transaction {
     fn finish_at(&mut self, now: Option<u64>, before: u8, after: u8, empty: u8, status: i32) {
         // Preserve observations even when an uninterruptible native call has
         // returned late. Its successful status cannot override the deadline.
+        self.observe(Checkpoint::Finished, now);
         let _ = self.check_deadline(now);
         self.finish(before, after, empty, status);
     }
@@ -142,8 +182,11 @@ impl Transaction {
     fn result_at(&mut self, now: Option<u64>) -> Result<bool, i32> {
         // Check time before checking completion: the waiter may not have run
         // at all while native code held IRQs or monopolized the device worker.
-        self.check_deadline(now)?;
-        self.result()
+        let result = self.check_deadline(now).and_then(|()| self.result());
+        if result != Ok(false) {
+            self.observe(Checkpoint::Observed, now);
+        }
+        result
     }
 
     fn enter(&mut self) -> Result<(), i32> {
@@ -218,7 +261,12 @@ mod native {
 
     #[unsafe(export_name = "__hisi_net0_rx_stop_transaction")]
     static STATE: Mutex<RefCell<Transaction>> = Mutex::new(RefCell::new(Transaction::new()));
-    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 80);
+    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 112);
+
+    fn observe(checkpoint: Checkpoint) {
+        let now = crate::uapi::try_monotonic_ms();
+        critical_section::with(|cs| STATE.borrow_ref_mut(cs).observe(checkpoint, now));
+    }
 
     // Stock lld's CALL against these SHN_ABS assignments does not produce a
     // usable PC-relative call. Ordinary HI20/LO12_I veneers preserve the linker
@@ -354,7 +402,9 @@ mod native {
         fn initialize(&mut self) -> i32 {
             // SAFETY: original handler ABI on the device worker with disabled
             // MAC and empty lists. Its zero return does not mean full allocation.
-            unsafe { hal_dev_fsm_init_rx_dscr(self.vap, self.msg) }
+            let status = unsafe { hal_dev_fsm_init_rx_dscr(self.vap, self.msg) };
+            observe(Checkpoint::Initialized);
+            status
         }
 
         #[inline(always)]
@@ -366,7 +416,9 @@ mod native {
         #[inline(always)]
         fn destroy(&mut self) -> i32 {
             // SAFETY: probe rechecks disabled MAC before this cleanup call.
-            unsafe { hal_dev_fsm_destroy_rx_dscr(self.vap, self.msg) }
+            let status = unsafe { hal_dev_fsm_destroy_rx_dscr(self.vap, self.msg) };
+            observe(Checkpoint::Cleaned);
+            status
         }
     }
 
@@ -448,7 +500,12 @@ mod native {
         // Receipt state has static lifetime even after timeout. Native device
         // processing (and its ROM IRQ-masked teardown) runs in the FRW worker.
         let status = unsafe { frw_send_msg_to_device(0, MESSAGE, &mut msg, 0) };
-        critical_section::with(|cs| STATE.borrow_ref_mut(cs).post_returned(status));
+        let now = crate::uapi::try_monotonic_ms();
+        critical_section::with(|cs| {
+            let mut state = STATE.borrow_ref_mut(cs);
+            state.observe(Checkpoint::Posted, now);
+            state.post_returned(status);
+        });
         loop {
             let now = crate::uapi::try_monotonic_ms();
             if critical_section::with(|cs| STATE.borrow_ref_mut(cs).result_at(now))? {
@@ -506,12 +563,14 @@ mod native {
         // original destroy deliberately skips work while MAC is enabled.
         let before = unsafe { hal_is_machw_enabled() };
         unsafe { hal_disable_machw_phy_and_pa() };
+        observe(Checkpoint::Disabled);
         let disabled = unsafe { hal_is_machw_enabled() };
         let status = if disabled == 0 {
             unsafe { hal_dev_fsm_destroy_rx_dscr(vap, msg) }
         } else {
             MAC_ENABLED
         };
+        observe(Checkpoint::Destroyed);
         let after = unsafe { hal_is_machw_enabled() };
         let device = unsafe { hal_chip_get_hal_device() };
         if device.is_null() {
@@ -560,6 +619,52 @@ mod tests {
         let mut t = Transaction::new();
         t.diagnostic.installed = true;
         t
+    }
+
+    #[test]
+    fn timing_distinguishes_late_worker_from_late_waiter_without_extending_deadline() {
+        for late_worker in [false, true] {
+            let mut t = installed();
+            t.request_at(10).unwrap();
+            t.observe(Checkpoint::Posted, Some(11));
+            t.post_returned(0);
+            t.enter_at(Some(12)).unwrap();
+            t.observe(Checkpoint::Disabled, Some(13));
+            t.observe(Checkpoint::Destroyed, Some(14));
+            t.observe(Checkpoint::Initialized, Some(15));
+            t.observe(Checkpoint::Cleaned, Some(16));
+            let finished = if late_worker { 1_010 } else { 17 };
+            t.finish_at(Some(finished), 1, 0, 1, 0);
+            assert_eq!(t.result_at(Some(1_011)), Err(TIMEOUT));
+            assert_eq!(
+                t.diagnostic.timings.0,
+                [2, 3, 4, 5, 6, (finished - 10) as u32, 1, 1_001]
+            );
+            assert!(t.diagnostic.returned);
+            assert_eq!(t.diagnostic.native_status, 0);
+        }
+    }
+
+    #[test]
+    fn timing_preserves_first_observation_and_does_not_treat_missing_as_zero() {
+        let mut t = installed();
+        t.observe(Checkpoint::Posted, Some(0));
+        assert_eq!(t.diagnostic.timings, RxStopTimings::default());
+        t.request_at(10).unwrap();
+        for now in [None, Some(9), Some(u64::MAX)] {
+            t.observe(Checkpoint::Disabled, now);
+            assert_eq!(t.diagnostic.timings.0[1], u32::MAX);
+        }
+        t.observe(Checkpoint::Posted, Some(10));
+        t.observe(Checkpoint::Posted, Some(15));
+        assert_eq!(t.diagnostic.timings.0[6], 0);
+        assert_eq!(t.result_at(Some(11)), Ok(false));
+        assert_eq!(t.diagnostic.timings.0[7], u32::MAX);
+        t.fail(QUEUED_RX);
+        assert_eq!(t.result_at(Some(12)), Err(QUEUED_RX));
+        assert_eq!(t.result_at(Some(13)), Err(QUEUED_RX));
+        assert_eq!(t.diagnostic.timings.0[7], 2);
+        assert_eq!(core::mem::size_of::<RxStopTimings>(), 32);
     }
 
     #[test]

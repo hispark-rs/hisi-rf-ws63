@@ -61,7 +61,7 @@ pub(crate) mod rx_stop;
     feature = "wifi",
     feature = "standard-l2-rx-stop-experiment"
 ))]
-pub use rx_stop::{RxRebuildDiagnostics, RxStopDiagnostics};
+pub use rx_stop::{RxRebuildDiagnostics, RxStopDiagnostics, RxStopTimings};
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
 pub(crate) mod user_cleanup;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]

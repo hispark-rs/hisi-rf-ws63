@@ -768,6 +768,7 @@ fn write_user_cleanup_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'
             ],
         );
         let r = d.rebuild;
+        write_snapshot(uart, b"RFDBG_NET0_RX_STOP_MS", &d.timings.0);
         write_snapshot(
             uart,
             b"RFDBG_NET0_RX_REBUILD",

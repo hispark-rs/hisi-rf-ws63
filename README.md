@@ -116,3 +116,17 @@ of a wrapper symbol. Runtime validation rejects a missing original callback or
 a callback 250 that could bypass the observer. Native buffer ownership is unchanged.
 The [native-free observation contract](docs/net0-native-free-observation.md)
 records the ABI/oracle sources and the boundary of this census.
+
+The default-off `standard-l2-rx-stop-experiment` records eight bounded
+wall-time checkpoints in `RFDBG_NET0_RX_STOP_MS`: device-handler entry, MAC
+disable return, first descriptor destroy return, reconstruction return,
+reconstruction cleanup return, handler finish, message-post return, and the
+waiter's terminal result. Each word is milliseconds since the request;
+`0xffffffff` means absent or unrepresentable, not zero. Post and worker
+checkpoints need not be ordered with respect to one another. Measurements
+include preemption; they do not claim exclusive native-call CPU time.
+
+This adds 32 bytes to the checked 112-byte stop-transaction object. No UART is
+written by the measured handler, and the existing 1,000 ms deadline is unchanged.
+A late waiter still fails even if the native handler returned zero earlier.
+The marker is diagnostic evidence, not a successful DMA/host-queue fence.
