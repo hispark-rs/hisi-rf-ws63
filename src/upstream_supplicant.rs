@@ -2991,6 +2991,10 @@ fn prepare_association_host_tx() -> Result<(), i32> {
     // One atomic ownership decision across the disconnect, user and host-TX
     // trackers. Only bounded RAM bookkeeping runs here, never WAL/MMIO/wait.
     critical_section::with(|cs| {
+        #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
+        if crate::netif_l2::rx_mode::rejected() {
+            return Err(crate::netif_l2::rx_mode::UNSUPPORTED_QUEUED_RX);
+        }
         match DEAUTH_QUEUE.borrow_ref(cs).poll_idle() {
             Ok(core::task::Poll::Ready(())) => {}
             Ok(core::task::Poll::Pending) => return Err(deauth::Error::Busy.status()),

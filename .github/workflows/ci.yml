@@ -71,6 +71,10 @@ jobs:
           cargo miri test --locked --lib --no-default-features
           --features wpa2-personal,smoltcp,incremental-backend-experiment,incremental-embassy-wait,standard-l2
           upstream_supplicant::tests::net0_
+      - name: Interpret queued-RX rejection and session closure
+        run: >-
+          cargo miri test --locked --lib --no-default-features
+          --features wpa2-personal,standard-l2-rx-stop-experiment netif_l2::rx_mode
 
   feature-gates:
     runs-on: ubuntu-latest
@@ -299,6 +303,8 @@ jobs:
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,standard-l2-rx-stop-experiment,incremental-connect-profile,bootstrap-stage-diag,firmware-example
       - name: Verify actual RX stop calls and reject wrong-address veneers
         run: uv run --script .github/scripts/check-net0-rx-stop.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-stop-link.json
+      - name: Verify direct RX rejection and native payload ownership
+        run: uv run --script .github/scripts/check-net0-rx-mode.py --elf target/riscv32imfc-unknown-none-elf/release/examples/incremental_scan_profile --tamper-test --output net0-rx-mode-link.json
       - name: Verify packaged NET0 external consumer and transitive native metadata
         run: uv run --script .github/scripts/check-net0-consumer.py --output net0-external-consumer
       - uses: actions/upload-artifact@v4
@@ -316,6 +322,7 @@ jobs:
             net0-host-tx-link.json
             net0-cleanup-fault-link.json
             net0-rx-stop-link.json
+            net0-rx-mode-link.json
           if-no-files-found: error
       - name: Link the credential-free incremental cancellation profiler with stock rust-lld
         run: cargo build '-Zbuild-std=core,alloc' --locked --release --target riscv32imfc-unknown-none-elf --example incremental_scan_profile --features wpa2-personal,incremental-backend-experiment,incremental-embassy-wait,incremental-cancel-profile,bootstrap-stage-diag,firmware-example

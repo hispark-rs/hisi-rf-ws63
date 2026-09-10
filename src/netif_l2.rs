@@ -30,6 +30,8 @@ mod host_delivery;
 pub use host_delivery::HostDeliveryDiagnostics;
 #[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
 pub(crate) mod host_tx;
+#[cfg(any(test, all(target_arch = "riscv32", feature = "wifi")))]
+pub(crate) mod rx_mode;
 #[cfg(all(target_arch = "riscv32", feature = "wifi"))]
 pub use host_tx::HostTxDiagnostics;
 #[cfg(any(

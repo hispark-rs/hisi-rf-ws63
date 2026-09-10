@@ -72,11 +72,33 @@ consumer needs no external compiler, post-link script, or custom linker.
 ## Remaining Gates
 
 This establishes only a correlated **immediate stop observation**. Native RX
-message 595, callbacks already running, DMA/descriptor visibility, DMAC user
+callbacks already running, DMA/descriptor visibility, DMAC user
 free status, autonomous native re-enable, and bounded descriptor reinitialization
 remain separate gates. Reading throughput flag 18 twice is not proof it was
 never previously enabled. No `NativeFence` or reopen capability is produced.
 After terminal stop, the one-shot L2 route and host TX stay closed for this boot.
+
+### Direct RX Profile
+
+`standard-l2` rejects the optional host-queued RX path from boot with a native
+link wrapper on `frw_host_post_msg`. Message 595 closes Rust L2 admission and
+sets a sticky, one-byte fault before returning native status 103. The pinned
+`hmac_rx_data_event_adapt` owns and frees the rejected netbuf; the wrapper never
+reads, retains or frees its payload. Other messages forward unchanged, including
+the message-597 TID notifications. The sticky fault blocks later handshake TX
+admission and terminal stop even if throughput flag 18 is subsequently cleared.
+No additional packet storage or second RX queue is introduced.
+
+The source oracle is the `frw_thread.h` post ABI and the SDK disassembly of
+`hmac_rx_data_event_adapt`, bound to the published radio artifact dependency.
+`check-net0-rx-mode.py` verifies all three non-relaxed native direct call sites,
+the unchanged direct-RX call, the free-on-103 branch, wrapper forwarding and
+physical fault storage. Removing a call or changing message/ownership bytes
+must fail. Three-host external-consumer CI also removes the RX wrapper's native
+link metadata and requires an undefined-real-symbol failure, then restores it.
+This bounds the selected native direct-call path, not arbitrary indirect calls
+or DMA lifetime. Unsupported throughput modes are not a production feature;
+the actual target rejection and normal traffic still require separate HIL.
 
 Host tests cover both return orders, timeout before/during dispatch, duplicate
 receipts, zero-return/no-op, enqueue errors, and nonreuse. The production

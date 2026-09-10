@@ -263,7 +263,7 @@ mod native {
     fn stop_and_wait() -> Result<(), i32> {
         // This branch has an additional native host queue; never call the
         // direct-path observation a complete drain in this experiment.
-        if unsafe { hmac_is_thruput_enable(18) } != 0 {
+        if super::super::rx_mode::rejected() || unsafe { hmac_is_thruput_enable(18) } != 0 {
             return Err(QUEUED_RX);
         }
         let started = crate::uapi::try_monotonic_ms().ok_or(CONTRACT)?;
@@ -327,7 +327,7 @@ mod native {
         if !same_worker(device_task, current) {
             return critical_section::with(|cs| STATE.borrow_ref_mut(cs).fail(CONTRACT));
         }
-        if unsafe { hmac_is_thruput_enable(18) } != 0 {
+        if super::super::rx_mode::rejected() || unsafe { hmac_is_thruput_enable(18) } != 0 {
             return critical_section::with(|cs| STATE.borrow_ref_mut(cs).fail(QUEUED_RX));
         }
         // SAFETY: exact SDK void()/u8() ABI; called by the device worker with

@@ -98,13 +98,13 @@ def main():
         "WS63_WIFI_SSID", "WS63_WIFI_PASSPHRASE")}
     env["CARGO_NET_OFFLINE"] = "true"
 
-    def run(command, cwd, expected_failure=False):
+    def run(command, cwd, expected_failure=False, missing_symbols=SYMBOLS):
         result = subprocess.run(command, cwd=cwd, env=env, capture_output=True,
                                 text=True, encoding="utf-8", errors="replace")
         if expected_failure:
             if result.returncode == 0 or not all(
-                    f"undefined symbol: __real_{name}" in result.stderr for name in SYMBOLS):
-                raise RuntimeError("missing-metadata fixture did not fail at both native aliases\n" + result.stderr)
+                    f"undefined symbol: __real_{name}" in result.stderr for name in missing_symbols):
+                raise RuntimeError("missing-metadata fixture did not fail at the required native aliases\n" + result.stderr)
         elif result.returncode:
             raise RuntimeError("Cargo consumer gate failed\n" + result.stdout + result.stderr)
         return result
@@ -186,6 +186,25 @@ def main():
         rx_report = rx_stop.inspect(elf)
         rx_report["rejected_call_and_address_mutations"] = rx_stop.tamper(elf)
         (output / "rx-stop.json").write_text(json.dumps(rx_report, indent=2) + "\n")
+        rx_mode = load_checker("check-net0-rx-mode")
+        mode_report = rx_mode.inspect(elf)
+        mode_report["rejected_mutations"] = rx_mode.tamper(elf)
+        (output / "rx-mode.json").write_text(json.dumps(mode_report, indent=2) + "\n")
+        hook = backend / "src/netif_l2/rx_mode.rs"
+        original = hook.read_bytes()
+        attribute = '    #[link(kind = "link-arg", name = "--wrap=frw_host_post_msg")]\n'
+        altered = original.decode("utf-8").replace("\r\n", "\n")
+        if altered.count(attribute) != 1:
+            raise ValueError("expected exactly one RX-mode native-link attribute")
+        try:
+            hook.write_text(altered.replace(attribute, ""), encoding="utf-8", newline="\n")
+            run(build + ["--features", "standard-l2-rx-stop-experiment"], app,
+                expected_failure=True, missing_symbols=("frw_host_post_msg",))
+        finally:
+            hook.write_bytes(original)
+        run(build + ["--features", "standard-l2-rx-stop-experiment"], app)
+        if rx_mode.inspect(elf)["edges"] != mode_report["edges"]:
+            raise ValueError("restored RX-mode metadata changed the producer call routing")
         result = {"schema": "net0-transitive-consumer/v1", "status": "pass",
                   "harness_sha256": sha(Path(__file__)),
                   "package_sha256": sha(package), "package_bytes": package.stat().st_size,
@@ -196,6 +215,8 @@ def main():
                   "space_unicode_path": True, "consumer_build_script": False,
                   "consumer_wrap_flags": False,
                   "rx_stop_experiment_link_verified": True,
+                  "direct_rx_link_verified": True,
+                  "missing_rx_mode_metadata_rejected": True,
                   "boundary": "Packaged path dependency and final-call/resource checks, not crates.io-only facade or HIL acceptance"}
         (output / "consumer.json").write_text(json.dumps(result, indent=2) + "\n")
         for name in ("Cargo.toml", "Cargo.lock"):

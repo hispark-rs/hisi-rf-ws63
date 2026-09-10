@@ -1166,6 +1166,10 @@ pub fn force_link_contract() {
             netif_l2::user_cleanup::delete as unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32
         );
         keep!(netif_l2::user_cleanup::free as unsafe extern "C" fn(u16) -> u32);
+        keep!(
+            netif_l2::rx_mode::post_message
+                as unsafe extern "C" fn(u16, u8, u8, *mut frw::FrwMsg) -> i32
+        );
     }
 
     #[cfg(all(feature = "rf-eloop-diag", target_arch = "riscv32"))]
