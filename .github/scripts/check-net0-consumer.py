@@ -219,7 +219,16 @@ def main():
             raise ValueError("expected exactly one descriptor native-link attribute")
         try:
             hook.write_text(altered.replace(attribute, ""), encoding="utf-8", newline="\n")
-            run(origin_build, app, expected_failure=True, missing_symbols=("hh503_rx_set_ctrl_dscr",))
+            # Without the wrapper edge, GC can discard the unreferenced veneer
+            # and its __real alias, so a successful link is not acceptance.
+            # Require the final-ELF contract to detect the missing real edge.
+            run(origin_build, app)
+            try:
+                origin.inspect(elf)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("descriptor hook disappeared but the final-ELF contract accepted it")
         finally:
             hook.write_bytes(original)
         run(origin_build, app)
