@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Extend the terminal NET0 RX experiment with a checked native descriptor
+  rebuild/cleanup round-trip. Require unchanged configuration and exact counts
+  for normal/high/small queues; partial allocation is failure even when the
+  native initializer returns zero. Always attempt checked cleanup, retain its
+  separate status, and leave application admission sealed. Bind the added ROM
+  calls and 68-byte receipt in the final-ELF gate. This is not a DMA fence or
+  reconnect capability.
 - Share the NET0 bootstrap/traffic fixtures' physical storage declaration and
   versioned target descriptor. Validate both final incremental ELF variants,
   including separate RF/runtime arena sizes, containment and non-overlap; reject

@@ -4,6 +4,9 @@
 //! receipt. A disabled MAC plus empty software descriptor lists does not prove
 //! DMA/queued host RX drainage. Reopening remains forbidden.
 
+mod rebuild;
+pub use rebuild::RxRebuildDiagnostics;
+
 const CONTRACT: i32 = -0x1020;
 const TIMEOUT: i32 = -0x1021;
 const MAC_ENABLED: i32 = -0x1022;
@@ -38,6 +41,7 @@ pub struct RxStopDiagnostics {
     pub fault: i32,
     pub expected_task: u32,
     pub current_task: u32,
+    pub rebuild: RxRebuildDiagnostics,
 }
 
 struct Transaction {
@@ -62,6 +66,18 @@ impl Transaction {
                 fault: 0,
                 expected_task: 0,
                 current_task: 0,
+                rebuild: RxRebuildDiagnostics {
+                    expected: [0; 3],
+                    actual: [0; 3],
+                    cleaned: [0; 3],
+                    mac_after_init: 0xff,
+                    mac_after_cleanup: 0xff,
+                    attempted: false,
+                    cleanup_attempted: false,
+                    init_status: 0,
+                    cleanup_status: 0,
+                    fault: 0,
+                },
             },
         }
     }
@@ -89,6 +105,10 @@ impl Transaction {
         self.phase = Phase::Executing;
         self.diagnostic.entered = true;
         Ok(())
+    }
+
+    fn may_rebuild(&self) -> bool {
+        self.phase == Phase::Executing && self.diagnostic.fault == 0
     }
 
     fn post_returned(&mut self, status: i32) {
@@ -150,7 +170,7 @@ mod native {
 
     #[unsafe(export_name = "__hisi_net0_rx_stop_transaction")]
     static STATE: Mutex<RefCell<Transaction>> = Mutex::new(RefCell::new(Transaction::new()));
-    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 32);
+    const _: () = assert!(core::mem::size_of::<Mutex<RefCell<Transaction>>>() == 68);
 
     // Stock lld's CALL against these SHN_ABS assignments does not produce a
     // usable PC-relative call. Ordinary HI20/LO12_I veneers preserve the linker
@@ -176,6 +196,7 @@ mod native {
         net0_rom_veneer __hisi_net0_rom_unregister, frw_dmac_msg_hook_unregister
         net0_rom_veneer __hisi_net0_rom_register, frw_dmac_msg_hook_register
         net0_rom_veneer __hisi_net0_rom_destroy, hal_dev_fsm_destroy_rx_dscr
+        net0_rom_veneer __hisi_net0_rom_init, hal_dev_fsm_init_rx_dscr
         net0_rom_veneer __hisi_net0_rom_enabled, hal_is_machw_enabled
         net0_rom_veneer __hisi_net0_rom_empty, hal_is_hw_rx_queue_empty
         .option pop
@@ -192,6 +213,8 @@ mod native {
         fn frw_send_msg_to_device(vap: u8, message: u16, msg: *mut FrwMsg, sync: u8) -> i32;
         #[link_name = "__hisi_net0_rom_destroy"]
         fn hal_dev_fsm_destroy_rx_dscr(vap: *mut c_void, msg: *mut FrwMsg) -> i32;
+        #[link_name = "__hisi_net0_rom_init"]
+        fn hal_dev_fsm_init_rx_dscr(vap: *mut c_void, msg: *mut FrwMsg) -> i32;
         #[link_name = "hal_dev_fsm_destroy_rx_dscr"]
         fn original_destroy(vap: *mut c_void, msg: *mut FrwMsg) -> i32;
         fn hal_disable_machw_phy_and_pa();
@@ -209,6 +232,101 @@ mod native {
         assert!(core::mem::offset_of!(ControlPrefix, table) == 4);
         assert!(core::mem::size_of::<FrwMsg>() == 16);
     };
+
+    // Read-only RV32 native RAM ABI, NOT MMIO. The pinned mask ROM has six
+    // 12-byte TX headers (_PRE_WLAN_DFR_STAT is absent), three 12-byte RX
+    // headers and three hardware-head words. SDK hal_ops_common_rom.h and
+    // ROM 0x12c75e/0x12c784/0x12c7aa independently agree on the count offsets.
+    // No vendor pointer is followed, queue link written, or full struct copied.
+    #[repr(C)]
+    struct RxList {
+        links: [u32; 2],
+        count: u16,
+        status: u8,
+        available: u8,
+    }
+
+    #[repr(C)]
+    struct DevicePrefix {
+        capability: u32,
+        rx: [RxList; 3],
+        tx_headers: [[u32; 3]; 6],
+        hardware_heads: [u32; 3],
+        normal: u16,
+        small: u16,
+        high: u16,
+    }
+
+    const _: () = {
+        assert!(core::mem::size_of::<RxList>() == 12);
+        assert!(core::mem::offset_of!(RxList, count) == 8);
+        assert!(core::mem::offset_of!(DevicePrefix, rx) == 4);
+        assert!(core::mem::offset_of!(DevicePrefix, normal) == 124);
+        assert!(core::mem::offset_of!(DevicePrefix, small) == 126);
+        assert!(core::mem::offset_of!(DevicePrefix, high) == 128);
+        assert!(core::mem::size_of::<DevicePrefix>() == 132);
+    };
+
+    struct NativeDescriptors {
+        device: *const DevicePrefix,
+        vap: *mut c_void,
+        msg: *mut FrwMsg,
+    }
+
+    impl rebuild::DescriptorOps for NativeDescriptors {
+        #[inline(always)]
+        fn counts(&self) -> rebuild::Counts {
+            // SAFETY: the initialized device's fixed prefix remains alive for
+            // this device-worker callback. Only six aligned u16 fields are
+            // sampled, with no Rust reference/borrow over native mutations.
+            unsafe {
+                let device = self.device;
+                rebuild::Counts {
+                    actual: [
+                        core::ptr::addr_of!((*device).rx[0].count).read_volatile(),
+                        core::ptr::addr_of!((*device).rx[1].count).read_volatile(),
+                        core::ptr::addr_of!((*device).rx[2].count).read_volatile(),
+                    ],
+                    expected: [
+                        core::ptr::addr_of!((*device).normal).read_volatile(),
+                        core::ptr::addr_of!((*device).high).read_volatile(),
+                        core::ptr::addr_of!((*device).small).read_volatile(),
+                    ],
+                }
+            }
+        }
+
+        #[inline(always)]
+        fn mac_enabled(&self) -> u8 {
+            // SAFETY: existing no-argument ROM getter, no borrowed pointers.
+            unsafe { hal_is_machw_enabled() }
+        }
+
+        #[inline(always)]
+        fn initialize(&mut self) -> i32 {
+            // SAFETY: original handler ABI on the device worker with disabled
+            // MAC and empty lists. Its zero return does not mean full allocation.
+            unsafe { hal_dev_fsm_init_rx_dscr(self.vap, self.msg) }
+        }
+
+        #[inline(always)]
+        fn disable(&mut self) {
+            // SAFETY: same native helper used before the terminal teardown.
+            unsafe { hal_disable_machw_phy_and_pa() }
+        }
+
+        #[inline(always)]
+        fn destroy(&mut self) -> i32 {
+            // SAFETY: probe rechecks disabled MAC before this cleanup call.
+            unsafe { hal_dev_fsm_destroy_rx_dscr(self.vap, self.msg) }
+        }
+    }
+
+    #[inline(never)]
+    #[unsafe(export_name = "__hisi_net0_rx_rebuild_probe")]
+    fn rebuild_probe(ops: &mut NativeDescriptors) -> RxRebuildDiagnostics {
+        rebuild::probe(ops)
+    }
 
     unsafe fn installed_handler() -> Result<*mut c_void, i32> {
         // SAFETY: caller holds the initialized framework's registration CS.
@@ -342,9 +460,34 @@ mod native {
             MAC_ENABLED
         };
         let after = unsafe { hal_is_machw_enabled() };
-        let empty = unsafe { hal_is_hw_rx_queue_empty(hal_chip_get_hal_device()) };
+        let device = unsafe { hal_chip_get_hal_device() };
+        if device.is_null() {
+            return critical_section::with(|cs| STATE.borrow_ref_mut(cs).fail(CONTRACT));
+        }
+        let empty = unsafe { hal_is_hw_rx_queue_empty(device) };
+        // This is a closed-admission allocation round-trip, not restart. Native
+        // init may leave partially populated queues despite returning zero.
+        let rebuild = if status == 0
+            && after == 0
+            && empty == 1
+            && critical_section::with(|cs| STATE.borrow_ref(cs).may_rebuild())
+        {
+            Some(rebuild_probe(&mut NativeDescriptors {
+                device: device.cast(),
+                vap,
+                msg,
+            }))
+        } else {
+            None
+        };
         critical_section::with(|cs| {
             let mut state = STATE.borrow_ref_mut(cs);
+            if let Some(report) = rebuild {
+                state.diagnostic.rebuild = report;
+                if report.fault != 0 {
+                    state.fail(report.fault);
+                }
+            }
             state.finish(before, after, empty, status);
             state.diagnostic.fault
         })
@@ -399,7 +542,9 @@ mod tests {
         let mut t = installed();
         t.request().unwrap();
         t.enter().unwrap();
+        assert!(t.may_rebuild());
         t.fail(TIMEOUT);
+        assert!(!t.may_rebuild());
         t.finish(1, 0, 1, 0);
         t.post_returned(0);
         assert_eq!(t.result(), Err(TIMEOUT));

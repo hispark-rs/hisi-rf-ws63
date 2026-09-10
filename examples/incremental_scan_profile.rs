@@ -767,6 +767,29 @@ fn write_user_cleanup_diagnostics(uart: &Uart<'_, hisi_hal::peripherals::Uart0<'
                 d.current_task,
             ],
         );
+        let r = d.rebuild;
+        write_snapshot(
+            uart,
+            b"RFDBG_NET0_RX_REBUILD",
+            &[
+                u32::from(r.attempted),
+                u32::from(r.cleanup_attempted),
+                u32::from(r.expected[0]),
+                u32::from(r.expected[1]),
+                u32::from(r.expected[2]),
+                u32::from(r.actual[0]),
+                u32::from(r.actual[1]),
+                u32::from(r.actual[2]),
+                u32::from(r.cleaned[0]),
+                u32::from(r.cleaned[1]),
+                u32::from(r.cleaned[2]),
+                u32::from(r.mac_after_init),
+                u32::from(r.mac_after_cleanup),
+                r.init_status as u32,
+                r.cleanup_status as u32,
+                r.fault as u32,
+            ],
+        );
     }
     let tx = hisi_rf_ws63::netif_l2::native_host_tx_diagnostics();
     write_snapshot(

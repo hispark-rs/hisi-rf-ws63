@@ -48,6 +48,39 @@ disabled, then reads MAC enable and `hal_is_hw_rx_queue_empty`. The latter reads
 three **software descriptor-list counts**, not DMA status. Zero return from
 teardown alone is insufficient: the ROM function is a no-op if MAC is enabled.
 
+### Checked Descriptor Rebuild
+
+After that immediate stop, the same correlated callback tests reconstruction
+while application admission remains sealed. It invokes the original
+`hal_dev_fsm_init_rx_dscr`, checks all three configured/actual counts and then
+destroys the reconstructed lists again. It never enables the MAC or reopens
+RX/TX. No new profile or public restart API is introduced.
+
+The inner `hal_rx_init_dscr_queue` is **void**. The ROM logs partial allocation
+and may program a nonempty hardware head even when a queue is undersized; the
+outer handler returns zero. Therefore zero status, nonempty lists or an
+unchanged total count cannot prove successful reconstruction. Counts must
+match individually in native queue order (normal, high, small), with an
+unchanged, non-all-zero configuration. A disabled configured queue may be zero.
+
+The read-only RAM prefix is bound to this mask-ROM ABI: RX headers are 12 bytes,
+starting at device+4; actual counts are at +12/+24/+36. Six 12-byte TX headers
+and three hardware-head words precede configured normal/small/high at
++124/+126/+128. The SDK `hal_ops_common_rom.h` and `wlan_spec_hh503_rom.h` agree
+with ROM comparisons at 0x12c75e/0x12c784/0x12c7aa. The optional DFR-stat TX
+header variant is **not** this ROM's layout. Rust compile-time assertions fix
+the prefix; only six volatile u16 values are read, never queue links or MMIO.
+
+Every attempted initialization is followed by cleanup, including partial/error
+returns. Cleanup first disables/rechecks MAC; it refuses to free while enabled.
+First failure and separate cleanup status are both retained. Final MAC must
+remain disabled and all three actual counts must be zero. A timeout observed
+before the rebuild prevents starting it; one occurring after the check cannot
+cancel an in-flight native routine, but is sticky and cannot become success.
+`RFDBG_NET0_RX_REBUILD` records attempted/cleanup, expected/actual/final counts,
+MAC states and statuses. Host fake counts exercise the production decision
+function; they do not replace real partial-allocation HIL.
+
 The requester waits at most 1000 ms outside Rust critical sections. Failed
 enqueue, missing receipt, duplicate callback, wrong thread, timeout, or failed
 postcondition is sticky. A timed-out queued request cannot later start teardown;
@@ -59,13 +92,13 @@ does not claim a bound for arbitrary native C/ROM execution.
 
 New direct `R_RISCV_CALL` references to the ROM linker script's `SHN_ABS`
 symbols were experimentally rejected: the final instruction encoded the ROM
-address as a PC-relative displacement. Six private, 12-byte standard RV32
+address as a PC-relative displacement. Seven private, 12-byte standard RV32
 LUI/ADDI/JR veneers instead use HI20/LO12 relocation against the same symbols.
 No numeric ROM addresses enter production Rust or assembly. Existing native
 callback veneers (MAC disable/device lookup) retain their original behavior.
 
-`check-net0-rx-stop.py` verifies ten resolved call sites, six exact veneer
-targets, and the 32-byte transaction metadata object; sixteen call/address
+`check-net0-rx-stop.py` verifies eighteen resolved call sites, seven exact veneer
+targets, and the 68-byte transaction metadata object; twenty-five call/address
 mutations must fail. Runtime callback-table ownership still needs HIL. The
 consumer needs no external compiler, post-link script, or custom linker.
 
@@ -73,8 +106,9 @@ consumer needs no external compiler, post-link script, or custom linker.
 
 This establishes only a correlated **immediate stop observation**. Native RX
 callbacks already running, DMA/descriptor visibility, DMAC user
-free status, autonomous native re-enable, and bounded descriptor reinitialization
-remain separate gates. Reading throughput flag 18 twice is not proof it was
+free status, autonomous native re-enable, and a bounded, reusable native
+lifecycle remain separate gates. This allocation round-trip does not prove
+hardware quiescence or authorize reconnect. Reading throughput flag 18 twice is not proof it was
 never previously enabled. No `NativeFence` or reopen capability is produced.
 After terminal stop, the one-shot L2 route and host TX stay closed for this boot.
 

@@ -26,10 +26,11 @@ ROM_TARGETS = {
     "frw_dmac_msg_hook_unregister": 0x12874e,
     "frw_dmac_msg_hook_register": 0x128716,
     "hal_dev_fsm_destroy_rx_dscr": 0x12a1ca,
+    "hal_dev_fsm_init_rx_dscr": 0x12a188,
     "hal_is_machw_enabled": 0x12f406,
     "hal_is_hw_rx_queue_empty": 0x13143e,
 }
-VENEERS = dict(zip(("control", "unregister", "register", "destroy", "enabled", "empty"), ROM_TARGETS))
+VENEERS = dict(zip(("control", "unregister", "register", "destroy", "init", "enabled", "empty"), ROM_TARGETS))
 EDGES = [("__hisi_net0_rx_stop_handler", name, count) for name, count in (
     ("__hisi_net0_rom_destroy", 2),
     ("hal_disable_machw_phy_and_pa", 1),
@@ -38,6 +39,12 @@ EDGES = [("__hisi_net0_rx_stop_handler", name, count) for name, count in (
     ("__hisi_net0_rom_empty", 1),
     ("frw_get_wifi_frw_task_id", 1),
     ("hmac_is_thruput_enable", 1),
+    ("__hisi_net0_rx_rebuild_probe", 1),
+)] + [("__hisi_net0_rx_rebuild_probe", name, count) for name, count in (
+    ("__hisi_net0_rom_init", 1),
+    ("__hisi_net0_rom_destroy", 1),
+    ("__hisi_net0_rom_enabled", 4),
+    ("hal_disable_machw_phy_and_pa", 1),
 )]
 
 
@@ -72,16 +79,16 @@ def inspect(path):
         if len(matches) != 1 or matches[0]["st_info"]["type"] != "STT_OBJECT":
             raise ValueError("missing/ambiguous RX stop transaction")
         symbol = matches[0]
-        if not isinstance(symbol["st_shndx"], int) or symbol["st_size"] != 32:
-            raise ValueError("RX stop metadata differs from its reviewed 32-byte budget")
+        if not isinstance(symbol["st_shndx"], int) or symbol["st_size"] != 68:
+            raise ValueError("RX stop/rebuild metadata differs from its reviewed 68-byte budget")
         section = elf.get_section(symbol["st_shndx"])
         offset = symbol["st_value"] - section["sh_addr"]
         if section["sh_flags"] & 3 != 3 or offset < 0 or offset + symbol["st_size"] > section["sh_size"]:
             raise ValueError("transaction must occupy physical writable memory")
         report["metadata"] = {"bytes": symbol["st_size"], "address": symbol["st_value"],
                               "section": section.name, "packet_payload_bytes": 0}
-    report.update(schema="net0-rx-stop-link/v1",
-                  boundary="Resolved ROM calls only. Runtime table ownership/context checked on target; no DMA/host RX queue fence claim")
+    report.update(schema="net0-rx-stop-link/v2",
+                  boundary="Resolved stop/rebuild/cleanup ROM calls only. Runtime allocation counts and context need HIL; no DMA/host RX queue fence claim")
     return report
 
 
