@@ -144,3 +144,9 @@ Snapshots use stack storage and existing runtime APIs; task and scheduler
 snapshots are individually synchronized, not one combined atomic snapshot.
 Historical maxima are not transaction-local. These UART observations precede
 any postmortem probe attach; they do not certify timing or queue liveness.
+
+Development dependency alignment: this branch requires HAL `0.7.0-alpha.10`
+to avoid two HAL instances in the runtime time-profile integration. The explicit
+remote graph is in `.ci/development-dependencies.toml`; copy it to the standalone
+checkout's `.cargo/config.toml` for development tests. These dependencies are not
+all published, so those tests do not qualify a registry-only release.

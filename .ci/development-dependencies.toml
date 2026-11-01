@@ -1,0 +1,8 @@
+# Explicit development integration only, NOT registry/release qualification.
+# No path dependencies: these commits must be fetchable without the parent.
+[patch.crates-io]
+hisi-hal = { git = "https://github.com/hispark-rs/hisi-hal.git", rev = "5895b95560ca1789d2aea37cfd6db51ba05e416a" }
+hisi-riscv-rt = { git = "https://github.com/hispark-rs/hisi-riscv-rt.git", rev = "eb3e2d55a41c7655c2be83e465e5dc524eb1d7cb" }
+hisi-rf-rtos-driver = { git = "https://github.com/hispark-rs/hisi-rf-rtos-driver", rev = "f36280b51d93f8cb4e00962e3a450f6b8322e8bd" }
+hisi-rtos = { git = "https://github.com/hispark-rs/hisi-rtos", rev = "9b83efacb5b44d02c76e3f4a9193275256a373d5" }
+hisi-crypto-ws63 = { git = "https://github.com/hispark-rs/hisi-crypto-ws63", rev = "560b713c720f4783adb8bc4d1aebaf1380d08677" }
